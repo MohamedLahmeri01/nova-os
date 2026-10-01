@@ -49,7 +49,13 @@ No releases yet.
   kernel threads, context switch, minimal processes, preemptive
   round-robin behind policy ops, tick-overlap preemption proof
   (ADR-0014). Fixed: test design that serialized workers behind full
-  slices, shared runqueue/process link field, cli guards on pick.
+  slices, shared   runqueue/process link field, cli guards on pick.
+- Phase 4b address spaces + user mode (tested 2026-10-01, `nova test`
+  7/7): per-process PDs (`kernel/mm/addrspace.c`), GDT/TSS
+  (`kernel/gdt.c`), ring-3 probe with CS proof + INT 0x81 return
+  (`kernel/user.S`, `user.c`, setjmp/longjmp), `USER-OK` (ADR-0015).
+  Fixed: user selectors reload (DPL0 fault), physical-vs-virtual
+  stack address confusion.
 - Architecture specification (`docs/ARCHITECTURE.md`)
 - ADRs 0001–0008 (kernel arch, language, memory, scheduler, IPC,
   filesystem, security, license evaluation)

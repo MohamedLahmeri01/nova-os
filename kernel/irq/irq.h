@@ -16,6 +16,7 @@ typedef struct {
 } trap_frame_t;
 
 void irq_init(void);
+void idt_set_gate(int n, void *fn, uint8_t attr);
 void trap_handler(trap_frame_t *f);
 void irq_handler(trap_frame_t *f);
 void lapic_probe(void);

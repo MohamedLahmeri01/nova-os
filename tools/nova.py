@@ -196,11 +196,15 @@ def build_phase1(fault=False):
                                  ("kernel/mm/pmm.c", "pmm.o", []),
                                  ("kernel/mm/vmm.c", "vmm.o", []),
                                  ("kernel/mm/heap.c", "heap.o", []),
+                                 ("kernel/mm/addrspace.c", "addrspace.o", []),
                                  ("kernel/irq/idt.S", "idt.o", []),
                                  ("kernel/irq/irq.c", "irq.o", []),
                                  ("kernel/irq/lapic.c", "lapic.o", []),
                                  ("kernel/time/pit.c", "pit.o", []),
                                  ("kernel/ctx.S", "ctx.o", []),
+                                 ("kernel/user.S", "user_asm.o", []),
+                                 ("kernel/user.c", "user.o", []),
+                                 ("kernel/gdt.c", "gdt.o", []),
                                  ("kernel/thread/thread.c", "thread.o", []),
                                  ("kernel/sched/sched.c", "sched.o", []),
                                  ("kernel/process/process.c", "process.o", []),
@@ -222,9 +226,9 @@ def build_phase1(fault=False):
     for objs_in, ld, pe_out in [
             (["stage1.o"], "boot/stage1.ld", "stage1.pe"),
             (["stage2asm.o", pm_obj, "serial.o", "panic.o",
-              "pmm.o", "vmm.o", "heap.o", "idt.o", "irq.o", "lapic.o",
-              "pit.o", "ctx.o", "thread.o", "sched.o", "process.o",
-              PMM_BACKEND_O],
+              "pmm.o", "vmm.o", "heap.o", "addrspace.o", "idt.o", "irq.o",
+              "lapic.o", "pit.o", "ctx.o", "user_asm.o", "user.o", "gdt.o",
+              "thread.o", "sched.o", "process.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -475,7 +479,7 @@ def cmd_run_vbox():
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
                                        b"HEAP-OK", b"IDT-OK", b"TIMER-OK",
-                                       b"SCHED-OK"],
+                                       b"SCHED-OK", b"USER-OK"],
                                        "vbox-boot-proof.png")
     if ok:
         print(f"[PASS] full init markers on serial after ~{elapsed}s "
@@ -526,7 +530,8 @@ def cmd_image():
 
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
-                 b"HEAP-OK", b"IDT-OK", b"TIMER-OK", b"SCHED-OK"]
+                 b"HEAP-OK", b"IDT-OK", b"TIMER-OK", b"SCHED-OK",
+                 b"USER-OK"]
 
 
 def cmd_panic_test():

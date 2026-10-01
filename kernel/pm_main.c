@@ -15,6 +15,7 @@
 #include "irq/irq.h"
 #include "time/time.h"
 #include "sched/sched.h"
+#include "user.h"
 #include "../boot/boot_info.h"
 
 void nova_pm_main(const nova_boot_info_t *info) {
@@ -88,6 +89,15 @@ void nova_pm_main(const nova_boot_info_t *info) {
             serial_putdec32((uint32_t)sched_rc);
             serial_putc('\n');
             nova_panic("sched-selftest-fail");
+        }
+    }
+    {
+        int user_rc = user_selftest();
+        if (user_rc != 0) {
+            serial_puts("USER-SELFTEST-FAIL code=");
+            serial_putdec32((uint32_t)user_rc);
+            serial_putc('\n');
+            nova_panic("user-selftest-fail");
         }
     }
 #ifdef NOVA_FAULT_TEST

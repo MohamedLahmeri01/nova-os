@@ -49,13 +49,17 @@ static const char *const trap_names[32] = {
     "SX", "RSV", "RSV", "RSV", "RSV", "RSV", "RSV", "RSV"
 };
 
-static void idt_set(int n, void *fn) {
+void idt_set_gate(int n, void *fn, uint8_t attr) {
     uintptr_t a = (uintptr_t)fn;
     g_idt[n].off_lo = (uint16_t)(a & 0xFFFFu);
     g_idt[n].sel = 0x08u;
     g_idt[n].zero = 0;
-    g_idt[n].attr = 0x8Eu; /* present, DPL0, 32-bit interrupt gate */
+    g_idt[n].attr = attr;
     g_idt[n].off_hi = (uint16_t)((a >> 16) & 0xFFFFu);
+}
+
+static void idt_set(int n, void *fn) {
+    idt_set_gate(n, fn, 0x8Eu); /* present, DPL0, 32-bit int gate */
 }
 
 static void pic_remap(void) {
