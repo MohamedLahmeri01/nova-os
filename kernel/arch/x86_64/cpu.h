@@ -83,6 +83,10 @@ static inline void arch_store_idt(void *out) {
     __asm__ volatile("sidt %0" : "=m"(*(arch_idtr_t *)out) :: "memory");
 }
 
+static inline void arch_store_gdt(void *out) {
+    __asm__ volatile("sgdt %0" : "=m"(*(arch_idtr_t *)out) :: "memory");
+}
+
 static inline void arch_cli(void) {
     __asm__ volatile("cli" ::: "memory");
 }

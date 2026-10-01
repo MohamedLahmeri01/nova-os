@@ -29,17 +29,27 @@ struct thread {
     int state;
     uint32_t stack_base; /* 0 for the boot thread (not PMM-owned) */
     uint32_t slice_used;
+    uint8_t prio; /* 0..31, higher preempts (strict); RR within level */
+    uint8_t is_user; /* scheduled user thread (trampoline entry) */
     struct thread *next; /* runqueue link (policy-owned) */
     struct thread *pnext; /* process member link (process-owned) */
     struct process *proc;
+    /* User-thread owned frames (freed on 0x81 exit): */
+    uint32_t user_stack;
+    uint32_t user_shared;
 };
 
-struct thread *thread_create(struct process *p, thread_fn_t fn, void *arg);
+struct thread *thread_create(struct process *p, thread_fn_t fn, void *arg,
+                             uint8_t prio);
+struct thread *thread_create_user(struct process *p, uint32_t eip,
+                                  uint32_t uesp, uint32_t ustack_base,
+                                  uint32_t shared_phys, uint8_t prio);
 __attribute__((noreturn)) void thread_exit(int code);
 struct thread *thread_current(void);
 uint32_t thread_count(void);
 void thread_count_inc(void); /* boot-thread adoption accounting */
 void thread_reap_graveyard(void);
+void thread_zombie_handoff(struct thread *t);
 
 /* Lowest-level primitive (kernel/ctx.S). Saves caller regs+eflags to
  * *old_sp, restores *new_sp, returns into the new context. */

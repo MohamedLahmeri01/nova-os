@@ -52,16 +52,18 @@ E820 memory map → COM1 serial → halt, in `NOVA-OS-CONSTRAINED`
 - [x] T5/T6 gates strengthened (IDT-OK, TIMER-OK, trap chain); 7/7 green
 - [ ] HPET/TSC calibration, IOAPIC routing, SMP bring-up → Phase 4+
 
-## Phase 4 — Processes / Threads / Scheduler (IN-PROGRESS, 4b done)
+## Phase 4 — Processes / Threads / Scheduler (DONE: 4a+4b+4c)
 
 - [x] Threads (8KB canaried stacks, trampoline, exit/graveyard),
   minimal process containers, preemptive round-robin behind policy
   ops, tick-window overlap proof (`SCHED-OK`, ADR-0014)
 - [x] Per-process address spaces (kernel clone + private user half)
   and ring-3 round-trip with CS proof (`USER-OK`, ADR-0015)
-- [x] T5/T6 gates strengthened (SCHED-OK, USER-OK); 7/7 green
-- [ ] Fairness/priority, SMP bring-up + balancing, scheduled user
-  threads, syscalls (Phase 5)
+- [x] Strict priorities + RR (proof), SMP bring-up (MP parse, AP park,
+  `SMP-OK`), scheduled user threads with overlap proof
+  (`USER-SCHED-OK`), TSS.ESP0 invariant enforced (ADR-0016)
+- [x] T5/T6 gates strengthened; 7/7 green
+- [ ] Fairness/aging, AP scheduling + balancing, user yield (Phase 4d+)
 
 ## Phase 5 — Syscalls
 

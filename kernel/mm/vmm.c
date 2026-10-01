@@ -1,7 +1,9 @@
 /* NOVA OS virtual memory manager: classic 32-bit paging (Phase 2b).
  *
  * Layout:
- *   [0x0, 0x1000)          not present (null-deref guard)
+ *   [0x0, 0x1000)          present, read-only (null-WRITE guard; BIOS
+ *                          data like the EBDA pointer at 0x40E stays
+ *                          readable, null stores fault)
  *   [0x1000, 4MB)          4KB pages (first 4MB needs granularity for the
  *                          guards); stack-guard page absent
  *   [4MB, map_end)         4MB large pages, RW (needs PSE, gated below)
@@ -74,8 +76,11 @@ int vmm_init(void) {
     for (uint32_t i = 0; i < PT_ENTRIES; i++) {
         uint32_t page = i * 0x1000u;
         uint32_t e = page | PTE_P | PTE_RW;
-        if (page == 0 || page == NOVA_STACK_GUARD) {
-            e = 0; /* null guard, stack guard */
+        if (page == 0) {
+            e = PTE_P; /* page zero: present read-only (null-write
+                        * guard, BIOS data like EBDA@0x40E readable) */
+        } else if (page == NOVA_STACK_GUARD) {
+            e = 0; /* stack guard */
         }
         g_pt0[i] = e;
     }
@@ -114,8 +119,8 @@ void vmm_map_mmio(uint32_t phys) {
     arch_write_cr3(arch_read_cr3());
 }
 
-int vmm_selftest(void) {    if ((g_pt0[0] & PTE_P) != 0) {
-        return -1; /* null guard must be absent */
+int vmm_selftest(void) {    if ((g_pt0[0] & (PTE_P | PTE_RW)) != PTE_P) {
+        return -1; /* page zero must be present read-only */
     }
     if ((g_pt0[NOVA_KERNEL_LOAD >> 12] & PTE_P) == 0) {
         return -2; /* kernel text must be present */

@@ -35,7 +35,18 @@ void thread_reap_graveyard(void) {
     }
 }
 
-struct thread *thread_create(struct process *p, thread_fn_t fn, void *arg) {
+/* Shared zombie handoff (kernel exit + user-0x81 paths): reap the
+ * previous occupant, unlink, account, stash. Caller switches away. */
+void thread_zombie_handoff(struct thread *t) {
+    thread_reap_graveyard();
+    t->state = THREAD_ZOMBIE;
+    sched_remove(t);
+    g_thread_count--;
+    g_graveyard = t;
+}
+
+struct thread *thread_create(struct process *p, thread_fn_t fn, void *arg,
+                             uint8_t prio) {
     struct thread *t;
     uint32_t stack;
     if (g_thread_count >= THREAD_MAX || p == 0 || fn == 0) {
@@ -66,9 +77,69 @@ struct thread *thread_create(struct process *p, thread_fn_t fn, void *arg) {
     t->state = THREAD_READY;
     t->stack_base = stack;
     t->slice_used = 0;
+    t->prio = (prio >= 32u) ? 31u : prio;
+    t->is_user = 0;
     t->next = 0;
     t->pnext = 0;
     t->proc = p;
+    t->user_stack = 0;
+    t->user_shared = 0;
+    process_attach(p, t);
+    sched_add(t);
+    g_thread_count++;
+    return t;
+}
+
+/* Scheduled user thread: kstack trampoline frame leads into
+ * user_entry_trampoline (iret to ring 3); see ctx.S. */
+extern void user_entry_trampoline(void);
+
+struct thread *thread_create_user(struct process *p, uint32_t eip,
+                                  uint32_t uesp, uint32_t ustack_base,
+                                  uint32_t shared_phys, uint8_t prio) {
+    struct thread *t;
+    uint32_t stack;
+    uint32_t *tss_slot;
+    extern uint32_t *tss_esp0_slot(void);
+    if (g_thread_count >= THREAD_MAX || p == 0 || p->cr3 == 0) {
+        return 0;
+    }
+    t = (struct thread *)kmalloc(sizeof(struct thread));
+    if (t == 0) {
+        return 0;
+    }
+    stack = pmm_alloc_contig(THREAD_STACK_FRAMES);
+    if (stack == 0) {
+        kfree(t);
+        return 0;
+    }
+    *(uint32_t *)stack = STACK_CANARY;
+    tss_slot = tss_esp0_slot();
+    {
+        uint32_t *sp = (uint32_t *)(stack + THREAD_STACK_SIZE);
+        *--sp = (uint32_t)tss_slot;
+        *--sp = stack + THREAD_STACK_SIZE;
+        *--sp = uesp;
+        *--sp = eip;
+        *--sp = p->cr3;
+        *--sp = (uint32_t)&user_entry_trampoline;
+        *--sp = 0x202u;
+        for (int k = 0; k < 8; k++) {
+            *--sp = 0;
+        }
+        t->sp = sp;
+    }
+    t->id = g_next_id++;
+    t->state = THREAD_READY;
+    t->stack_base = stack;
+    t->slice_used = 0;
+    t->prio = (prio >= 32u) ? 31u : prio;
+    t->is_user = 1;
+    t->next = 0;
+    t->pnext = 0;
+    t->proc = p;
+    t->user_stack = ustack_base;
+    t->user_shared = shared_phys;
     process_attach(p, t);
     sched_add(t);
     g_thread_count++;
@@ -84,17 +155,12 @@ __attribute__((noreturn)) void thread_exit(int code) {
     if (t == 0 || t->stack_base == 0) {
         nova_panic("thread-exit-main");
     }
-    thread_reap_graveyard();
-    t->state = THREAD_ZOMBIE;
+    thread_zombie_handoff(t);
     next = sched_pick(t);
-    sched_remove(t);
-    g_thread_count--;
-    g_graveyard = t;
     if (next == 0 || next == t) {
         nova_panic("sched-empty");
     }
-    sched_enter(next);
-    ctx_switch(&t->sp, &next->sp);
+    sched_switch_to(t, next);
     nova_panic("thread-exit-returned");
 }
 

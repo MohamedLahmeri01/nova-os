@@ -205,6 +205,8 @@ def build_phase1(fault=False):
                                  ("kernel/user.S", "user_asm.o", []),
                                  ("kernel/user.c", "user.o", []),
                                  ("kernel/gdt.c", "gdt.o", []),
+                                 ("kernel/smp.c", "smp.o", []),
+                                 ("boot/ap_tramp.S", "ap_tramp.o", []),
                                  ("kernel/thread/thread.c", "thread.o", []),
                                  ("kernel/sched/sched.c", "sched.o", []),
                                  ("kernel/process/process.c", "process.o", []),
@@ -228,7 +230,8 @@ def build_phase1(fault=False):
             (["stage2asm.o", pm_obj, "serial.o", "panic.o",
               "pmm.o", "vmm.o", "heap.o", "addrspace.o", "idt.o", "irq.o",
               "lapic.o", "pit.o", "ctx.o", "user_asm.o", "user.o", "gdt.o",
-              "thread.o", "sched.o", "process.o", PMM_BACKEND_O],
+              "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
+              PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -479,7 +482,8 @@ def cmd_run_vbox():
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
                                        b"HEAP-OK", b"IDT-OK", b"TIMER-OK",
-                                       b"SCHED-OK", b"USER-OK"],
+                                       b"SCHED-OK", b"USER-OK",
+                                       b"USER-SCHED-OK", b"SMP-OK"],
                                        "vbox-boot-proof.png")
     if ok:
         print(f"[PASS] full init markers on serial after ~{elapsed}s "
@@ -531,7 +535,7 @@ def cmd_image():
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
                  b"HEAP-OK", b"IDT-OK", b"TIMER-OK", b"SCHED-OK",
-                 b"USER-OK"]
+                 b"USER-OK", b"USER-SCHED-OK", b"SMP-OK"]
 
 
 def cmd_panic_test():

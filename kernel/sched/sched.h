@@ -30,6 +30,7 @@ struct thread *sched_current_thread(void);
 void sched_tick(void);
 void sched_do_switch(void);
 void sched_yield(void);
+void sched_switch_to(struct thread *cur, struct thread *next);
 int sched_selftest(void);
 
 #endif /* NOVA_SCHED_H */

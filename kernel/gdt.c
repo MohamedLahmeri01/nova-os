@@ -49,6 +49,10 @@ void tss_set_esp0(uint32_t esp) {
     g_tss[1] = esp;
 }
 
+uint32_t *tss_esp0_slot(void) {
+    return &g_tss[1];
+}
+
 void tss_load(void) {
     __asm__ volatile("ltrw %0" :: "r"((uint16_t)GDT_TSS) : "memory");
 }

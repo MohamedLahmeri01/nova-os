@@ -67,12 +67,38 @@ _klongjmp:
 3:
     jmp *%ecx
 
+/* First entry into a scheduled user thread (Phase 4c).
+ * Arrived via popfl/popa/ret like any fresh context; stack holds
+ * [pd][eip][uesp][kstack][tss_slot] (pushed by thread_create_user).
+ * Uniform with all other resumes: no layout branches anywhere. */
+.globl _user_entry_trampoline
+_user_entry_trampoline:
+    popl %eax
+    popl %ecx
+    popl %edx
+    popl %esi
+    popl %edi
+    movl %eax, %cr3
+    movl %esi, (%edi)
+    pushl $0x23
+    pushl %edx
+    pushl $0x202
+    pushl $0x1B
+    pushl %ecx
+    iret
+
 /* INT 0x81 landing pad (DPL3 gate): CPU pushed user SS/ESP/EFLAGS/
- * CS/EIP on the TSS.ESP0 stack; the C handler restores kernel CR3
- * and longjmps home. Never returns to user mode. */
+ * CS/EIP on the TSS.ESP0 stack; IF is clear. Build a switchable frame
+ * and enter C: the sync path longjmps home, the scheduled path picks
+ * the next thread and switches (never returns here). */
 .globl _user_ret_stub
 _user_ret_stub:
+    pusha
+    pushfl
+    pushl %esp
     call _user_ret_handler
-4:
+    addl $4, %esp
+1:
+    cli
     hlt
-    jmp 4b
+    jmp 1b

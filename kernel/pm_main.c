@@ -16,6 +16,7 @@
 #include "time/time.h"
 #include "sched/sched.h"
 #include "user.h"
+#include "smp.h"
 #include "../boot/boot_info.h"
 
 void nova_pm_main(const nova_boot_info_t *info) {
@@ -100,6 +101,13 @@ void nova_pm_main(const nova_boot_info_t *info) {
             nova_panic("user-selftest-fail");
         }
     }
+    {
+        int usched_rc = user_sched_test();
+        if (usched_rc != 0) {
+            nova_panic("usched-selftest-fail");
+        }
+    }
+    smp_boot();
 #ifdef NOVA_FAULT_TEST
     serial_puts("INJECT-FAULT\n");
     __asm__ volatile("ud2"); /* deliberate #UD: proves IDT->trap->panic */

@@ -18,5 +18,6 @@
 void gdt_init(void);
 void tss_set_esp0(uint32_t esp);
 void tss_load(void); /* ltr; call once IDT is active (faults print) */
+uint32_t *tss_esp0_slot(void); /* address of TSS.ESP0 (entry frames) */
 
 #endif /* NOVA_GDT_H */

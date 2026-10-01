@@ -56,6 +56,12 @@ No releases yet.
   (`kernel/user.S`, `user.c`, setjmp/longjmp), `USER-OK` (ADR-0015).
   Fixed: user selectors reload (DPL0 fault), physical-vs-virtual
   stack address confusion.
+- Phase 4c priority+SMP+user-threads (tested 2026-10-01, `nova test`
+  7/7): strict 32-level scheduler, MP-table SMP bring-up with parked
+  APs, scheduled user threads via uniform trampoline entry (ADR-0016).
+  Fixed: mingw underscore rule (`_foo` in C is `__foo`), relocated
+  relative calls, MP flags byte, strict-priority observer starvation,
+  IF restore on longjmp path, fill-before-copy trampoline data.
 - Architecture specification (`docs/ARCHITECTURE.md`)
 - ADRs 0001–0008 (kernel arch, language, memory, scheduler, IPC,
   filesystem, security, license evaluation)

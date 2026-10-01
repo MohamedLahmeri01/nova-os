@@ -42,8 +42,14 @@ present, kernel ≤ 127 sectors. Any violation fails the build loudly.
   `.bss` is NOLOAD (zeroed by stage2asm at entry, never in the image).
 - 16-bit stage1 uses `.code16` under `gcc -m32 -c`; all labels link
   absolute (0x7C00 / 0x10000 bases), no relocations survive.
-- mingw `-m32` prefixes C symbols with `_` (`_nova_pm_main`,
-  `_stage2_start`); the asm side references the prefixed names.
+- Symbol rule (mingw `-m32`, learned the hard way): C `foo` becomes
+  object `_foo`; assembly labels are literal. So C must declare
+  `foo` to match asm `_foo`, and asm must reference `_bar` to match
+  C `bar`. Writing `_foo` in C produces `__foo` (double underscore)
+  and fails to link with a misleading "undefined reference". When an
+  asm label must be visible under both spellings, define both
+  (`irq_stub_table` + `_irq_stub_table`, like the linker-script
+  `text_end`/`_text_end` twins).
 - Later (user-approved): ELF cross-toolchain or Rust `*-unknown-none`
   targets, Multiboot2/GRUB or UEFI — decided by ADR, never by drift.
 
