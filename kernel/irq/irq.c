@@ -11,6 +11,7 @@
 #include "panic.h"
 #include "irq.h"
 #include "time/time.h"
+#include "sched/sched.h"
 #include "time.h"
 
 #if defined(__i386__)
@@ -118,6 +119,7 @@ void irq_handler(trap_frame_t *f) {
     g_last_vec = f->vec;
     if (f->vec == 32) {
         g_ticks++;
+        sched_tick();
     }
     if (f->vec >= 40) {
         arch_outb(PIC_S_CMD, PIC_EOI);

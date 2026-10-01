@@ -99,6 +99,14 @@ irq_common:
     pushl %esp
     call _irq_handler
     addl $4,%esp
+    /* Preemption point: if the tick set need_resched, switch stacks
+     * now (the new thread resumes here later and tears down + irets
+     * into its own interrupted code). */
+    movl _sched_need_resched, %eax
+    testl %eax, %eax
+    jz 2f
+    call _sched_do_switch
+2:
     popl %gs
     popl %fs
     popl %es

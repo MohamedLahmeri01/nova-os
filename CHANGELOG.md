@@ -45,6 +45,11 @@ No releases yet.
   via `vmm_map_mmio`, ud2-proven trap chain (ADR-0013). Fixed: PIC
   mask 0xFD→0xFE (masked timer!), post-PG invalidation (invlpg + CR3
   reload), C frame call-push accounting.
+- Phase 4a threads+scheduler (tested 2026-10-01, `nova test` 7/7):
+  kernel threads, context switch, minimal processes, preemptive
+  round-robin behind policy ops, tick-overlap preemption proof
+  (ADR-0014). Fixed: test design that serialized workers behind full
+  slices, shared runqueue/process link field, cli guards on pick.
 - Architecture specification (`docs/ARCHITECTURE.md`)
 - ADRs 0001–0008 (kernel arch, language, memory, scheduler, IPC,
   filesystem, security, license evaluation)

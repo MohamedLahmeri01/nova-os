@@ -14,6 +14,7 @@
 #include "mm/heap.h"
 #include "irq/irq.h"
 #include "time/time.h"
+#include "sched/sched.h"
 #include "../boot/boot_info.h"
 
 void nova_pm_main(const nova_boot_info_t *info) {
@@ -80,6 +81,15 @@ void nova_pm_main(const nova_boot_info_t *info) {
     serial_puts("HEAP-OK\n");
     irq_init();
     timer_init();
+    {
+        int sched_rc = sched_selftest();
+        if (sched_rc != 0) {
+            serial_puts("SCHED-SELFTEST-FAIL code=");
+            serial_putdec32((uint32_t)sched_rc);
+            serial_putc('\n');
+            nova_panic("sched-selftest-fail");
+        }
+    }
 #ifdef NOVA_FAULT_TEST
     serial_puts("INJECT-FAULT\n");
     __asm__ volatile("ud2"); /* deliberate #UD: proves IDT->trap->panic */

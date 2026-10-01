@@ -200,6 +200,10 @@ def build_phase1(fault=False):
                                  ("kernel/irq/irq.c", "irq.o", []),
                                  ("kernel/irq/lapic.c", "lapic.o", []),
                                  ("kernel/time/pit.c", "pit.o", []),
+                                 ("kernel/ctx.S", "ctx.o", []),
+                                 ("kernel/thread/thread.c", "thread.o", []),
+                                 ("kernel/sched/sched.c", "sched.o", []),
+                                 ("kernel/process/process.c", "process.o", []),
                                  (PMM_BACKEND_C, PMM_BACKEND_O, [])]:
         s = os.path.join(ROOT, src)
         if not os.path.isfile(s):
@@ -219,7 +223,8 @@ def build_phase1(fault=False):
             (["stage1.o"], "boot/stage1.ld", "stage1.pe"),
             (["stage2asm.o", pm_obj, "serial.o", "panic.o",
               "pmm.o", "vmm.o", "heap.o", "idt.o", "irq.o", "lapic.o",
-              "pit.o", PMM_BACKEND_O],
+              "pit.o", "ctx.o", "thread.o", "sched.o", "process.o",
+              PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -469,7 +474,8 @@ def cmd_run_vbox():
         print("[blocked] No image attached. Run `python tools/nova.py image` first.")
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
-                                       b"HEAP-OK", b"IDT-OK", b"TIMER-OK"],
+                                       b"HEAP-OK", b"IDT-OK", b"TIMER-OK",
+                                       b"SCHED-OK"],
                                        "vbox-boot-proof.png")
     if ok:
         print(f"[PASS] full init markers on serial after ~{elapsed}s "
@@ -520,7 +526,7 @@ def cmd_image():
 
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
-                 b"HEAP-OK", b"IDT-OK", b"TIMER-OK"]
+                 b"HEAP-OK", b"IDT-OK", b"TIMER-OK", b"SCHED-OK"]
 
 
 def cmd_panic_test():
