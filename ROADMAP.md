@@ -65,9 +65,15 @@ E820 memory map → COM1 serial → halt, in `NOVA-OS-CONSTRAINED`
 - [x] T5/T6 gates strengthened; 7/7 green
 - [ ] Fairness/aging, AP scheduling + balancing, user yield (Phase 4d+)
 
-## Phase 5 — Syscalls
+## Phase 5 — Syscalls (DONE: ABI v1 + validation + fuzz)
 
-Versioned syscall ABI, pointer/length validation, fuzz corpus from day one.
+- [x] INT 0x80 gate (DPL3), versioned table dispatch: yield, exit,
+  print, getpid, gettid, version (`SYSCALL-OK`, ADR-0017)
+- [x] Range + per-page validation (shared guest/host logic), errno
+  returns, host fuzz T8 (edge corpus + 20k randomized, oracle-checked)
+- [x] Guest negative test (bad pointer → -EFAULT, not a fault)
+- [x] T5/T6 gates strengthened; 8/8 green
+- [ ] Handles, blocking calls, full MMU-differential fuzz (Phase 5+)
 
 ## Phase 6 — Userspace
 

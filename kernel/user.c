@@ -18,6 +18,7 @@
 #include "irq/irq.h"
 #include "sched/sched.h"
 #include "thread/thread.h"
+#include "syscall/syscall.h"
 #include "user.h"
 #include "process/process.h"
 #include "time/time.h"
@@ -38,46 +39,13 @@
 
 extern uint8_t user_probe_start[];
 extern uint8_t user_probe_end[];
-extern void user_ret_stub(void);
-extern int ksetjmp(uint32_t *buf);
-extern void klongjmp(uint32_t *buf, uint32_t val);
-
-static uint32_t g_jmp[6];
-static uint32_t g_saved_kpd;
-
-void user_ret_handler(void) {
-    struct thread *cur = sched_current_thread();
-    if (cur != 0 && cur->is_user) {
-        /* Scheduled user thread exit: free its user pages, hand off
-         * the zombie, and switch away (never returns here). */
-        struct thread *next;
-        if (cur->user_stack != 0) {
-            pmm_free_contig(cur->user_stack, 2);
-        }
-        if (cur->user_shared != 0) {
-            pmm_free_frame(cur->user_shared);
-        }
-        thread_zombie_handoff(cur);
-        next = sched_pick(cur);
-        if (next == 0 || next == cur) {
-            nova_panic("sched-empty");
-        }
-        sched_switch_to(cur, next);
-        nova_panic("user-exit-returned");
-    }
-    arch_write_cr3(g_saved_kpd);
-    klongjmp(g_jmp, 1);
-    nova_panic("longjmp-returned");
-}
 
 int user_selftest(void) {
     struct process *p;
     struct addrspace *as;
-    uint32_t code_f, shared_f, s_base, tss_stack;
+    uint32_t code_f, shared_f, s_base;
     uint32_t probe_len;
-    uint32_t user_esp;
-    probe_len = (uint32_t)(user_probe_end - user_probe_start);
-    gdt_init();
+    uint32_t t0;
     p = process_create();
     as = addrspace_create();
     if (p == 0 || as == 0) {
@@ -87,50 +55,49 @@ int user_selftest(void) {
     code_f = pmm_alloc_frame();
     shared_f = pmm_alloc_frame();
     s_base = pmm_alloc_contig(2);
-    tss_stack = pmm_alloc_contig(2);
-    if (code_f == 0 || shared_f == 0 || s_base == 0 || tss_stack == 0) {
+    if (code_f == 0 || shared_f == 0 || s_base == 0) {
         nova_panic("user-no-mem");
     }
     addrspace_map(as, USER_CODE, code_f, 1);
     addrspace_map(as, USER_SHARED, shared_f, 1);
     addrspace_map(as, USER_STACK_TOP - 8192u, s_base, 1);
     addrspace_map(as, USER_STACK_TOP - 4096u, s_base + 4096u, 1);
+    probe_len = (uint32_t)(user_probe_end - user_probe_start);
     for (uint32_t i = 0; i < probe_len; i++) {
         ((uint8_t *)code_f)[i] = user_probe_start[i];
     }
     *(uint32_t *)(shared_f) = 0;
     *(uint32_t *)(shared_f + 4u) = 0;
+    *(uint32_t *)(shared_f + 8u) = 0;
+    *(uint32_t *)(shared_f + 12u) = 0;
     *(uint32_t *)(s_base + 8192u - 4u) = USER_MAGIC;
     *(uint32_t *)(s_base + 8192u - 8u) = USER_SHARED;
-    /* NOTE: the writes above use PHYSICAL addresses (identity map),
-     * but the user ESP must be the VIRTUAL stack top. */
-    user_esp = USER_STACK_TOP - 8u;
-    idt_set_gate(0x81, user_ret_stub, 0xEEu);
-    tss_set_esp0(tss_stack + 8192u);
-    tss_load();
-    g_saved_kpd = arch_read_cr3();
-    if (ksetjmp(g_jmp) == 0) {
-        arch_write_cr3(as->pd);
-        __asm__ volatile("pushl $0x23; pushl %0; pushl $0x202; "
-                         "pushl $0x1B; pushl %1; iret" ::"r"(user_esp),
-                         "r"(USER_CODE)
-                         : "memory");
-        nova_panic("user-iret-returned");
+    if (thread_create_user(p, USER_CODE, USER_STACK_TOP - 8u, s_base,
+                           shared_f, 16u) == 0) {
+        nova_panic("user-spawn-fail");
     }
-    /* Longjmp does not restore EFLAGS: the INT 0x81 gate cleared IF,
-     * so re-enable here or the timer (and all preemption) stays dead. */
-    __asm__ volatile("sti" ::: "memory");
+    t0 = g_ticks;
+    for (;;) {
+        uint32_t *sh = (uint32_t *)shared_f;
+        if (sh[1] == USER_MAGIC) {
+            break;
+        }
+        if (g_ticks - t0 > 1000u) {
+            nova_panic("user-stuck");
+        }
+        __asm__ volatile("hlt");
+    }
     {
         uint32_t *sh = (uint32_t *)shared_f;
-        if (sh[0] != 0x1Bu || sh[1] != USER_MAGIC) {
+        if (sh[0] != 0x1Bu || sh[1] != USER_MAGIC ||
+            sh[3] != (uint32_t)-NOVA_EFAULT) {
             nova_panic("user-verify-fail");
         }
     }
-    serial_puts("USER cs=0x1b magic-ok\nUSER-OK\n");
+    serial_puts("USER cs=0x1b magic-ok neg-ok\nUSER-OK\n");
     pmm_free_frame(code_f);
     pmm_free_frame(shared_f);
     pmm_free_contig(s_base, 2);
-    pmm_free_contig(tss_stack, 2);
     addrspace_destroy(as);
     kfree(p);
     return 0;
@@ -270,6 +237,21 @@ int user_sched_test(void) {
         }
     }
     serial_puts("USER-SCHED-OK\n");
+    {
+        uint32_t y, p, e;
+        syscall_stats(&y, &p, &e);
+        serial_puts("SYSCALL y=");
+        serial_putdec32(y);
+        serial_puts(" p=");
+        serial_putdec32(p);
+        serial_puts(" e=");
+        serial_putdec32(e);
+        serial_putc('\n');
+        if (y == 0 || p == 0 || e == 0) {
+            nova_panic("syscall-unused");
+        }
+    }
+    serial_puts("SYSCALL-OK\n");
     pmm_free_frame(code_f);
     pmm_free_frame(sh1);
     pmm_free_frame(sh2);

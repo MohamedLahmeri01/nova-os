@@ -41,6 +41,9 @@ struct addrspace *addrspace_create(void) {
     }
     kpd = (uint32_t *)arch_read_cr3();
     npd = (uint32_t *)pd;
+    /* Zero the user half explicitly: PD frames are recycled (never
+     * zeroed by PMM), and stale user PDEs would resurrect freed PTs
+     * (use-after-free across address spaces). */
     for (uint32_t i = 0; i < 1024u; i++) {
         npd[i] = (i < KERNEL_PDS) ? kpd[i] : 0;
     }

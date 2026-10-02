@@ -63,14 +63,20 @@ struct thread *thread_create(struct process *p, thread_fn_t fn, void *arg,
     }
     *(uint32_t *)stack = STACK_CANARY;
     {
+        /* Low-to-high must mirror ctx_switch saves: regs, eflags,
+         * segs, ret (resume pops segs, eflags, regs, ret). */
         uint32_t *sp = (uint32_t *)(stack + THREAD_STACK_SIZE);
         *--sp = (uint32_t)arg;
         *--sp = (uint32_t)fn;
         *--sp = (uint32_t)&thread_trampoline;
-        *--sp = 0x202u;
         for (int k = 0; k < 8; k++) {
             *--sp = 0;
         }
+        *--sp = 0x202u;
+        *--sp = 0x10u;
+        *--sp = 0x10u;
+        *--sp = 0x10u;
+        *--sp = 0x10u;
         t->sp = sp;
     }
     t->id = g_next_id++;
@@ -116,6 +122,7 @@ struct thread *thread_create_user(struct process *p, uint32_t eip,
     *(uint32_t *)stack = STACK_CANARY;
     tss_slot = tss_esp0_slot();
     {
+        /* See thread_create: low-to-high is regs, eflags, segs, ret. */
         uint32_t *sp = (uint32_t *)(stack + THREAD_STACK_SIZE);
         *--sp = (uint32_t)tss_slot;
         *--sp = stack + THREAD_STACK_SIZE;
@@ -123,10 +130,14 @@ struct thread *thread_create_user(struct process *p, uint32_t eip,
         *--sp = eip;
         *--sp = p->cr3;
         *--sp = (uint32_t)&user_entry_trampoline;
-        *--sp = 0x202u;
         for (int k = 0; k < 8; k++) {
             *--sp = 0;
         }
+        *--sp = 0x202u;
+        *--sp = 0x10u;
+        *--sp = 0x10u;
+        *--sp = 0x10u;
+        *--sp = 0x10u;
         t->sp = sp;
     }
     t->id = g_next_id++;

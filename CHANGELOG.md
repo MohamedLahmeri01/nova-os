@@ -62,6 +62,11 @@ No releases yet.
   Fixed: mingw underscore rule (`_foo` in C is `__foo`), relocated
   relative calls, MP flags byte, strict-priority observer starvation,
   IF restore on longjmp path, fill-before-copy trampoline data.
+- Phase 5 syscalls (tested 2026-10-01, `nova test` 8/8): INT 0x80 ABI
+  v1 with table dispatch (yield/exit/print/getpid/gettid/version),
+  range + per-page validation, host fuzz T8, guest negative test
+  (ADR-0017). Fixed: syscall frame struct (arg points past call
+  machinery), gate readback byte, fresh-frame register ordering.
 - Architecture specification (`docs/ARCHITECTURE.md`)
 - ADRs 0001–0008 (kernel arch, language, memory, scheduler, IPC,
   filesystem, security, license evaluation)

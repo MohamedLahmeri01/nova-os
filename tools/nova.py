@@ -201,6 +201,9 @@ def build_phase1(fault=False):
                                  ("kernel/irq/irq.c", "irq.o", []),
                                  ("kernel/irq/lapic.c", "lapic.o", []),
                                  ("kernel/time/pit.c", "pit.o", []),
+                                 ("kernel/syscall/entry.S", "syscall_entry.o", []),
+                                 ("kernel/syscall/syscall.c", "syscall.o", []),
+                                 ("kernel/syscall/validate.c", "validate.o", []),
                                  ("kernel/ctx.S", "ctx.o", []),
                                  ("kernel/user.S", "user_asm.o", []),
                                  ("kernel/user.c", "user.o", []),
@@ -229,7 +232,8 @@ def build_phase1(fault=False):
             (["stage1.o"], "boot/stage1.ld", "stage1.pe"),
             (["stage2asm.o", pm_obj, "serial.o", "panic.o",
               "pmm.o", "vmm.o", "heap.o", "addrspace.o", "idt.o", "irq.o",
-              "lapic.o", "pit.o", "ctx.o", "user_asm.o", "user.o", "gdt.o",
+              "lapic.o", "pit.o", "syscall_entry.o", "syscall.o",
+              "validate.o", "ctx.o", "user_asm.o", "user.o", "gdt.o",
               "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
               PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
@@ -383,6 +387,25 @@ def cmd_test():
             print("[pass] T7 host heap test"); passed += 1
         else:
             print("[fail] T7 host heap test"); failed += 1
+    # T8: host syscall-validation fuzz (validate.c + fake page map)
+    print("[info] T8 compiling + running validation fuzz...")
+    sys_exe = os.path.join(BUILD, "test_syscall.exe")
+    cmd = ["gcc", "-O2", "-Wall", "-Wextra",
+           "-I", os.path.join(ROOT, "kernel"),
+           os.path.join(ROOT, "tests", "unit", "test_syscall.c"),
+           os.path.join(ROOT, "kernel", "syscall", "validate.c"),
+           "-o", sys_exe]
+    r = run(cmd, timeout=120)
+    if r.returncode != 0:
+        print(f"[fail] T8 fuzz compile:\n{(r.stderr or '')[:1500]}")
+        failed += 1
+    else:
+        r = run([sys_exe], timeout=120)
+        print((r.stdout or "") + (r.stderr or ""))
+        if r.returncode == 0:
+            print("[pass] T8 validation fuzz"); passed += 1
+        else:
+            print("[fail] T8 validation fuzz"); failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 
@@ -483,7 +506,8 @@ def cmd_run_vbox():
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
                                        b"HEAP-OK", b"IDT-OK", b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
-                                       b"USER-SCHED-OK", b"SMP-OK"],
+                                       b"USER-SCHED-OK", b"SYSCALL-OK",
+                                       b"SMP-OK"],
                                        "vbox-boot-proof.png")
     if ok:
         print(f"[PASS] full init markers on serial after ~{elapsed}s "
@@ -535,7 +559,7 @@ def cmd_image():
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
                  b"HEAP-OK", b"IDT-OK", b"TIMER-OK", b"SCHED-OK",
-                 b"USER-OK", b"USER-SCHED-OK", b"SMP-OK"]
+                 b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK"]
 
 
 def cmd_panic_test():

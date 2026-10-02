@@ -38,6 +38,7 @@
 
 #define PTE_P (1u << 0)
 #define PTE_RW (1u << 1)
+#define PTE_US (1u << 2)
 #define PDE_PS (1u << 7)
 #define PD_ENTRIES 1024u
 #define PT_ENTRIES 1024u
@@ -103,8 +104,7 @@ int vmm_init(void) {
     return 0;
 }
 
-void vmm_map_mmio(uint32_t phys) {
-    uint32_t p = phys & ~0xFFFu;
+void vmm_map_mmio(uint32_t phys) {    uint32_t p = phys & ~0xFFFu;
     uint32_t pd_idx = p >> 22;
     uint32_t pt_idx = (p >> 12) & 0x3FFu;
     if (pd_idx == 0) {
@@ -117,6 +117,39 @@ void vmm_map_mmio(uint32_t phys) {
     (void)pt_idx;
     arch_invlpg(p);
     arch_write_cr3(arch_read_cr3());
+}
+
+int mem_page_state(uint32_t addr, int *present, int *user,
+                    int *writable) {
+    uint32_t pde;
+    if (present == 0 || user == 0 || writable == 0) {
+        return -1;
+    }
+    pde = g_pd[addr >> 22];
+    if (!(pde & PTE_P)) {
+        *present = 0;
+        *user = 0;
+        *writable = 0;
+        return 0;
+    }
+    if (pde & PDE_PS) {
+        *present = 1;
+        *user = 0; /* kernel large pages: supervisor-only */
+        *writable = (pde & PTE_RW) != 0;
+        return 0;
+    }
+    {
+        uint32_t *pt = (uint32_t *)(pde & ~0xFFFu);
+        uint32_t pte = pt[(addr >> 12) & 0x3FFu];
+        *present = (pte & PTE_P) != 0;
+        *user = 0;
+        *writable = 0;
+        if (*present) {
+            *user = (pte & PTE_US) != 0;
+            *writable = (pte & PTE_RW) != 0;
+        }
+        return 0;
+    }
 }
 
 int vmm_selftest(void) {    if ((g_pt0[0] & (PTE_P | PTE_RW)) != PTE_P) {

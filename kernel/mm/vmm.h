@@ -11,5 +11,8 @@ int vmm_selftest(void);
 /* Map one MMIO page identity (P|RW|PWT|PCD). For LAPIC now, general
  * device MMIO later. Panics on PMM exhaustion. */
 void vmm_map_mmio(uint32_t phys);
+/* Page query for syscall validation (Phase 5). 0 ok (outputs set),
+ * nonzero if the address is outside the managed map. */
+int mem_page_state(uint32_t addr, int *present, int *user, int *writable);
 
 #endif /* NOVA_VMM_H */

@@ -12,6 +12,7 @@
 #include "irq.h"
 #include "time/time.h"
 #include "sched/sched.h"
+#include "gdt.h"
 #include "time.h"
 
 #if defined(__i386__)
@@ -97,6 +98,22 @@ void trap_handler(trap_frame_t *f) {
     serial_puts(" eflags=0x");
     serial_puthex32(f->eflags);
     serial_putc('\n');
+    /* TEMP-DIAG: full reg dump (is ESI intact? which regs?). */
+    serial_puts(" regs=0x");
+    serial_puthex32(f->edi);
+    serial_puts(" 0x");
+    serial_puthex32(f->esi);
+    serial_puts(" 0x");
+    serial_puthex32(f->ebp);
+    serial_puts(" 0x");
+    serial_puthex32(f->ebx);
+    serial_puts(" 0x");
+    serial_puthex32(f->edx);
+    serial_puts(" 0x");
+    serial_puthex32(f->ecx);
+    serial_puts(" 0x");
+    serial_puthex32(f->eax);
+    serial_putc('\n');
     if (f->vec == 14) {
         serial_puts(" pf-addr=0x");
         serial_puthex32(arch_read_cr2());
@@ -154,5 +171,7 @@ void irq_init(void) {
         nova_panic("pic-mask-fail");
     }
     lapic_probe();
+    gdt_init();
+    tss_load();
     serial_puts("IDT-OK\n");
 }

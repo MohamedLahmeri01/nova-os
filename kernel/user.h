@@ -6,6 +6,5 @@
 
 int user_selftest(void);
 int user_sched_test(void);
-void user_ret_handler(void);
 
 #endif /* NOVA_USER_H */

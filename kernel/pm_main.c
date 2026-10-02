@@ -15,6 +15,7 @@
 #include "irq/irq.h"
 #include "time/time.h"
 #include "sched/sched.h"
+#include "syscall/syscall.h"
 #include "user.h"
 #include "smp.h"
 #include "../boot/boot_info.h"
@@ -83,6 +84,7 @@ void nova_pm_main(const nova_boot_info_t *info) {
     serial_puts("HEAP-OK\n");
     irq_init();
     timer_init();
+    syscall_init();
     {
         int sched_rc = sched_selftest();
         if (sched_rc != 0) {
