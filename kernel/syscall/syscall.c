@@ -15,6 +15,8 @@
 #include "sched/sched.h"
 #include "process/process.h"
 #include "irq/irq.h"
+#include "input/kbd.h"
+#include "time/time.h"
 
 #if defined(__i386__)
 #include "../arch/x86/cpu.h"
@@ -131,6 +133,36 @@ static int32_t do_version(uint32_t a, uint32_t b, uint32_t c) {
     return (int32_t)NOVA_ABI_VERSION;
 }
 
+static int32_t do_getkey(uint32_t a, uint32_t b, uint32_t c) {
+    (void)a;
+    (void)b;
+    (void)c;
+    return kbd_getkey();
+}
+
+static int32_t do_meminfo(uint32_t total_ptr, uint32_t free_ptr,
+                          uint32_t c) {
+    uint32_t *t;
+    uint32_t *f;
+    (void)c;
+    if (validate_usermem(total_ptr, 4, 1) != 0 ||
+        validate_usermem(free_ptr, 4, 1) != 0) {
+        return -NOVA_EFAULT;
+    }
+    t = (uint32_t *)total_ptr;
+    f = (uint32_t *)free_ptr;
+    *t = pmm_total_frames();
+    *f = pmm_free_count();
+    return NOVA_ESUCCESS;
+}
+
+static int32_t do_ticks(uint32_t a, uint32_t b, uint32_t c) {
+    (void)a;
+    (void)b;
+    (void)c;
+    return (int32_t)g_ticks;
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -144,6 +176,9 @@ static const struct {
     { SYS_GETPID, "getpid", do_getpid },
     { SYS_GETTID, "gettid", do_gettid },
     { SYS_VERSION, "version", do_version },
+    { SYS_GETKEY, "getkey", do_getkey },
+    { SYS_MEMINFO, "meminfo", do_meminfo },
+    { SYS_TICKS, "ticks", do_ticks },
 };
 
 void syscall_handler(struct syscall_frame *f) {

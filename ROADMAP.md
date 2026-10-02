@@ -75,9 +75,16 @@ E820 memory map → COM1 serial → halt, in `NOVA-OS-CONSTRAINED`
 - [x] T5/T6 gates strengthened; 8/8 green
 - [ ] Handles, blocking calls, full MMU-differential fuzz (Phase 5+)
 
-## Phase 6 — Userspace
+## Phase 6 — Userspace (DONE: init + interactive shell)
 
-kernel → init → shell over serial/framebuffer console.
+- [x] init+shell static binary (`userspace/init`, `init.ld` base
+  0x80000000, 4140B) embedded as `init_blob.o`, own process/PD/code/
+  stack via `spawn_init()` (`INIT-OK`, ADR-0018)
+- [x] Shell builtins: help, echo, mem, ticks, clear, exit; new
+  syscalls getkey/meminfo/ticks; PS/2 IRQ1 driver (Set-1 ring)
+- [x] Interactive proof: typed help/mem/ticks over VBox scancodes ->
+  real PMM/tick values; `nova test` 8/8 green
+- [ ] Blocking input, job control, exec-by-name (arrives with FS)
 
 ## Phase 7 — Filesystem
 

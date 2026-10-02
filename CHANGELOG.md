@@ -67,6 +67,12 @@ No releases yet.
   range + per-page validation, host fuzz T8, guest negative test
   (ADR-0017). Fixed: syscall frame struct (arg points past call
   machinery), gate readback byte, fresh-frame register ordering.
+- Phase 6 userspace (tested 2026-10-02, `nova test` 8/8): init+shell
+  static binary (own process/PD, `INIT-OK`), builtins help/echo/mem/
+  ticks/clear/exit, syscalls getkey/meminfo/ticks, PS/2 IRQ1 driver,
+  interactive proof over VBox scancodes with real PMM/tick values
+  (ADR-0018). Fixed: blob-symbol underscore rule, validation walking
+  the current CR3, user data segments in the entry trampoline.
 - Architecture specification (`docs/ARCHITECTURE.md`)
 - ADRs 0001–0008 (kernel arch, language, memory, scheduler, IPC,
   filesystem, security, license evaluation)

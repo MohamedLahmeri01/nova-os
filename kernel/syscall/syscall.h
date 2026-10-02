@@ -17,10 +17,14 @@
 #define SYS_GETPID 3u
 #define SYS_GETTID 4u
 #define SYS_VERSION 5u
-#define SYS_MAX 5u
+#define SYS_GETKEY 6u
+#define SYS_MEMINFO 7u
+#define SYS_TICKS 8u
+#define SYS_MAX 8u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0
+#define NOVA_EAGAIN 11
 #define NOVA_EFAULT 14
 #define NOVA_EINVAL 22
 #define NOVA_ENOSYS 38

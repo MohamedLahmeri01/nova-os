@@ -56,6 +56,14 @@ _user_entry_trampoline:
     popl %edi
     movl %eax, %cr3
     movl %esi, (%edi)
+    /* Establish user data segments: iret loads only SS/CS, so a fresh
+     * user thread would otherwise run its first instructions with
+     * supervisor DS/ES/FS/GS (instant #GP at CPL3). */
+    movw $0x23, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
     pushl $0x23
     pushl %edx
     pushl $0x202

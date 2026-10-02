@@ -12,13 +12,61 @@
 #include "mm/pmm.h"
 #include "mm/vmm.h"
 #include "mm/heap.h"
+#include "mm/addrspace.h"
 #include "irq/irq.h"
 #include "time/time.h"
 #include "sched/sched.h"
 #include "syscall/syscall.h"
+#include "thread/thread.h"
+#include "process/process.h"
 #include "user.h"
 #include "smp.h"
 #include "../boot/boot_info.h"
+#include "../boot/mem_layout.h"
+
+extern uint8_t binary_init_bin_start[];
+extern uint8_t binary_init_bin_end[];
+
+/* Spawn the builtin init program (Phase 6: linked into the kernel;
+ * exec-by-name arrives with the filesystem). Own process, PD, code
+ * and stack; entry is _ustart at NOVA_USER_CODE (linker-asserted). */
+static void spawn_init(void) {
+    struct process *p;
+    struct addrspace *as;
+    uint32_t size;
+    uint32_t frames;
+    uint32_t code;
+    uint32_t stack;
+    p = process_create();
+    as = addrspace_create();
+    if (p == 0 || as == 0) {
+        nova_panic("init-no-proc");
+    }
+    p->cr3 = as->pd;
+    size = (uint32_t)(binary_init_bin_end - binary_init_bin_start);
+    frames = (size + 4095u) / 4096u;
+    if (size == 0 || frames > 64u) {
+        nova_panic("init-bad-size");
+    }
+    code = pmm_alloc_contig(frames);
+    stack = pmm_alloc_contig(2);
+    if (code == 0 || stack == 0) {
+        nova_panic("init-no-mem");
+    }
+    for (uint32_t i = 0; i < size; i++) {
+        ((uint8_t *)code)[i] = binary_init_bin_start[i];
+    }
+    for (uint32_t f = 0; f < frames; f++) {
+        addrspace_map(as, NOVA_USER_CODE + f * 4096u, code + f * 4096u, 1);
+    }
+    addrspace_map(as, NOVA_USER_STACK_TOP - 8192u, stack, 1);
+    addrspace_map(as, NOVA_USER_STACK_TOP - 4096u, stack + 4096u, 1);
+    if (thread_create_user(p, NOVA_USER_CODE, NOVA_USER_STACK_TOP,
+                           stack, 0, 16u) == 0) {
+        nova_panic("init-spawn-fail");
+    }
+    serial_puts("INIT-OK\n");
+}
 
 void nova_pm_main(const nova_boot_info_t *info) {
     serial_puts("NOVA-OS-BOOT-MARKER-v0\n");
@@ -110,11 +158,19 @@ void nova_pm_main(const nova_boot_info_t *info) {
         }
     }
     smp_boot();
+    spawn_init();
 #ifdef NOVA_FAULT_TEST
     serial_puts("INJECT-FAULT\n");
     __asm__ volatile("ud2"); /* deliberate #UD: proves IDT->trap->panic */
     nova_panic("fault-test-unreached");
 #else
-    serial_puts("NOVA-OS-READY-HALT\n");
+    /* Idle forever (timer keeps ticking for init/shell); the old
+     * halt-on-return path would kill preemption, so never return.
+     * Strict priority (no aging yet) means the prio-16 shell starves
+     * this thread while it spins: expected, see Phase 4d. */
+    __asm__ volatile("sti");
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
 #endif
 }

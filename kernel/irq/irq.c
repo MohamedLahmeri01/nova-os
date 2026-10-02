@@ -13,6 +13,7 @@
 #include "time/time.h"
 #include "sched/sched.h"
 #include "gdt.h"
+#include "input/kbd.h"
 #include "time.h"
 
 #if defined(__i386__)
@@ -72,11 +73,9 @@ static void pic_remap(void) {
     arch_outb(PIC_S_DATA, 0x02);
     arch_outb(PIC_M_DATA, 0x01);
     arch_outb(PIC_S_DATA, 0x01);
-    /* Unmask IRQ0 (timer) only: 0xFE, NOT 0xFD (bit 0 = IRQ0; 0xFD
-     * masks the timer and opens the keyboard - a silent no-ticks
-     * hang that mask readback cannot catch if it checks the same
-     * wrong constant). */
-    arch_outb(PIC_M_DATA, 0xFEu);
+    /* Unmask IRQ0 (timer) + IRQ1 (keyboard) only: 0xFC. (0xFD would
+     * mask the timer; 0xFE was timer-only before the keyboard.) */
+    arch_outb(PIC_M_DATA, 0xFCu);
     arch_outb(PIC_S_DATA, 0xFFu);
     /* IMCR: force PIC mode so the 8259 INT reaches the CPU directly. */
     arch_outb(0x22u, 0x70u);
@@ -141,6 +140,8 @@ void irq_handler(trap_frame_t *f) {
     if (f->vec == 32) {
         g_ticks++;
         sched_tick();
+    } else if (f->vec == 33) {
+        kbd_irq();
     }
     if (f->vec >= 40) {
         arch_outb(PIC_S_CMD, PIC_EOI);
@@ -167,9 +168,10 @@ void irq_init(void) {
         }
     }
     pic_remap();
-    if (arch_inb(PIC_M_DATA) != 0xFEu || arch_inb(PIC_S_DATA) != 0xFFu) {
+    if (arch_inb(PIC_M_DATA) != 0xFCu || arch_inb(PIC_S_DATA) != 0xFFu) {
         nova_panic("pic-mask-fail");
     }
+    kbd_init();
     lapic_probe();
     gdt_init();
     tss_load();

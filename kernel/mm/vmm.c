@@ -122,10 +122,13 @@ void vmm_map_mmio(uint32_t phys) {    uint32_t p = phys & ~0xFFFu;
 int mem_page_state(uint32_t addr, int *present, int *user,
                     int *writable) {
     uint32_t pde;
+    /* Walk the CURRENT address space (syscalls run under the
+     * caller's CR3); g_pd is only the kernel's own directory. */
+    uint32_t *pd = (uint32_t *)(arch_read_cr3() & ~0xFFFu);
     if (present == 0 || user == 0 || writable == 0) {
         return -1;
     }
-    pde = g_pd[addr >> 22];
+    pde = pd[addr >> 22];
     if (!(pde & PTE_P)) {
         *present = 0;
         *user = 0;

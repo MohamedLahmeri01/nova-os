@@ -174,6 +174,48 @@ def cmd_build():
     return 0
 
 
+def build_userspace():
+    """Compile userspace (libc + init/sh) and embed init.bin as a blob.
+
+    init.pe links at 0x80000000 (entry asserted by init.ld); objcopy to
+    flat binary, then binary->object so the kernel links it in.
+    Returns (rc, msg). Single program for Phase 6 (exec table later).
+    """
+    usrc = [("userspace/init/init.c", "u_init.o"),
+            ("userspace/init/sh.c", "u_sh.o"),
+            ("userspace/libs/libc/string.c", "u_string.o"),
+            ("userspace/libs/libc/stdio.c", "u_stdio.o")]
+    for src, obj in usrc:
+        s = os.path.join(ROOT, src)
+        if not os.path.isfile(s):
+            return 1, f"missing {src}"
+        r = run(["gcc"] + CFLAGS32 +
+                ["-I", os.path.join(ROOT, "userspace", "libs", "libc"),
+                 "-I", os.path.join(ROOT, "userspace", "init"),
+                 "-c", s, "-o", os.path.join(BUILD, obj)], timeout=60)
+        if r.returncode != 0:
+            return 1, f"compile failed {src}:\n{(r.stderr or '')[:2000]}"
+    r = run(["gcc"] + CFLAGS32 +
+            ["-Wl,-T," + os.path.join(ROOT, "userspace", "init", "init.ld")] +
+            [os.path.join(BUILD, o) for _, o in usrc] +
+            ["-o", os.path.join(BUILD, "init.pe")], timeout=60)
+    if r.returncode != 0:
+        return 1, f"link failed init.pe:\n{(r.stderr or '')[:2000]}"
+    for args in [(["objcopy", "-O", "binary", "init.pe", "init.bin"]),
+                 (["objcopy", "-I", "binary", "-O", "pe-i386", "-B", "i386",
+                   "init.bin", "init_blob.o"])]:
+        # NOTE: run from BUILD so -I binary derives clean symbol names
+        # (_binary_init_bin_start, not _binary_F__NOVA_OS_...).
+        r = run(args, timeout=60, cwd=BUILD)
+        if r.returncode != 0:
+            return 1, f"objcopy failed {' '.join(args[1:3])}: {(r.stderr or '')[:500]}"
+    size = os.path.getsize(os.path.join(BUILD, "init.bin"))
+    if size == 0 or size > 65536:
+        return 1, f"init.bin size insane: {size}"
+    print(f"[ok] userspace init.bin={size}B embedded")
+    return 0, ""
+
+
 def build_phase1(fault=False):
     """Compile+link stage1 and stage2 to flat binaries. Returns (rc, info|msg).
 
@@ -213,6 +255,7 @@ def build_phase1(fault=False):
                                  ("kernel/thread/thread.c", "thread.o", []),
                                  ("kernel/sched/sched.c", "sched.o", []),
                                  ("kernel/process/process.c", "process.o", []),
+                                 ("kernel/input/kbd.c", "kbd.o", []),
                                  (PMM_BACKEND_C, PMM_BACKEND_O, [])]:
         s = os.path.join(ROOT, src)
         if not os.path.isfile(s):
@@ -228,6 +271,9 @@ def build_phase1(fault=False):
         if r.returncode != 0:
             label = " (fault)" if fault else ""
             return 1, f"compile failed {src}{label}:\n{(r.stderr or '')[:2000]}"
+    rc, msg = build_userspace()
+    if rc != 0:
+        return rc, msg
     for objs_in, ld, pe_out in [
             (["stage1.o"], "boot/stage1.ld", "stage1.pe"),
             (["stage2asm.o", pm_obj, "serial.o", "panic.o",
@@ -235,7 +281,7 @@ def build_phase1(fault=False):
               "lapic.o", "pit.o", "syscall_entry.o", "syscall.o",
               "validate.o", "ctx.o", "user_asm.o", "user.o", "gdt.o",
               "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
-              PMM_BACKEND_O],
+              "kbd.o", "init_blob.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -507,7 +553,7 @@ def cmd_run_vbox():
                                        b"HEAP-OK", b"IDT-OK", b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
-                                       b"SMP-OK"],
+                                       b"SMP-OK", b"INIT-OK"],
                                        "vbox-boot-proof.png")
     if ok:
         print(f"[PASS] full init markers on serial after ~{elapsed}s "
@@ -559,7 +605,8 @@ def cmd_image():
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
                  b"HEAP-OK", b"IDT-OK", b"TIMER-OK", b"SCHED-OK",
-                 b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK"]
+                 b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
+                 b"INIT-OK"]
 
 
 def cmd_panic_test():
