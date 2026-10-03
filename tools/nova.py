@@ -254,9 +254,11 @@ def build_phase1(fault=False):
                                  ("boot/ap_tramp.S", "ap_tramp.o", []),
                                  ("kernel/thread/thread.c", "thread.o", []),
                                  ("kernel/sched/sched.c", "sched.o", []),
-                                 ("kernel/process/process.c", "process.o", []),
-                                 ("kernel/input/kbd.c", "kbd.o", []),
-                                 (PMM_BACKEND_C, PMM_BACKEND_O, [])]:
+                                  ("kernel/process/process.c", "process.o", []),
+                                  ("kernel/input/kbd.c", "kbd.o", []),
+                                  ("kernel/fs/ramfs.c", "ramfs.o", []),
+                                  ("kernel/fs/file.c", "file.o", []),
+                                  (PMM_BACKEND_C, PMM_BACKEND_O, [])]:
         s = os.path.join(ROOT, src)
         if not os.path.isfile(s):
             return 1, f"missing {src}"
@@ -281,7 +283,7 @@ def build_phase1(fault=False):
               "lapic.o", "pit.o", "syscall_entry.o", "syscall.o",
               "validate.o", "ctx.o", "user_asm.o", "user.o", "gdt.o",
               "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
-              "kbd.o", "init_blob.o", PMM_BACKEND_O],
+              "kbd.o", "init_blob.o", "ramfs.o", "file.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -452,6 +454,26 @@ def cmd_test():
             print("[pass] T8 validation fuzz"); passed += 1
         else:
             print("[fail] T8 validation fuzz"); failed += 1
+    # T9: host filesystem test (ramfs.c + file.c, stub heap/serial)
+    print("[info] T9 compiling + running host fs test...")
+    fs_exe = os.path.join(BUILD, "test_fs.exe")
+    cmd = ["gcc", "-O2", "-Wall", "-Wextra",
+           "-I", os.path.join(ROOT, "kernel"),
+           os.path.join(ROOT, "tests", "unit", "test_fs.c"),
+           os.path.join(ROOT, "kernel", "fs", "ramfs.c"),
+           os.path.join(ROOT, "kernel", "fs", "file.c"),
+           "-o", fs_exe]
+    r = run(cmd, timeout=120)
+    if r.returncode != 0:
+        print(f"[fail] T9 fs test compile:\n{(r.stderr or '')[:1500]}")
+        failed += 1
+    else:
+        r = run([fs_exe], timeout=120)
+        print((r.stdout or "") + (r.stderr or ""))
+        if r.returncode == 0:
+            print("[pass] T9 host fs test"); passed += 1
+        else:
+            print("[fail] T9 host fs test"); failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 
@@ -550,7 +572,8 @@ def cmd_run_vbox():
         print("[blocked] No image attached. Run `python tools/nova.py image` first.")
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
-                                       b"HEAP-OK", b"IDT-OK", b"TIMER-OK",
+                                       b"HEAP-OK", b"FS-OK", b"IDT-OK",
+                                       b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
                                        b"SMP-OK", b"INIT-OK"],
@@ -604,7 +627,7 @@ def cmd_image():
 
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
-                 b"HEAP-OK", b"IDT-OK", b"TIMER-OK", b"SCHED-OK",
+                 b"HEAP-OK", b"FS-OK", b"IDT-OK", b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]
 

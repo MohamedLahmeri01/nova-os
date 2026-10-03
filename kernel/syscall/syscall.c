@@ -1,7 +1,8 @@
-/* NOVA OS syscall dispatch + handlers (Phase 5, ABI v1).
+/* NOVA OS syscall dispatch + handlers (Phase 5 ABI v1, Phase 7 files).
  * Table-driven (new versions add rows). Every pointer/length goes
  * through validate_usermem; failures return -errno, never panic.
- * Handler costs are bounded (print is cli-guarded, no shared buffer).
+ * Handler costs are bounded (print is cli-guarded, no shared buffer;
+ * file I/O chunks through a 512B bounce buffer).
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -14,6 +15,7 @@
 #include "thread/thread.h"
 #include "sched/sched.h"
 #include "process/process.h"
+#include "fs/fs.h"
 #include "irq/irq.h"
 #include "input/kbd.h"
 #include "time/time.h"
@@ -163,6 +165,220 @@ static int32_t do_ticks(uint32_t a, uint32_t b, uint32_t c) {
     return (int32_t)g_ticks;
 }
 
+/* Copy a user path into a kernel buffer (validated read, NUL found
+ * within FS_MAX_PATH). Returns length or negative -errno. */
+static int32_t copy_user_path(uint32_t uptr, char *kbuf) {
+    uint32_t len;
+    if (validate_usermem(uptr, 1, 0) != 0) {
+        return -NOVA_EFAULT;
+    }
+    for (len = 0; len <= FS_MAX_PATH; len++) {
+        uint32_t a = uptr + len;
+        if (validate_usermem(a, 1, 0) != 0) {
+            return -NOVA_EFAULT;
+        }
+        kbuf[len] = *(volatile char *)a;
+        if (kbuf[len] == 0) {
+            return (int32_t)len;
+        }
+    }
+    return -NOVA_ENAMETOOLONG;
+}
+
+static struct process *sysc_proc(void) {
+    struct thread *cur = sched_current_thread();
+    if (cur == 0 || cur->proc == 0) {
+        return 0;
+    }
+    return cur->proc;
+}
+
+static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
+    char kpath[FS_MAX_PATH + 1u];
+    struct fs_node *n = 0;
+    struct fs_file *f;
+    struct process *p;
+    int32_t plen;
+    int rc;
+    (void)c;
+    if ((flags & ~((uint32_t)(FS_O_ACCMODE | FS_O_CREAT))) != 0) {
+        return -NOVA_EINVAL;
+    }
+    plen = copy_user_path(path, kpath);
+    if (plen < 0) {
+        return plen;
+    }
+    p = sysc_proc();
+    if (p == 0) {
+        return -NOVA_EINVAL;
+    }
+    rc = fs_lookup(kpath, &n);
+    if (rc == -NOVA_ENOENT && (flags & FS_O_CREAT) != 0) {
+        rc = fs_create(kpath, &n);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    if (n->is_dir) {
+        return -NOVA_EISDIR;
+    }
+    f = fs_file_alloc(n, flags);
+    if (f == 0) {
+        return -NOVA_ENOSPC;
+    }
+    rc = fs_fd_alloc(p, f);
+    if (rc < 0) {
+        fs_file_free(f);
+        return rc;
+    }
+    return rc;
+}
+
+static int32_t do_read(uint32_t fd, uint32_t buf, uint32_t len) {
+    struct process *p;
+    struct fs_file *f;
+    uint8_t kbuf[512];
+    uint32_t total = 0;
+    if (len > FS_MAX_FILE) {
+        return -NOVA_EINVAL;
+    }
+    if (len != 0 && validate_usermem(buf, len, 1) != 0) {
+        return -NOVA_EFAULT;
+    }
+    p = sysc_proc();
+    if (p == 0) {
+        return -NOVA_EINVAL;
+    }
+    f = fs_fd_get(p, fd);
+    if (f == 0) {
+        return -NOVA_EBADF;
+    }
+    if (!f->readable) {
+        return -NOVA_EBADF;
+    }
+    /* Chunked through a kernel bounce buffer (user pages may be
+     * non-contiguous; 512B keeps IRQ latency bounded). */
+    while (total < len) {
+        uint32_t want = len - total;
+        uint32_t got = 0;
+        uint32_t i;
+        int rc;
+        if (want > sizeof(kbuf)) {
+            want = sizeof(kbuf);
+        }
+        rc = fs_read_node(f->node, f->off, kbuf, want, &got);
+        if (rc != 0) {
+            return (total != 0) ? (int32_t)total : rc;
+        }
+        if (got == 0) {
+            break;
+        }
+        for (i = 0; i < got; i++) {
+            *(volatile uint8_t *)(buf + total + i) = kbuf[i];
+        }
+        f->off += got;
+        total += got;
+    }
+    return (int32_t)total;
+}
+
+static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
+    struct process *p;
+    struct fs_file *f;
+    uint8_t kbuf[512];
+    uint32_t total = 0;
+    if (len > FS_MAX_FILE) {
+        return -NOVA_EINVAL;
+    }
+    if (len != 0 && validate_usermem(buf, len, 0) != 0) {
+        return -NOVA_EFAULT;
+    }
+    p = sysc_proc();
+    if (p == 0) {
+        return -NOVA_EINVAL;
+    }
+    f = fs_fd_get(p, fd);
+    if (f == 0) {
+        return -NOVA_EBADF;
+    }
+    if (!f->writable) {
+        return -NOVA_EBADF;
+    }
+    while (total < len) {
+        uint32_t want = len - total;
+        uint32_t got = 0;
+        uint32_t i;
+        int rc;
+        if (want > sizeof(kbuf)) {
+            want = sizeof(kbuf);
+        }
+        for (i = 0; i < want; i++) {
+            kbuf[i] = *(volatile uint8_t *)(buf + total + i);
+        }
+        rc = fs_write_node(f->node, f->off, kbuf, want, &got);
+        if (rc != 0) {
+            return (total != 0) ? (int32_t)total : rc;
+        }
+        f->off += got;
+        total += got;
+        if (got < want) {
+            break;
+        }
+    }
+    return (int32_t)total;
+}
+
+static int32_t do_close(uint32_t fd, uint32_t b, uint32_t c) {
+    struct process *p;
+    (void)b;
+    (void)c;
+    p = sysc_proc();
+    if (p == 0) {
+        return -NOVA_EINVAL;
+    }
+    return fs_fd_drop(p, fd);
+}
+
+static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
+    char kpath[FS_MAX_PATH + 1u];
+    char name[FS_MAX_NAME];
+    struct fs_node *dir = 0;
+    uint32_t i;
+    int32_t plen;
+    int rc;
+    plen = copy_user_path(path, kpath);
+    if (plen < 0) {
+        return plen;
+    }
+    if (validate_usermem(namebuf, FS_MAX_NAME, 1) != 0) {
+        return -NOVA_EFAULT;
+    }
+    rc = fs_lookup(kpath, &dir);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = fs_readdir(dir, index, name);
+    if (rc < 0) {
+        return rc;
+    }
+    for (i = 0; i <= (uint32_t)rc; i++) {
+        *(volatile char *)(namebuf + i) = name[i];
+    }
+    return rc;
+}
+
+static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
+    char kpath[FS_MAX_PATH + 1u];
+    int32_t plen;
+    (void)b;
+    (void)c;
+    plen = copy_user_path(path, kpath);
+    if (plen < 0) {
+        return plen;
+    }
+    return fs_mkdir(kpath);
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -179,6 +395,12 @@ static const struct {
     { SYS_GETKEY, "getkey", do_getkey },
     { SYS_MEMINFO, "meminfo", do_meminfo },
     { SYS_TICKS, "ticks", do_ticks },
+    { SYS_OPEN, "open", do_open },
+    { SYS_READ, "read", do_read },
+    { SYS_WRITE, "write", do_write },
+    { SYS_CLOSE, "close", do_close },
+    { SYS_READDIR, "readdir", do_readdir },
+    { SYS_MKDIR, "mkdir", do_mkdir },
 };
 
 void syscall_handler(struct syscall_frame *f) {

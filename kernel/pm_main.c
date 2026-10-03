@@ -17,6 +17,7 @@
 #include "time/time.h"
 #include "sched/sched.h"
 #include "syscall/syscall.h"
+#include "fs/fs.h"
 #include "thread/thread.h"
 #include "process/process.h"
 #include "user.h"
@@ -130,6 +131,12 @@ void nova_pm_main(const nova_boot_info_t *info) {
         nova_panic("heap-selftest-fail");
     }
     serial_puts("HEAP-OK\n");
+    if (fs_init() != 0) {
+        nova_panic("fs-init-fail");
+    }
+    if (fs_selftest() != 0) {
+        nova_panic("fs-selftest-fail");
+    }
     irq_init();
     timer_init();
     syscall_init();

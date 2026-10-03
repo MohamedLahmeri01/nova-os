@@ -10,11 +10,18 @@
 
 struct thread;
 
+struct fs_file;
+
+/* Open-file table per process (Phase 7): fds 0..NOVA_NFD-1, NULL
+ * when free. Fixed size, no sharing yet (no fork/dup). */
+#define NOVA_NFD 16u
+
 struct process {
     uint32_t pid;
     uint32_t cr3; /* reserved: per-process page directory (user mode) */
     struct thread *threads;
     struct process *next;
+    struct fs_file *fds[NOVA_NFD];
 };
 
 extern struct process *g_init_process;

@@ -86,9 +86,15 @@ E820 memory map → COM1 serial → halt, in `NOVA-OS-CONSTRAINED`
   real PMM/tick values; `nova test` 8/8 green
 - [ ] Blocking input, job control, exec-by-name (arrives with FS)
 
-## Phase 7 — Filesystem
+## Phase 7 — Filesystem (7a DONE: VFS + RAMFS)
 
-VFS → RAMFS → FAT32 → EXT4(read) → NOVA-FS design.
+- [x] ramfs at `/` (`kernel/fs/ramfs.c`): dot-aware lookup, 64KB
+  doubling files, seed /hello.txt + /docs/readme.txt (`FS-OK`,
+  ADR-0019)
+- [x] Syscalls 9-14 (open/read/write/close/readdir/mkdir) on
+  per-process fd tables of 16; shell ls/cat/mkdir; interactive proof
+  over VBox scancodes; `nova test` 9/9 with host T9 (20k-path fuzz)
+- [ ] 7b: exec-by-name (`run`), FAT32 read, EXT4(read), NOVA-FS design
 
 ## Phase 8 — Drivers
 

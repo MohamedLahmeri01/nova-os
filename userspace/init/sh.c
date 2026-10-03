@@ -1,6 +1,7 @@
-/* NOVA OS shell (Phase 6).
+/* NOVA OS shell (Phase 6 init, Phase 7 files).
  * Line input with backspace over getchar; builtins: help, echo, mem,
- * ticks, clear, exit. mem/ticks read kernel state via syscalls.
+ * ticks, ls, cat, mkdir, clear, exit. mem/ticks read kernel state via
+ * syscalls; ls/cat/mkdir exercise the VFS (open/read/readdir/mkdir).
  * Single binary with init (no exec yet; exec arrives with the FS).
  */
 #include <stdint.h>
@@ -30,7 +31,7 @@ static void sh_putdec(uint32_t v) {
 }
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir clear exit");
 }
 
 static void sh_echo(const char *line) {
@@ -67,6 +68,75 @@ static void sh_clear(void) {
     }
 }
 
+static const char *sh_arg(const char *line) {
+    const char *p = line;
+    while (*p != 0 && *p != ' ') {
+        p++;
+    }
+    while (*p == ' ') {
+        p++;
+    }
+    return p;
+}
+
+static void sh_ls(const char *line) {
+    const char *path = sh_arg(line);
+    char name[32];
+    uint32_t i = 0;
+    if (*path == 0) {
+        path = "/";
+    }
+    for (;;) {
+        int32_t rc = nova_readdir(path, i, name);
+        if (rc == -2) { /* -ENOENT: end of listing */
+            break;
+        }
+        if (rc < 0) {
+            nova_puts("ls failed");
+            return;
+        }
+        nova_puts(name);
+        i++;
+        if (i > 64u) {
+            break;
+        }
+    }
+}
+
+static void sh_cat(const char *line) {
+    const char *path = sh_arg(line);
+    char buf[256];
+    int32_t fd;
+    if (*path == 0) {
+        nova_puts("usage: cat <path>");
+        return;
+    }
+    fd = nova_open(path, NOVA_O_RDONLY);
+    if (fd < 0) {
+        nova_puts("cat: no such file");
+        return;
+    }
+    for (;;) {
+        int32_t n = nova_read(fd, buf, sizeof(buf));
+        if (n <= 0) {
+            break;
+        }
+        nova_print(buf, (uint32_t)n);
+    }
+    nova_close(fd);
+}
+
+static void sh_mkdir(const char *line) {
+    const char *path = sh_arg(line);
+    if (*path == 0) {
+        nova_puts("usage: mkdir <path>");
+        return;
+    }
+    if (nova_mkdir(path) != 0) {
+        nova_puts("mkdir failed");
+    }
+}
+
 static void sh_run(const char *line) {
     if (line[0] == 0) {
         return;
@@ -78,6 +148,15 @@ static void sh_run(const char *line) {
         sh_mem();
     } else if (nova_strcmp(line, "ticks") == 0) {
         sh_ticks();
+    } else if (nova_strncmp(line, "ls", 2) == 0 &&
+               (line[2] == 0 || line[2] == ' ')) {
+        sh_ls(line);
+    } else if (nova_strncmp(line, "cat", 3) == 0 &&
+               (line[3] == 0 || line[3] == ' ')) {
+        sh_cat(line);
+    } else if (nova_strncmp(line, "mkdir", 5) == 0 &&
+               (line[5] == 0 || line[5] == ' ')) {
+        sh_mkdir(line);
     } else if (nova_strcmp(line, "clear") == 0) {
         sh_clear();
     } else if (nova_strcmp(line, "exit") == 0) {

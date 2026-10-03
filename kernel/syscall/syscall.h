@@ -20,13 +20,27 @@
 #define SYS_GETKEY 6u
 #define SYS_MEMINFO 7u
 #define SYS_TICKS 8u
-#define SYS_MAX 8u
+#define SYS_OPEN 9u
+#define SYS_READ 10u
+#define SYS_WRITE 11u
+#define SYS_CLOSE 12u
+#define SYS_READDIR 13u
+#define SYS_MKDIR 14u
+#define SYS_MAX 14u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0
+#define NOVA_ENOENT 2
+#define NOVA_EBADF 9
 #define NOVA_EAGAIN 11
 #define NOVA_EFAULT 14
+#define NOVA_EEXIST 17
+#define NOVA_ENOTDIR 20
+#define NOVA_EISDIR 21
 #define NOVA_EINVAL 22
+#define NOVA_EMFILE 24
+#define NOVA_ENOSPC 28
+#define NOVA_ENAMETOOLONG 36
 #define NOVA_ENOSYS 38
 
 #define SYSCALL_MAX_PRINT 1024u

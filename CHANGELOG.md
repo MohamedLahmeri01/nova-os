@@ -73,6 +73,12 @@ No releases yet.
   interactive proof over VBox scancodes with real PMM/tick values
   (ADR-0018). Fixed: blob-symbol underscore rule, validation walking
   the current CR3, user data segments in the entry trampoline.
+- Phase 7a VFS+RAMFS (tested 2026-10-03, `nova test` 9/9): ramfs at
+  `/` with seed content, syscalls 9-14 (open/read/write/close/
+  readdir/mkdir) on per-process fd tables, shell ls/cat/mkdir,
+  interactive proof over VBox scancodes, host T9 (20k-path fuzz)
+  (ADR-0019). Fixed: seed-length expectation, __chkstk_ms via small
+  kernel frames, scancode-letter discipline in proofs.
 - Architecture specification (`docs/ARCHITECTURE.md`)
 - ADRs 0001–0008 (kernel arch, language, memory, scheduler, IPC,
   filesystem, security, license evaluation)

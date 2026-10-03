@@ -22,6 +22,10 @@ struct process *process_create(void) {
     p->cr3 = 0;
     p->threads = 0;
     p->next = 0;
+    /* kmalloc does not zero: every fd starts free. */
+    for (uint32_t i = 0; i < NOVA_NFD; i++) {
+        p->fds[i] = 0;
+    }
     return p;
 }
 
