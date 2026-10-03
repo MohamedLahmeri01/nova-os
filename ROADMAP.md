@@ -110,6 +110,11 @@ E820 memory map → COM1 serial → halt, in `NOVA-OS-CONSTRAINED`
     write-through + disk CREAT, shell `put`, hermetic guest round
     trips + host full-byte checks, 10/10 (ADR-0022)
   - [ ] EXT4(read), NOVA-FS design
+  - [x] 7e-EXT DONE: ATA secondary channel, deterministic mkext4.py
+    image on IDE P1D0, read-only EXT4 (parsed SB, inodes, direct+
+    indirect, case-sensitive) grafted at /ext, shell reads it
+    unchanged, 11/11 with host T11 (ADR-0023)
+  - [ ] NOVA-FS design
 
 ## Phase 8 — Drivers
 

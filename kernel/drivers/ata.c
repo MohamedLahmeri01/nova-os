@@ -1,7 +1,7 @@
-/* NOVA OS ATA PIO driver (Phase 7c).
- * Primary channel (0x1F0), LBA28 READ SECTORS (0x20), one sector per
- * command (multi-sector PIO complicates the DRQ loop for no gain at
- * our sizes). Status polling with a bounded spin: BSY clear, then DRQ
+/* NOVA OS ATA PIO driver (Phase 7c, channels in 7e).
+ * LBA28 READ/WRITE SECTORS (0x20/0x30), one sector per command
+ * (multi-sector PIO complicates the DRQ loop for no gain at our
+ * sizes). Status polling with a bounded spin: BSY clear, then DRQ
  * set; ERR/DF fail fast. The 400ns select-settle uses alt-status
  * reads (side-effect free, unlike the command port).
  */
@@ -22,16 +22,10 @@
 #error "ata: no arch backend for this architecture"
 #endif
 
-#define ATA_P_DATA 0x1F0u
-#define ATA_P_ERR 0x1F1u
-#define ATA_P_COUNT 0x1F2u
-#define ATA_P_LBA0 0x1F3u
-#define ATA_P_LBA1 0x1F4u
-#define ATA_P_LBA2 0x1F5u
-#define ATA_P_DRIVE 0x1F6u
-#define ATA_P_CMD 0x1F7u
-#define ATA_P_STATUS 0x1F7u
-#define ATA_P_ALT 0x3F6u
+#define ATA_PRIM_BASE 0x1F0u
+#define ATA_PRIM_ALT 0x3F6u
+#define ATA_SEC_BASE 0x170u
+#define ATA_SEC_ALT 0x376u
 #define ATA_P_SDATA 0x0A1u
 
 #define ATA_SR_BSY 0x80u
@@ -51,20 +45,20 @@
 /* LBA28 covers 128GiB; our disks are MBs (reject the rest loudly). */
 #define ATA_LBA_MAX 0x0FFFFFFFu
 
-static int wait_clear_bsy(void) {
+static int wait_clear_bsy(uint16_t status) {
     uint32_t i = 0;
     while (i++ < ATA_SPIN_MAX) {
-        if ((arch_inb(ATA_P_STATUS) & ATA_SR_BSY) == 0) {
+        if ((arch_inb(status) & ATA_SR_BSY) == 0) {
             return NOVA_ESUCCESS;
         }
     }
     return -NOVA_EIO;
 }
 
-static int wait_drq(void) {
+static int wait_drq(uint16_t status) {
     uint32_t i = 0;
     for (;;) {
-        uint8_t st = arch_inb(ATA_P_STATUS);
+        uint8_t st = arch_inb(status);
         if ((st & ATA_SR_BSY) == 0) {
             if ((st & ATA_SR_ERR) != 0 || (st & ATA_SR_DF) != 0) {
                 return -NOVA_EIO;
@@ -79,6 +73,19 @@ static int wait_drq(void) {
     }
 }
 
+/* Channel ports from the drive number (0/1 primary, 2/3 secondary).
+ * Returns the slave bit; stores base/alt for the command. */
+static uint32_t chan_ports(uint32_t drive, uint16_t *base, uint16_t *alt) {
+    if (drive <= ATA_DRIVE_SLAVE) {
+        *base = ATA_PRIM_BASE;
+        *alt = ATA_PRIM_ALT;
+        return drive;
+    }
+    *base = ATA_SEC_BASE;
+    *alt = ATA_SEC_ALT;
+    return drive - 2u;
+}
+
 void ata_init(void) {
     uint8_t m = arch_inb(ATA_P_SDATA);
     /* IRQ14 = slave bit 6, IRQ15 = slave bit 7. Keep BIOS timer/
@@ -88,34 +95,38 @@ void ata_init(void) {
 }
 
 int ata_read_sector(uint32_t drive, uint32_t lba, uint8_t *dst) {
+    uint16_t base, alt, status;
+    uint32_t slave;
     int rc;
     if (dst == 0) {
         return -NOVA_EINVAL;
     }
-    if (drive > ATA_DRIVE_SLAVE || lba > ATA_LBA_MAX) {
+    if (drive > ATA_DRIVE_SEC_SLAVE || lba > ATA_LBA_MAX) {
         return -NOVA_EINVAL;
     }
+    slave = chan_ports(drive, &base, &alt);
+    status = (uint16_t)(base + 7u);
     __asm__ volatile("cli" ::: "memory");
-    rc = wait_clear_bsy();
+    rc = wait_clear_bsy(status);
     if (rc == 0) {
         /* Drive/head: 0xE0 LBA-mode base | slave bit | LBA top 4. */
-        arch_outb(ATA_P_DRIVE,
-                  (uint8_t)(0xE0u | (drive << 4) |
+        arch_outb((uint16_t)(base + 6u),
+                  (uint8_t)(0xE0u | (slave << 4) |
                             ((lba >> 24) & 0x0Fu)));
         /* 400ns settle (4 alt-status reads, no side effects). */
-        arch_inb(ATA_P_ALT);
-        arch_inb(ATA_P_ALT);
-        arch_inb(ATA_P_ALT);
-        arch_inb(ATA_P_ALT);
-        arch_outb(ATA_P_COUNT, 1);
-        arch_outb(ATA_P_LBA0, (uint8_t)(lba & 0xFFu));
-        arch_outb(ATA_P_LBA1, (uint8_t)((lba >> 8) & 0xFFu));
-        arch_outb(ATA_P_LBA2, (uint8_t)((lba >> 16) & 0xFFu));
-        arch_outb(ATA_P_CMD, ATA_CMD_READ);
-        rc = wait_drq();
+        arch_inb(alt);
+        arch_inb(alt);
+        arch_inb(alt);
+        arch_inb(alt);
+        arch_outb((uint16_t)(base + 2u), 1);
+        arch_outb((uint16_t)(base + 3u), (uint8_t)(lba & 0xFFu));
+        arch_outb((uint16_t)(base + 4u), (uint8_t)((lba >> 8) & 0xFFu));
+        arch_outb((uint16_t)(base + 5u), (uint8_t)((lba >> 16) & 0xFFu));
+        arch_outb((uint16_t)(base + 7u), ATA_CMD_READ);
+        rc = wait_drq((uint16_t)(base + 7u));
         if (rc == 0) {
             for (uint32_t i = 0; i < 256u; i++) {
-                uint16_t w = arch_inw(ATA_P_DATA);
+                uint16_t w = arch_inw(base);
                 dst[2u * i] = (uint8_t)(w & 0xFFu);
                 dst[2u * i + 1u] = (uint8_t)(w >> 8);
             }
@@ -126,38 +137,42 @@ int ata_read_sector(uint32_t drive, uint32_t lba, uint8_t *dst) {
 }
 
 int ata_write_sector(uint32_t drive, uint32_t lba, const uint8_t *src) {
+    uint16_t base, alt, status;
+    uint32_t slave;
     int rc;
     if (src == 0) {
         return -NOVA_EINVAL;
     }
-    if (drive > ATA_DRIVE_SLAVE || lba > ATA_LBA_MAX) {
+    if (drive > ATA_DRIVE_SEC_SLAVE || lba > ATA_LBA_MAX) {
         return -NOVA_EINVAL;
     }
+    slave = chan_ports(drive, &base, &alt);
+    status = (uint16_t)(base + 7u);
     __asm__ volatile("cli" ::: "memory");
-    rc = wait_clear_bsy();
+    rc = wait_clear_bsy(status);
     if (rc == 0) {
-        arch_outb(ATA_P_DRIVE,
-                  (uint8_t)(0xE0u | (drive << 4) |
+        arch_outb((uint16_t)(base + 6u),
+                  (uint8_t)(0xE0u | (slave << 4) |
                             ((lba >> 24) & 0x0Fu)));
-        arch_inb(ATA_P_ALT);
-        arch_inb(ATA_P_ALT);
-        arch_inb(ATA_P_ALT);
-        arch_inb(ATA_P_ALT);
-        arch_outb(ATA_P_COUNT, 1);
-        arch_outb(ATA_P_LBA0, (uint8_t)(lba & 0xFFu));
-        arch_outb(ATA_P_LBA1, (uint8_t)((lba >> 8) & 0xFFu));
-        arch_outb(ATA_P_LBA2, (uint8_t)((lba >> 16) & 0xFFu));
-        arch_outb(ATA_P_CMD, ATA_CMD_WRITE);
-        rc = wait_drq();
+        arch_inb(alt);
+        arch_inb(alt);
+        arch_inb(alt);
+        arch_inb(alt);
+        arch_outb((uint16_t)(base + 2u), 1);
+        arch_outb((uint16_t)(base + 3u), (uint8_t)(lba & 0xFFu));
+        arch_outb((uint16_t)(base + 4u), (uint8_t)((lba >> 8) & 0xFFu));
+        arch_outb((uint16_t)(base + 5u), (uint8_t)((lba >> 16) & 0xFFu));
+        arch_outb((uint16_t)(base + 7u), ATA_CMD_WRITE);
+        rc = wait_drq(status);
         if (rc == 0) {
             for (uint32_t i = 0; i < 256u; i++) {
                 uint16_t w = (uint16_t)src[2u * i] |
                              ((uint16_t)src[2u * i + 1u] << 8);
-                arch_outw(ATA_P_DATA, w);
+                arch_outw(base, w);
             }
             /* WRITE SECTORS signals completion via a second DRQ->idle
              * cycle; poll BSY clear (bounded) to confirm the write. */
-            rc = wait_clear_bsy();
+            rc = wait_clear_bsy(status);
         }
     }
     __asm__ volatile("sti" ::: "memory");

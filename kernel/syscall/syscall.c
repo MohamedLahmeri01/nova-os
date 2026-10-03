@@ -18,6 +18,7 @@
 #include "process/process.h"
 #include "fs/fs.h"
 #include "fs/fat32.h"
+#include "fs/ext4.h"
 #include "irq/irq.h"
 #include "input/kbd.h"
 #include "time/time.h"
@@ -195,6 +196,65 @@ static struct process *sysc_proc(void) {
     return cur->proc;
 }
 
+/* Attach a materialized whole-file node (detached, owned) as an fd.
+ * `store_path` enables write-through (FAT); NULL = read-only copy
+ * (EXT4). Frees node/data on failure. Returns fd or -errno. */
+static int32_t open_attach(struct process *p, struct fs_node *n,
+                           uint8_t *data, uint32_t size, uint32_t flags,
+                           const char *store_path) {
+    struct fs_file *f;
+    uint32_t pi = 0;
+    int rc;
+    n->size = size;
+    f = fs_file_alloc(n, flags);
+    if (f == 0) {
+        kfree(n);
+        if (data != 0) {
+            kfree(data);
+        }
+        return -NOVA_ENOSPC;
+    }
+    f->owns_node = 1;
+    for (uint32_t i = 0; i <= FS_MAX_PATH; i++) {
+        f->fat_path[i] = 0;
+    }
+    if (store_path != 0) {
+        while (pi <= FS_MAX_PATH) {
+            f->fat_path[pi] = store_path[pi];
+            if (store_path[pi] == 0) {
+                break;
+            }
+            pi++;
+        }
+        f->fat_path[FS_MAX_PATH] = 0;
+    }
+    rc = fs_fd_alloc(p, f);
+    if (rc < 0) {
+        fs_file_free(f);
+        return rc;
+    }
+    return rc;
+}
+
+/* Blank detached node for materialization (data buffer separate). */
+static struct fs_node *blank_node(uint8_t *data, uint32_t cap) {
+    struct fs_node *n = (struct fs_node *)kmalloc(sizeof(*n));
+    if (n == 0) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < FS_MAX_NAME; i++) {
+        n->name[i] = 0;
+    }
+    n->is_dir = 0;
+    n->parent = 0;
+    n->child = 0;
+    n->sibling = 0;
+    n->data = data;
+    n->size = 0;
+    n->cap = cap;
+    return n;
+}
+
 static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
     char kpath[FS_MAX_PATH + 1u];
     struct fs_node *n = 0;
@@ -221,7 +281,6 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
         uint8_t *data;
         uint32_t size = 0;
         uint32_t got = 0;
-        uint32_t pi = 0;
         int is_dir = 0;
         struct fs_node *n;
         rc = fat_stat(kpath, &size, &is_dir);
@@ -241,27 +300,17 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
         if (size > FS_MAX_FILE) {
             return -NOVA_ENOSPC;
         }
-        n = (struct fs_node *)kmalloc(sizeof(*n));
         data = (size != 0) ? (uint8_t *)kmalloc(size) : 0;
-        if (n == 0 || (size != 0 && data == 0)) {
-            if (n != 0) {
-                kfree(n);
-            }
+        if (size != 0 && data == 0) {
+            return -NOVA_ENOSPC;
+        }
+        n = blank_node(data, size);
+        if (n == 0) {
             if (data != 0) {
                 kfree(data);
             }
             return -NOVA_ENOSPC;
         }
-        for (uint32_t i = 0; i < FS_MAX_NAME; i++) {
-            n->name[i] = 0;
-        }
-        n->is_dir = 0;
-        n->parent = 0;
-        n->child = 0;
-        n->sibling = 0;
-        n->data = data;
-        n->size = 0;
-        n->cap = size;
         if (size == 0) {
             /* Empty file: no bytes to fetch (and no buffer). */
             got = 0;
@@ -276,31 +325,55 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
             }
             return (rc != 0) ? rc : -NOVA_EIO;
         }
-        n->size = size;
-        f = fs_file_alloc(n, flags);
-        if (f == 0) {
-            kfree(n);
+        return open_attach(p, n, data, size, flags, kpath);
+    }
+    /* /ext graft (Phase 7e): EXT4 is read-only; same materialize
+     * shape, no stored path (writes rejected by mode below... note
+     * fs_file_alloc succeeds for WRONLY: refuse non-RDONLY here). */
+    if (fs_is_ext_path(kpath)) {
+        uint8_t *data;
+        uint32_t size = 0;
+        uint32_t got = 0;
+        int is_dir = 0;
+        struct fs_node *n;
+        if ((flags & FS_O_ACCMODE) != FS_O_RDONLY) {
+            return -NOVA_EROFS;
+        }
+        rc = ext_stat(kpath, &size, &is_dir);
+        if (rc != 0) {
+            return rc;
+        }
+        if (is_dir) {
+            return -NOVA_EISDIR;
+        }
+        if (size > FS_MAX_FILE) {
+            return -NOVA_ENOSPC;
+        }
+        data = (size != 0) ? (uint8_t *)kmalloc(size) : 0;
+        if (size != 0 && data == 0) {
+            return -NOVA_ENOSPC;
+        }
+        n = blank_node(data, size);
+        if (n == 0) {
             if (data != 0) {
                 kfree(data);
             }
             return -NOVA_ENOSPC;
         }
-        f->owns_node = 1;
-        /* Write-through needs the FAT path (node copy is a cache). */
-        while (pi <= FS_MAX_PATH) {
-            f->fat_path[pi] = kpath[pi];
-            if (kpath[pi] == 0) {
-                break;
+        if (size == 0) {
+            got = 0;
+            rc = 0;
+        } else {
+            rc = ext_read_file(kpath, data, size, &got);
+        }
+        if (rc != 0 || got != size) {
+            kfree(n);
+            if (data != 0) {
+                kfree(data);
             }
-            pi++;
+            return (rc != 0) ? rc : -NOVA_EIO;
         }
-        f->fat_path[FS_MAX_PATH] = 0;
-        rc = fs_fd_alloc(p, f);
-        if (rc < 0) {
-            fs_file_free(f);
-            return rc;
-        }
-        return rc;
+        return open_attach(p, n, data, size, flags, 0);
     }
     rc = fs_lookup(kpath, &n);
     if (rc == -NOVA_ENOENT && (flags & FS_O_CREAT) != 0) {
@@ -396,8 +469,12 @@ static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
     }
     /* FAT write-through (Phase 7d): node copy is a cache; the disk is
      * truth. Grow the node buffer first (OOM fails before any disk
-     * mutation), then FAT, then refresh the cache copy. */
+     * mutation), then FAT, then refresh the cache copy. EXT4 files
+     * carry no stored path (read-only): refuse with EROFS. */
     if (f->owns_node) {
+        if (f->fat_path[0] == 0) {
+            return -NOVA_EROFS;
+        }
         while (total < len) {
             uint32_t want = len - total;
             uint32_t i;
@@ -487,11 +564,18 @@ static int32_t do_close(uint32_t fd, uint32_t b, uint32_t c) {
     return fs_fd_drop(p, fd);
 }
 
+/* Copy a NUL-terminated kernel name (+NUL) to the user buffer. */
+static int32_t copy_name_out(uint32_t namebuf, const char *kname, int r) {
+    for (int32_t i = 0; i <= r; i++) {
+        *(volatile char *)(namebuf + (uint32_t)i) = kname[i];
+    }
+    return r;
+}
+
 static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
     char kpath[FS_MAX_PATH + 1u];
     char name[FS_MAX_NAME];
     struct fs_node *dir = 0;
-    uint32_t i;
     int32_t plen;
     int rc;
     plen = copy_user_path(path, kpath);
@@ -501,17 +585,22 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
     if (validate_usermem(namebuf, FS_MAX_NAME, 1) != 0) {
         return -NOVA_EFAULT;
     }
-    /* /disk graft: FAT listing (rel "" = FAT root). */
+    /* /disk graft: FAT listing. /ext graft: EXT4 listing. */
     if (fs_is_disk_path(kpath)) {
         char kname[FS_MAX_NAME];
         int r = fat_list_dir(kpath, index, kname);
         if (r < 0) {
             return r;
         }
-        for (int32_t i = 0; i <= r; i++) {
-            *(volatile char *)(namebuf + (uint32_t)i) = kname[i];
+        return copy_name_out(namebuf, kname, r);
+    }
+    if (fs_is_ext_path(kpath)) {
+        char kname[FS_MAX_NAME];
+        int r = ext_list_dir(kpath, index, kname);
+        if (r < 0) {
+            return r;
         }
-        return r;
+        return copy_name_out(namebuf, kname, r);
     }
     rc = fs_lookup(kpath, &dir);
     if (rc != 0) {
@@ -521,10 +610,7 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
     if (rc < 0) {
         return rc;
     }
-    for (i = 0; i <= (uint32_t)rc; i++) {
-        *(volatile char *)(namebuf + i) = name[i];
-    }
-    return rc;
+    return copy_name_out(namebuf, name, rc);
 }
 
 static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
@@ -538,6 +624,9 @@ static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
     }
     if (fs_is_disk_path(kpath)) {
         return fat_mkdir(kpath);
+    }
+    if (fs_is_ext_path(kpath)) {
+        return -NOVA_EROFS;
     }
     return fs_mkdir(kpath);
 }

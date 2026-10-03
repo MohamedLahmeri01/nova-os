@@ -266,6 +266,7 @@ def build_phase1(fault=False):
                                   ("kernel/fs/ramfs.c", "ramfs.o", []),
                                   ("kernel/fs/file.c", "file.o", []),
                                   ("kernel/fs/fat32.c", "fat32.o", []),
+                                  ("kernel/fs/ext4.c", "ext4.o", []),
                                   (PMM_BACKEND_C, PMM_BACKEND_O, [])]:
         s = os.path.join(ROOT, src)
         if not os.path.isfile(s):
@@ -292,7 +293,7 @@ def build_phase1(fault=False):
               "validate.o", "ctx.o", "user_asm.o", "user.o", "gdt.o",
               "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
               "kbd.o", "init_blob.o", "hi_blob.o", "ramfs.o", "file.o",
-              "fat32.o", "ata.o", PMM_BACKEND_O],
+              "fat32.o", "ext4.o", "ata.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -509,6 +510,32 @@ def cmd_test():
                 print("[pass] T10 host fat test"); passed += 1
             else:
                 print("[fail] T10 host fat test"); failed += 1
+    # T11: host EXT4 test (ext4.c vs the generated mkext4 image)
+    print("[info] T11 compiling + running host ext test...")
+    ext_raw = os.path.join(BUILD, "ext4.raw")
+    r = run([sys.executable, os.path.join(ROOT, "tools", "mkext4.py"),
+             ext_raw], timeout=60)
+    if r.returncode != 0:
+        print(f"[fail] T11 mkext4:\n{(r.stderr or '')[:800]}")
+        failed += 1
+    else:
+        ext_exe = os.path.join(BUILD, "test_ext4.exe")
+        cmd = ["gcc", "-O2", "-Wall", "-Wextra",
+               "-I", os.path.join(ROOT, "kernel"),
+               os.path.join(ROOT, "tests", "unit", "test_ext4.c"),
+               os.path.join(ROOT, "kernel", "fs", "ext4.c"),
+               "-o", ext_exe]
+        r = run(cmd, timeout=120)
+        if r.returncode != 0:
+            print(f"[fail] T11 ext test compile:\n{(r.stderr or '')[:1500]}")
+            failed += 1
+        else:
+            r = run([ext_exe, ext_raw], timeout=120)
+            print((r.stdout or "") + (r.stderr or ""))
+            if r.returncode == 0:
+                print("[pass] T11 host ext test"); passed += 1
+            else:
+                print("[fail] T11 host ext test"); failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 
@@ -559,6 +586,11 @@ def _assemble_and_attach(kernel_bin_name, raw_path, vdi_path):
     rc, msg = _attach_fat_disk()
     if rc != 0:
         return 1, msg
+    # EXT4 disk (Phase 7e): deterministic image on P1D0 (secondary
+    # master). Same regenerate + re-attach discipline as FAT.
+    rc, msg = _attach_ext_disk()
+    if rc != 0:
+        return 1, msg
     r = vbox("modifyvm", TEST_VM, "--uart1", "0x3F8", "4",
              "--uartmode1", "file", SERIAL_LOG)
     if r.returncode != 0:
@@ -597,6 +629,39 @@ def _attach_fat_disk():
     if r.returncode != 0:
         return 1, f"fat storageattach: {(r.stderr or '')[:500]}"
     return 0, f"{fat_raw} -> {fat_vdi} attached (IDE P0D1)"
+
+
+def _attach_ext_disk():
+    """Generate the EXT4 data image and attach it at IDE P1D0.
+
+    Returns (rc, msg). Deterministic (tools/mkext4.py); padded to 1MB
+    for VDI conversion."""
+    ext_raw = os.path.join(BUILD, "ext4.raw")
+    ext_vdi = os.path.join(IMAGES, "ext4.vdi")
+    r = run([sys.executable, os.path.join(ROOT, "tools", "mkext4.py"),
+             ext_raw], timeout=60)
+    if r.returncode != 0:
+        return 1, f"mkext4: {(r.stderr or '')[:500]}"
+    with open(ext_raw, "rb") as f:
+        raw = f.read()
+    if len(raw) < 1024 * 1024:
+        raw += b"\x00" * (1024 * 1024 - len(raw))
+    with open(ext_raw, "wb") as f:
+        f.write(raw)
+    vbox("storageattach", TEST_VM, "--storagectl", "IDE",
+         "--port", "1", "--device", "0", "--medium", "none")
+    vbox("closemedium", "disk", ext_vdi, "--delete")
+    if os.path.exists(ext_vdi):
+        os.remove(ext_vdi)
+    r = vbox("convertfromraw", ext_raw, ext_vdi, "--format", "VDI")
+    if r.returncode != 0:
+        return 1, f"ext convertfromraw: {(r.stderr or '')[:800]}"
+    r = vbox("storageattach", TEST_VM, "--storagectl", "IDE",
+             "--port", "1", "--device", "0", "--type", "hdd",
+             "--medium", ext_vdi)
+    if r.returncode != 0:
+        return 1, f"ext storageattach: {(r.stderr or '')[:500]}"
+    return 0, f"{ext_raw} -> {ext_vdi} attached (IDE P1D0)"
 
 
 def _boot_expect(markers, shot_name, timeout_s=30):
@@ -647,7 +712,7 @@ def cmd_run_vbox():
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
                                        b"HEAP-OK", b"ATA-OK", b"FS-OK",
-                                       b"FAT-OK", b"IDT-OK",
+                                       b"FAT-OK", b"EXT-OK", b"IDT-OK",
                                        b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
@@ -702,7 +767,8 @@ def cmd_image():
 
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
-                 b"HEAP-OK", b"ATA-OK", b"FS-OK", b"FAT-OK", b"IDT-OK",
+                 b"HEAP-OK", b"ATA-OK", b"FS-OK", b"FAT-OK", b"EXT-OK",
+                 b"IDT-OK",
                  b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]

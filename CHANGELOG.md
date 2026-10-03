@@ -96,6 +96,12 @@ No releases yet.
   `put`/`cat` proof, hermetic guest + host byte-exact tests
   (ADR-0022). Fixed: empty-file materialize, fresh-VDI write stalls,
   ENOTDIR propagation, alloc-rollback counting.
+- Phase 7e EXT4 read (tested 2026-10-03, `nova test` 11/11): ATA
+  secondary channel, deterministic EXT4 data disk on IDE P1D0,
+  read-only EXT4 grafted at /ext, shell `ls /ext` +
+  `cat /ext/HELLO.TXT` proofs (lowercase correctly ENOENT),
+  host T11 (20k-name fuzz) (ADR-0023). Fixed: leading-slash skip in
+  split_parent, 15-vs-16 byte count, Shift scancodes for uppercase.
 - Architecture specification (`docs/ARCHITECTURE.md`)
 - ADRs 0001–0008 (kernel arch, language, memory, scheduler, IPC,
   filesystem, security, license evaluation)

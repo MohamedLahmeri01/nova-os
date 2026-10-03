@@ -62,6 +62,16 @@ const char *fs_disk_rel(const char *kpath) {
     return r;
 }
 
+int fs_is_ext_path(const char *kpath) {
+    if (kpath == 0 || kpath[0] != '/') {
+        return 0;
+    }
+    if (kpath[1] != 'e' || kpath[2] != 'x' || kpath[3] != 't') {
+        return 0;
+    }
+    return kpath[4] == 0 || kpath[4] == '/';
+}
+
 int fs_fd_alloc(struct process *p, struct fs_file *f) {
     uint32_t i;
     if (p == 0 || f == 0) {

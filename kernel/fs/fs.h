@@ -51,6 +51,8 @@ struct fs_file {
  * FAT driver. "/disk" itself, "/disk/" prefix match; everything else
  * is ramfs. Returns nonzero when FAT owns the path. */
 int fs_is_disk_path(const char *kpath);
+/* /ext graft (Phase 7e): same rule for the EXT4 driver. */
+int fs_is_ext_path(const char *kpath);
 /* Strip "/disk" -> FAT-relative path ("" means the FAT root). */
 const char *fs_disk_rel(const char *kpath);
 

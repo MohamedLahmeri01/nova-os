@@ -19,6 +19,7 @@
 #include "syscall/syscall.h"
 #include "fs/fs.h"
 #include "fs/fat32.h"
+#include "fs/ext4.h"
 #include "drivers/ata.h"
 #include "thread/thread.h"
 #include "process/process.h"
@@ -100,6 +101,9 @@ static void seed_binaries(void) {
     if (fs_mkdir("/disk") != 0) {
         nova_panic("disk-mkdir-fail");
     }
+    if (fs_mkdir("/ext") != 0) {
+        nova_panic("ext-mkdir-fail");
+    }
     if (fs_create("/bin/hi", &n) != 0 || n == 0) {
         nova_panic("bin-create-fail");
     }
@@ -119,6 +123,12 @@ static int ata_slave_read(uint32_t lba, uint8_t *dst) {
  * layer invalidates its sector cache on every write. */
 static int ata_slave_write(uint32_t lba, const uint8_t *src) {
     return ata_write_sector(ATA_DRIVE_SLAVE, lba, src);
+}
+
+/* EXT4 sector source (Phase 7e): secondary master (P1D0).
+ * Read-only; no sink (writes are EROFS at the syscall layer). */
+static int ata_ext_read(uint32_t lba, uint8_t *dst) {
+    return ata_read_sector(ATA_DRIVE_SEC_MASTER, lba, dst);
 }
 
 /* Spawn a program stored in the filesystem (Phase 7b exec). Path
@@ -226,6 +236,12 @@ void nova_pm_main(const nova_boot_info_t *info) {
     }
     if (fat_selftest() != 0) {
         nova_panic("fat-selftest-fail");
+    }
+    if (ext_init(ata_ext_read) != 0) {
+        nova_panic("ext-init-fail");
+    }
+    if (ext_selftest() != 0) {
+        nova_panic("ext-selftest-fail");
     }
     {
         int sched_rc = sched_selftest();
