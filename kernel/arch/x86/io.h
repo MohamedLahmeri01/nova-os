@@ -18,4 +18,10 @@ static inline uint8_t arch_inb(uint16_t port) {
     return r;
 }
 
+static inline uint16_t arch_inw(uint16_t port) {
+    uint16_t r;
+    __asm__ volatile("inw %1, %0" : "=a"(r) : "Nd"(port));
+    return r;
+}
+
 #endif /* NOVA_ARCH_X86_IO_H */

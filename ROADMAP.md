@@ -100,6 +100,11 @@ E820 memory map → COM1 serial → halt, in `NOVA-OS-CONSTRAINED`
     boot `HI-OK` proof + interactive `child pid=N` proof, 9/9
     (ADR-0020)
   - [ ] FAT32 read, EXT4(read), NOVA-FS design
+  - [x] 7c-FAT DONE: ATA PIO driver (LBA28 polling, IRQ14/15 masked),
+    deterministic mkfat.py image on IDE P0D1, read-only FAT32 (parsed
+    BPB, chains, 8.3, sector cache) grafted at /disk, shell reads it
+    unchanged, 10/10 with host T9+T10 (ADR-0021)
+  - [ ] FAT32 write, EXT4(read), NOVA-FS design
 
 ## Phase 8 — Drivers
 

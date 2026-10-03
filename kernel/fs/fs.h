@@ -40,7 +40,17 @@ struct fs_file {
     uint32_t off;
     int readable;
     int writable;
+    /* Detached (FAT-materialized) nodes are owned by the description:
+     * close frees node data + node, not just the descriptor. */
+    int owns_node;
 };
+
+/* /disk graft (Phase 7c): exact "disk" first component routes to the
+ * FAT driver. "/disk" itself, "/disk/" prefix match; everything else
+ * is ramfs. Returns nonzero when FAT owns the path. */
+int fs_is_disk_path(const char *kpath);
+/* Strip "/disk" -> FAT-relative path ("" means the FAT root). */
+const char *fs_disk_rel(const char *kpath);
 
 /* Build the tree + seed content. Nonzero on OOM (fatal: panic). */
 int fs_init(void);

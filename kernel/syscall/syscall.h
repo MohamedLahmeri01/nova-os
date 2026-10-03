@@ -32,6 +32,7 @@
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0
 #define NOVA_ENOENT 2
+#define NOVA_EIO 5
 #define NOVA_EBADF 9
 #define NOVA_EAGAIN 11
 #define NOVA_EFAULT 14
@@ -41,6 +42,7 @@
 #define NOVA_EINVAL 22
 #define NOVA_EMFILE 24
 #define NOVA_ENOSPC 28
+#define NOVA_EROFS 30
 #define NOVA_ENAMETOOLONG 36
 #define NOVA_ENOSYS 38
 

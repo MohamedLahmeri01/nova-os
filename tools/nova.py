@@ -262,8 +262,10 @@ def build_phase1(fault=False):
                                  ("kernel/sched/sched.c", "sched.o", []),
                                   ("kernel/process/process.c", "process.o", []),
                                   ("kernel/input/kbd.c", "kbd.o", []),
+                                  ("kernel/drivers/ata.c", "ata.o", []),
                                   ("kernel/fs/ramfs.c", "ramfs.o", []),
                                   ("kernel/fs/file.c", "file.o", []),
+                                  ("kernel/fs/fat32.c", "fat32.o", []),
                                   (PMM_BACKEND_C, PMM_BACKEND_O, [])]:
         s = os.path.join(ROOT, src)
         if not os.path.isfile(s):
@@ -290,7 +292,7 @@ def build_phase1(fault=False):
               "validate.o", "ctx.o", "user_asm.o", "user.o", "gdt.o",
               "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
               "kbd.o", "init_blob.o", "hi_blob.o", "ramfs.o", "file.o",
-              PMM_BACKEND_O],
+              "fat32.o", "ata.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -481,6 +483,32 @@ def cmd_test():
             print("[pass] T9 host fs test"); passed += 1
         else:
             print("[fail] T9 host fs test"); failed += 1
+    # T10: host FAT32 test (fat32.c vs the generated mkfat image)
+    print("[info] T10 compiling + running host fat test...")
+    fat_raw = os.path.join(BUILD, "fat32.raw")
+    r = run([sys.executable, os.path.join(ROOT, "tools", "mkfat.py"),
+             fat_raw], timeout=60)
+    if r.returncode != 0:
+        print(f"[fail] T10 mkfat:\n{(r.stderr or '')[:800]}")
+        failed += 1
+    else:
+        fat_exe = os.path.join(BUILD, "test_fat.exe")
+        cmd = ["gcc", "-O2", "-Wall", "-Wextra",
+               "-I", os.path.join(ROOT, "kernel"),
+               os.path.join(ROOT, "tests", "unit", "test_fat.c"),
+               os.path.join(ROOT, "kernel", "fs", "fat32.c"),
+               "-o", fat_exe]
+        r = run(cmd, timeout=120)
+        if r.returncode != 0:
+            print(f"[fail] T10 fat test compile:\n{(r.stderr or '')[:1500]}")
+            failed += 1
+        else:
+            r = run([fat_exe, fat_raw], timeout=120)
+            print((r.stdout or "") + (r.stderr or ""))
+            if r.returncode == 0:
+                print("[pass] T10 host fat test"); passed += 1
+            else:
+                print("[fail] T10 host fat test"); failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 
@@ -525,11 +553,50 @@ def _assemble_and_attach(kernel_bin_name, raw_path, vdi_path):
              "--medium", vdi_path)
     if r.returncode != 0:
         return 1, f"storageattach: {(r.stderr or '')[:500]}"
+    # Data disk (Phase 7c): deterministic FAT32 image on P0D1 (slave).
+    # Regenerated every build (cheap, byte-identical); the controller
+    # recreation above drops all attachments, so re-attach here.
+    rc, msg = _attach_fat_disk()
+    if rc != 0:
+        return 1, msg
     r = vbox("modifyvm", TEST_VM, "--uart1", "0x3F8", "4",
              "--uartmode1", "file", SERIAL_LOG)
     if r.returncode != 0:
         return 1, f"uart config: {(r.stderr or '')[:500]}"
     return 0, f"{raw_path} ({os.path.getsize(raw_path)}B) -> {vdi_path}"
+
+
+def _attach_fat_disk():
+    """Generate the FAT32 data image and attach it at IDE P0D1.
+
+    Returns (rc, msg). Deterministic (tools/mkfat.py); padded to 1MB
+    for VDI conversion (zeros past the BPB volume size)."""
+    fat_raw = os.path.join(BUILD, "fat32.raw")
+    fat_vdi = os.path.join(IMAGES, "fat32.vdi")
+    r = run([sys.executable, os.path.join(ROOT, "tools", "mkfat.py"),
+             fat_raw], timeout=60)
+    if r.returncode != 0:
+        return 1, f"mkfat: {(r.stderr or '')[:500]}"
+    with open(fat_raw, "rb") as f:
+        raw = f.read()
+    if len(raw) < 1024 * 1024:
+        raw += b"\x00" * (1024 * 1024 - len(raw))
+    with open(fat_raw, "wb") as f:
+        f.write(raw)
+    vbox("storageattach", TEST_VM, "--storagectl", "IDE",
+         "--port", "0", "--device", "1", "--medium", "none")
+    vbox("closemedium", "disk", fat_vdi, "--delete")
+    if os.path.exists(fat_vdi):
+        os.remove(fat_vdi)
+    r = vbox("convertfromraw", fat_raw, fat_vdi, "--format", "VDI")
+    if r.returncode != 0:
+        return 1, f"fat convertfromraw: {(r.stderr or '')[:800]}"
+    r = vbox("storageattach", TEST_VM, "--storagectl", "IDE",
+             "--port", "0", "--device", "1", "--type", "hdd",
+             "--medium", fat_vdi)
+    if r.returncode != 0:
+        return 1, f"fat storageattach: {(r.stderr or '')[:500]}"
+    return 0, f"{fat_raw} -> {fat_vdi} attached (IDE P0D1)"
 
 
 def _boot_expect(markers, shot_name, timeout_s=30):
@@ -579,7 +646,8 @@ def cmd_run_vbox():
         print("[blocked] No image attached. Run `python tools/nova.py image` first.")
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
-                                       b"HEAP-OK", b"FS-OK", b"IDT-OK",
+                                       b"HEAP-OK", b"ATA-OK", b"FS-OK",
+                                       b"FAT-OK", b"IDT-OK",
                                        b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
@@ -634,7 +702,8 @@ def cmd_image():
 
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
-                 b"HEAP-OK", b"FS-OK", b"IDT-OK", b"TIMER-OK", b"SCHED-OK",
+                 b"HEAP-OK", b"ATA-OK", b"FS-OK", b"FAT-OK", b"IDT-OK",
+                 b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]
 # NOTE: no HI-OK here: the fault image panics synchronously after

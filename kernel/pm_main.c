@@ -18,6 +18,8 @@
 #include "sched/sched.h"
 #include "syscall/syscall.h"
 #include "fs/fs.h"
+#include "fs/fat32.h"
+#include "drivers/ata.h"
 #include "thread/thread.h"
 #include "process/process.h"
 #include "user.h"
@@ -85,14 +87,18 @@ static void spawn_init(void) {
 }
 
 /* Seed builtin user binaries into ramfs (Phase 7b): the hi blob
- * becomes /bin/hi (exec proof + shell `run` target). Runs after
- * fs_init, before fs_selftest (which asserts the seed). */
+ * becomes /bin/hi (exec proof + shell `run` target). /disk is a
+ * placeholder dir: paths under it route to the FAT driver (7c).
+ * Runs after fs_init, before fs_selftest (which asserts the seed). */
 static void seed_binaries(void) {
     struct fs_node *n = 0;
     uint32_t size = (uint32_t)(binary_hi_bin_end - binary_hi_bin_start);
     uint32_t got = 0;
     if (fs_mkdir("/bin") != 0) {
         nova_panic("bin-mkdir-fail");
+    }
+    if (fs_mkdir("/disk") != 0) {
+        nova_panic("disk-mkdir-fail");
     }
     if (fs_create("/bin/hi", &n) != 0 || n == 0) {
         nova_panic("bin-create-fail");
@@ -101,6 +107,12 @@ static void seed_binaries(void) {
         got != size) {
         nova_panic("bin-seed-fail");
     }
+}
+
+/* FAT sector source (Phase 7c): the data disk is the ATA primary
+ * slave (P0D1). Read-only; errors surface as -EIO in fat_* calls. */
+static int ata_slave_read(uint32_t lba, uint8_t *dst) {
+    return ata_read_sector(ATA_DRIVE_SLAVE, lba, dst);
 }
 
 /* Spawn a program stored in the filesystem (Phase 7b exec). Path
@@ -185,6 +197,17 @@ void nova_pm_main(const nova_boot_info_t *info) {
         nova_panic("heap-selftest-fail");
     }
     serial_puts("HEAP-OK\n");
+    /* IDT first (Phase 7c lesson): slow polling (ATA PIO) crosses the
+     * first BIOS timer tick (~55ms); without a valid IDT that IRQ
+     * vectors through the IVT-as-IDT garbage and triple-faults. With
+     * irq_init loaded, ticks vector to real handlers (sched gated). */
+    irq_init();
+    timer_init();
+    syscall_init();
+    ata_init();
+    if (ata_selftest() != 0) {
+        nova_panic("ata-selftest-fail");
+    }
     if (fs_init() != 0) {
         nova_panic("fs-init-fail");
     }
@@ -192,9 +215,12 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (fs_selftest() != 0) {
         nova_panic("fs-selftest-fail");
     }
-    irq_init();
-    timer_init();
-    syscall_init();
+    if (fat_init(ata_slave_read) != 0) {
+        nova_panic("fat-init-fail");
+    }
+    if (fat_selftest() != 0) {
+        nova_panic("fat-selftest-fail");
+    }
     {
         int sched_rc = sched_selftest();
         if (sched_rc != 0) {

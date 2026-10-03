@@ -12,10 +12,12 @@
 #include "syscall/syscall.h"
 #include "syscall/validate.h"
 #include "mm/pmm.h"
+#include "mm/heap.h"
 #include "thread/thread.h"
 #include "sched/sched.h"
 #include "process/process.h"
 #include "fs/fs.h"
+#include "fs/fat32.h"
 #include "irq/irq.h"
 #include "input/kbd.h"
 #include "time/time.h"
@@ -212,6 +214,74 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
     if (p == 0) {
         return -NOVA_EINVAL;
     }
+    /* /disk graft (Phase 7c): FAT is read-only; materialize the whole
+     * file into a detached node owned by the description. */
+    if (fs_is_disk_path(kpath)) {
+        uint8_t *data;
+        uint32_t size = 0;
+        uint32_t got = 0;
+        int is_dir = 0;
+        struct fs_node *n;
+        if ((flags & FS_O_ACCMODE) != FS_O_RDONLY ||
+            (flags & FS_O_CREAT) != 0) {
+            return -NOVA_EROFS;
+        }
+        rc = fat_stat(fs_disk_rel(kpath), &size, &is_dir);
+        if (rc != 0) {
+            return rc;
+        }
+        if (is_dir) {
+            return -NOVA_EISDIR;
+        }
+        if (size > FS_MAX_FILE) {
+            return -NOVA_ENOSPC;
+        }
+        n = (struct fs_node *)kmalloc(sizeof(*n));
+        data = (size != 0) ? (uint8_t *)kmalloc(size) : 0;
+        if (n == 0 || (size != 0 && data == 0)) {
+            if (n != 0) {
+                kfree(n);
+            }
+            if (data != 0) {
+                kfree(data);
+            }
+            return -NOVA_ENOSPC;
+        }
+        for (uint32_t i = 0; i < FS_MAX_NAME; i++) {
+            n->name[i] = 0;
+        }
+        n->is_dir = 0;
+        n->parent = 0;
+        n->child = 0;
+        n->sibling = 0;
+        n->data = data;
+        n->size = 0;
+        n->cap = size;
+        rc = fat_read_file(fs_disk_rel(kpath), data, size, &got);
+        if (rc != 0 || got != size) {
+            kfree(n);
+            if (data != 0) {
+                kfree(data);
+            }
+            return (rc != 0) ? rc : -NOVA_EIO;
+        }
+        n->size = size;
+        f = fs_file_alloc(n, flags);
+        if (f == 0) {
+            kfree(n);
+            if (data != 0) {
+                kfree(data);
+            }
+            return -NOVA_ENOSPC;
+        }
+        f->owns_node = 1;
+        rc = fs_fd_alloc(p, f);
+        if (rc < 0) {
+            fs_file_free(f);
+            return rc;
+        }
+        return rc;
+    }
     rc = fs_lookup(kpath, &n);
     if (rc == -NOVA_ENOENT && (flags & FS_O_CREAT) != 0) {
         rc = fs_create(kpath, &n);
@@ -353,6 +423,18 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
     if (validate_usermem(namebuf, FS_MAX_NAME, 1) != 0) {
         return -NOVA_EFAULT;
     }
+    /* /disk graft: FAT listing (rel "" = FAT root). */
+    if (fs_is_disk_path(kpath)) {
+        char kname[FS_MAX_NAME];
+        int r = fat_list_dir(fs_disk_rel(kpath), index, kname);
+        if (r < 0) {
+            return r;
+        }
+        for (int32_t i = 0; i <= r; i++) {
+            *(volatile char *)(namebuf + (uint32_t)i) = kname[i];
+        }
+        return r;
+    }
     rc = fs_lookup(kpath, &dir);
     if (rc != 0) {
         return rc;
@@ -375,6 +457,9 @@ static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
     plen = copy_user_path(path, kpath);
     if (plen < 0) {
         return plen;
+    }
+    if (fs_is_disk_path(kpath)) {
+        return -NOVA_EROFS;
     }
     return fs_mkdir(kpath);
 }

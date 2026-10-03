@@ -84,6 +84,12 @@ No releases yet.
   seeded at boot, `SYS_EXEC` + shell `run`, boot `HI-OK pid=5` and
   interactive `child pid=6` proofs (ADR-0020). Fixed: HI-OK excluded
   from fault-image gates, shell handler naming.
+- Phase 7c ATA+FAT32 (tested 2026-10-03, `nova test` 10/10): ATA PIO
+  driver with LBA0 selftest, deterministic FAT32 data disk on IDE
+  P0D1, read-only FAT32 grafted at /disk, shell `ls /disk` +
+  `cat /disk/hello.txt` proofs, host T10 (20k-path fuzz) (ADR-0021).
+  Fixed: IDT loaded before slow polling (timer-tick triple fault),
+  fast bounded ATA spins, ENOTDIR propagation, BPB offset 32.
 - Architecture specification (`docs/ARCHITECTURE.md`)
 - ADRs 0001–0008 (kernel arch, language, memory, scheduler, IPC,
   filesystem, security, license evaluation)

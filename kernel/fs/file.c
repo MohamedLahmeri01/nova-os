@@ -27,13 +27,39 @@ struct fs_file *fs_file_alloc(struct fs_node *n, uint32_t flags) {
     f->off = 0;
     f->readable = (mode == FS_O_RDONLY || mode == FS_O_RDWR);
     f->writable = (mode == FS_O_WRONLY || mode == FS_O_RDWR);
+    f->owns_node = 0;
     return f;
 }
 
 void fs_file_free(struct fs_file *f) {
     if (f != 0) {
+        if (f->owns_node && f->node != 0) {
+            if (f->node->data != 0) {
+                kfree(f->node->data);
+            }
+            kfree(f->node);
+        }
         kfree(f);
     }
+}
+
+int fs_is_disk_path(const char *kpath) {
+    if (kpath == 0 || kpath[0] != '/') {
+        return 0;
+    }
+    if (kpath[1] != 'd' || kpath[2] != 'i' || kpath[3] != 's' ||
+        kpath[4] != 'k') {
+        return 0;
+    }
+    return kpath[5] == 0 || kpath[5] == '/';
+}
+
+const char *fs_disk_rel(const char *kpath) {
+    const char *r = kpath + 5;
+    while (*r == '/') {
+        r++;
+    }
+    return r;
 }
 
 int fs_fd_alloc(struct process *p, struct fs_file *f) {
