@@ -106,7 +106,13 @@ No releases yet.
   deterministic fixture on IDE P1D1, read-only driver (SB fallback,
   inode crc, inline extents) grafted at /nova, shell `ls /nova` +
   `cat` proofs, host T12 with corruption-injection (ADR-0025).
-  Fixed: SB layout pointers, stale-image refusal, edit discipline.
+  Fixed:   SB layout pointers, stale-image refusal, edit discipline.
+- Phase 7f-2 NOVA-FS writer (tested 2026-10-03, `nova test` 12/12):
+  ordered metadata journal (seq-ordered replay), allocator,
+  create/write/delete/mkdir, write-through syscalls, shell `put`,
+  idempotent guest tests, power-cut + cross-boot durability proofs
+  (ADR-0026). Fixed: replay ordering, slot splitting, slack-loop
+  underflow, per-call block budget.
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the

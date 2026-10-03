@@ -135,10 +135,15 @@ static int ata_ext_read(uint32_t lba, uint8_t *dst) {
     return ata_read_sector(ATA_DRIVE_SEC_MASTER, lba, dst);
 }
 
-/* NOVA-FS sector source (Phase 7f-1): secondary slave (P1D1).
- * Read-only in this stage (writer arrives in 7f-2). */
+/* NOVA-FS sector source (Phase 7f-1): secondary slave (P1D1). */
 static int ata_nova_read(uint32_t lba, uint8_t *dst) {
     return ata_read_sector(ATA_DRIVE_SEC_SLAVE, lba, dst);
+}
+
+/* NOVA-FS sector sink (Phase 7f-2, same disk). Write-through; the
+ * driver invalidates nothing cached (no read cache in nova.c). */
+static int ata_nova_write(uint32_t lba, const uint8_t *src) {
+    return ata_write_sector(ATA_DRIVE_SEC_SLAVE, lba, src);
 }
 
 /* Spawn a program stored in the filesystem (Phase 7b exec). Path
@@ -253,7 +258,7 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (ext_selftest() != 0) {
         nova_panic("ext-selftest-fail");
     }
-    if (nova_init(ata_nova_read) != 0) {
+    if (nova_init(ata_nova_read, ata_nova_write) != 0) {
         nova_panic("nova-init-fail");
     }
     if (nova_selftest() != 0) {

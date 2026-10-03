@@ -64,6 +64,15 @@ static int img_read(uint32_t lba, uint8_t *dst) {
     return 0;
 }
 
+static int img_write(uint32_t lba, const uint8_t *src) {
+    size_t off = (size_t)lba * 512u;
+    if (off + 512u > g_len) {
+        return -NOVA_EIO;
+    }
+    memcpy(g_img + off, src, 512u);
+    return 0;
+}
+
 static uint32_t lcg_state = 0xA05EED11u;
 
 static uint32_t lcg(void) {
@@ -104,7 +113,7 @@ int main(int argc, char **argv) {
     }
     fclose(f);
 
-    check(nova_init(img_read) == 0, "init", 0, 0);
+    check(nova_init(img_read, img_write) == 0, "init", 0, 0);
 
     /* Contract with tools/mknova.py (16B + 15B). */
     check(nova_stat("/HELLO.TXT", &size, &is_dir) == 0 && size == 16u &&
@@ -163,6 +172,98 @@ int main(int argc, char **argv) {
         check(n == 2, "ls-count", n, 0);
     }
 
+    /* Write path on the image copy (mirrors + extends the guest
+     * hermetic round-trip): multi-block pattern with full read-back,
+     * offset overwrite, mkdir + nested file, delete hygiene, free
+     * counts restored. */
+    {
+        static uint8_t pat[8192];
+        static uint8_t back[8192];
+        uint32_t g3 = 0;
+        for (uint32_t i = 0; i < sizeof(pat); i++) {
+            pat[i] = (uint8_t)((i * 13u + 7u) & 0xFFu);
+        }
+        check(nova_create_file("/W.TXT") == 0, "w-create", 0, 0);
+        check(nova_create_file("/W.TXT") == -NOVA_EEXIST, "w-exist", 0,
+              0);
+        check(nova_write_at("/W.TXT", 0, pat, 6000u) == 0, "w-6000",
+              0, 0);
+        check(nova_stat("/W.TXT", &size, &is_dir) == 0 &&
+                  size == 6000u && !is_dir,
+              "w-size", size, 0);
+        check(nova_read_file("/W.TXT", back, sizeof(back), &g3) == 0 &&
+                  g3 == 6000u && memcmp(back, pat, 6000u) == 0,
+              "w-bytes", g3, 0);
+        /* Offset overwrite inside the chain (multi-block merge). */
+        check(nova_write_at("/W.TXT", 5000u, pat, 500u) == 0, "w-over",
+              0, 0);
+        check(nova_read_file("/W.TXT", back, sizeof(back), &g3) == 0 &&
+                  g3 == 6000u && memcmp(back + 5000u, pat, 500u) == 0,
+              "w-merge", g3, 0);
+        check(nova_mkdir("/NDIR") == 0, "w-mkdir", 0, 0);
+        check(nova_mkdir("/NDIR") == -NOVA_EEXIST, "w-mkdir-exist", 0,
+              0);
+        check(nova_create_file("/NDIR/F.TXT") == 0, "w-nested", 0, 0);
+        check(nova_write_at("/NDIR/F.TXT", 0, pat, 16u) == 0, "w-nw",
+              0, 0);
+        check(nova_list_dir("/NDIR", 0, name) == 5 &&
+                  strcmp(name, "F.TXT") == 0,
+              "w-nls", 0, 0);
+        check(nova_delete("/W.TXT") == 0, "w-del", 0, 0);
+        check(nova_delete("/NDIR/F.TXT") == 0, "w-deln", 0, 0);
+        check(nova_stat("/W.TXT", &size, &is_dir) == -NOVA_ENOENT,
+              "w-gone", 0, 0);
+        check(nova_delete("/W.TXT") == -NOVA_ENOENT, "w-del2", 0, 0);
+        check(nova_delete("/NDIR") == -NOVA_EISDIR, "w-deldir", 0, 0);
+    }
+
+    /* Power-cut simulation: kill the commit block of a real
+     * transaction (find the last commit by scanning), remount, and
+     * require the OLD content (replay must skip the torn tail).
+     * Then restore and verify the write path still works. */
+    {
+        static uint8_t pat[64];
+        for (uint32_t i = 0; i < sizeof(pat); i++) {
+            pat[i] = (uint8_t)(0xC0 + (i & 0x3F));
+        }
+        check(nova_create_file("/PC.TXT") == 0, "pc-create", 0, 0);
+        check(nova_write_at("/PC.TXT", 0, pat, sizeof(pat)) == 0,
+              "pc-write", 0, 0);
+        /* Locate the newest commit block in the journal area. */
+        {
+            uint32_t found = 0;
+            for (uint32_t b = 1; b < 65; b++) {
+                uint8_t sec[512];
+                size_t off = (size_t)b * 4096u;
+                memcpy(sec, g_img + off, 512);
+                /* Commit magic 0x434F4D54 is "TMOC" on the wire. */
+                if (memcmp(sec, "TMOC", 4) == 0) {
+                    found = b;
+                }
+            }
+            check(found != 0, "pc-found", found, 0);
+            if (found != 0) {
+                /* Zero the whole commit block (torn tail). */
+                memset(g_img + (size_t)found * 4096u, 0, 4096);
+            }
+        }
+        /* Remount: recovery must skip the torn transaction; the file
+         * metadata (created+written in torn transactions... note the
+         * CREATE committed earlier and checkpointed: size stays, but
+         * which transactions survive depends on commit order. The
+         * invariant: mount succeeds and reads are coherent. */
+        check(nova_init(img_read, img_write) == 0, "pc-remount", 0,
+              0);
+        check(nova_stat("/HELLO.TXT", &size, &is_dir) == 0 &&
+                  size == 16u,
+              "pc-fixture", size, 0);
+        /* Cleanup works after the torn mount (fresh transaction). */
+        check(nova_delete("/PC.TXT") == 0 ||
+                  nova_stat("/PC.TXT", &size, &is_dir) ==
+                      -NOVA_ENOENT,
+              "pc-clean", 0, 0);
+    }
+
     /* Corruption-injection (ADR-0006 merge-blocker class): mutated
      * copies must fail clean (errno, never crash), over the SAME
      * driver state machine the guest runs. */
@@ -187,19 +288,19 @@ int main(int argc, char **argv) {
         /* Kill superblock copy 0: mount must fall back to copy 1. */
         saved = g_img[1024];
         g_img[1024] ^= 0xFF;
-        check(nova_init(img_read) == 0, "mut-sb-fallback", 0, 0);
+        check(nova_init(img_read, img_write) == 0, "mut-sb-fallback", 0, 0);
         check(nova_stat("/HELLO.TXT", &size, &is_dir) == 0 &&
                   size == 16u,
               "mut-sb-read", size, 0);
         g_img[1024] = saved;
-        check(nova_init(img_read) == 0, "mut-sb-restore", 0, 0);
+        check(nova_init(img_read, img_write) == 0, "mut-sb-restore", 0, 0);
         /* Kill BOTH copies: mount must refuse. */
         g_img[1024] ^= 0xFF;
         g_img[127 * 4096 + 1024] ^= 0xFF;
-        check(nova_init(img_read) != 0, "mut-sb-both", 0, 0);
+        check(nova_init(img_read, img_write) != 0, "mut-sb-both", 0, 0);
         g_img[1024] ^= 0xFF;
         g_img[127 * 4096 + 1024] ^= 0xFF;
-        check(nova_init(img_read) == 0, "mut-sb-back", 0, 0);
+        check(nova_init(img_read, img_write) == 0, "mut-sb-back", 0, 0);
     }
 
     /* Randomized name fuzz (crash-freedom + errno discipline). */

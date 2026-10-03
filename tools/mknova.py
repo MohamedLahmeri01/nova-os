@@ -63,7 +63,7 @@ def superblock(free_blocks):
     struct.pack_into("<I", sb, 12, NBLOCKS)
     struct.pack_into("<I", sb, 16, free_blocks)
     struct.pack_into("<I", sb, 20, NINODES)
-    struct.pack_into("<I", sb, 24, NINODES - 4)
+    struct.pack_into("<I", sb, 24, NINODES - 5)
     struct.pack_into("<I", sb, 28, 2)  # root inode
     struct.pack_into("<I", sb, 32, JSTART)
     struct.pack_into("<I", sb, 36, JCOUNT)
@@ -98,6 +98,22 @@ USED = ([0] + list(range(JSTART, JSTART + JCOUNT)) +
         [65, 66, 67, 68, 69, 70, 71, NBLOCKS - 1])
 
 
+def dirblock(entries, slack):
+    """Dir block image: entries + `slack` empty 32B slots (ino=0),
+    last slot stretched to end of block (scan terminator rule)."""
+    blk = bytearray(BLOCK)
+    at = 0
+    for ino, nm, ft in entries:
+        e = dirent(ino, nm, ft)
+        blk[at:at + len(e)] = e
+        at += len(e)
+    for _ in range(slack):
+        struct.pack_into("<IHBB", blk, at, 0, 32, 0, 0)
+        at += 32
+    struct.pack_into("<H", blk, at - 32 + 4, BLOCK - (at - 32))
+    return bytes(blk)
+
+
 def build():
     img = bytearray(NBLOCKS * BLOCK)
     free = NBLOCKS - len(USED)
@@ -110,8 +126,8 @@ def build():
     for b in USED:
         img[65 * BLOCK + b // 8] |= (1 << (b % 8))
 
-    # --- inode bitmap (block 66): inodes 2,3,4,5 ---
-    img[66 * BLOCK] = 0x1E
+    # --- inode bitmap (block 66): bit 0 reserved, inodes 2,3,4,5 ---
+    img[66 * BLOCK] = 0x1F
 
     # --- inode table (block 67) ---
     o = 67 * BLOCK
@@ -120,32 +136,19 @@ def build():
     img[o + 384:o + 512] = inode(0x81A4, len(HELLO), 1, 69)
     img[o + 512:o + 640] = inode(0x81A4, len(NOTE), 1, 71)
 
-    # --- root dir (block 68) ---
-    o = 68 * BLOCK
-    at = 0
-    for ino, nm, ft in ((2, b".", 2), (2, b"..", 2),
-                        (4, b"HELLO.TXT", 1)):
-        e = dirent(ino, nm, ft)
-        img[o + at:o + at + len(e)] = e
-        at += len(e)
-    e = dirent(3, b"DOCS", 2)
-    img[o + at:o + at + len(e)] = e
-    struct.pack_into("<H", img, o + at + 4, BLOCK - at)
+    # --- root dir (block 68): 4 spare slots for create tests ---
+    img[68 * BLOCK:69 * BLOCK] = dirblock(
+        ((2, b".", 2), (2, b"..", 2), (4, b"HELLO.TXT", 1),
+         (3, b"DOCS", 2)),
+        4)
 
     # --- file data ---
     img[69 * BLOCK:69 * BLOCK + len(HELLO)] = HELLO
     img[71 * BLOCK:71 * BLOCK + len(NOTE)] = NOTE
 
-    # --- DOCS dir (block 70) ---
-    o = 70 * BLOCK
-    at = 0
-    for ino, nm, ft in ((3, b".", 2), (2, b"..", 2)):
-        e = dirent(ino, nm, ft)
-        img[o + at:o + at + len(e)] = e
-        at += len(e)
-    e = dirent(5, b"NOTE.TXT", 1)
-    img[o + at:o + at + len(e)] = e
-    struct.pack_into("<H", img, o + at + 4, BLOCK - at)
+    # --- DOCS dir (block 70): 2 spare slots ---
+    img[70 * BLOCK:71 * BLOCK] = dirblock(
+        ((3, b".", 2), (2, b"..", 2), (5, b"NOTE.TXT", 1)), 2)
 
     return bytes(img)
 

@@ -217,17 +217,17 @@ static int32_t open_attach(struct process *p, struct fs_node *n,
     }
     f->owns_node = 1;
     for (uint32_t i = 0; i <= FS_MAX_PATH; i++) {
-        f->fat_path[i] = 0;
+        f->store_path[i] = 0;
     }
     if (store_path != 0) {
         while (pi <= FS_MAX_PATH) {
-            f->fat_path[pi] = store_path[pi];
+            f->store_path[pi] = store_path[pi];
             if (store_path[pi] == 0) {
                 break;
             }
             pi++;
         }
-        f->fat_path[FS_MAX_PATH] = 0;
+        f->store_path[FS_MAX_PATH] = 0;
     }
     rc = fs_fd_alloc(p, f);
     if (rc < 0) {
@@ -328,22 +328,67 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
         }
         return open_attach(p, n, data, size, flags, kpath);
     }
-    /* Read-only grafts (EXT4 in 7e, NOVA-FS in 7f-1): same
-     * materialize shape, no stored path (non-RDONLY refused). */
-    if (fs_is_ext_path(kpath) || fs_is_nova_path(kpath)) {
+    /* EXT4 graft (Phase 7e): read-only materialize, no stored path. */
+    if (fs_is_ext_path(kpath)) {
         uint8_t *data;
         uint32_t size = 0;
         uint32_t got = 0;
         int is_dir = 0;
         struct fs_node *n;
-        int is_ext = fs_is_ext_path(kpath);
         if ((flags & FS_O_ACCMODE) != FS_O_RDONLY) {
             return -NOVA_EROFS;
         }
-        if (is_ext) {
-            rc = ext_stat(kpath, &size, &is_dir);
+        rc = ext_stat(kpath, &size, &is_dir);
+        if (rc != 0) {
+            return rc;
+        }
+        if (is_dir) {
+            return -NOVA_EISDIR;
+        }
+        if (size > FS_MAX_FILE) {
+            return -NOVA_ENOSPC;
+        }
+        data = (size != 0) ? (uint8_t *)kmalloc(size) : 0;
+        if (size != 0 && data == 0) {
+            return -NOVA_ENOSPC;
+        }
+        n = blank_node(data, size);
+        if (n == 0) {
+            if (data != 0) {
+                kfree(data);
+            }
+            return -NOVA_ENOSPC;
+        }
+        if (size == 0) {
+            got = 0;
+            rc = 0;
         } else {
-            rc = nova_stat(kpath, &size, &is_dir);
+            rc = ext_read_file(kpath, data, size, &got);
+        }
+        if (rc != 0 || got != size) {
+            kfree(n);
+            if (data != 0) {
+                kfree(data);
+            }
+            return (rc != 0) ? rc : -NOVA_EIO;
+        }
+        return open_attach(p, n, data, size, flags, 0);
+    }
+    /* NOVA-FS graft (Phase 7f-2): writable materialize with stored
+     * path (write-through like FAT). CREAT makes empty files. */
+    if (fs_is_nova_path(kpath)) {
+        uint8_t *data;
+        uint32_t size = 0;
+        uint32_t got = 0;
+        int is_dir = 0;
+        struct fs_node *n;
+        rc = nova_stat(kpath, &size, &is_dir);
+        if (rc == -NOVA_ENOENT && (flags & FS_O_CREAT) != 0) {
+            rc = nova_create_file(kpath);
+            if (rc == 0) {
+                size = 0;
+                is_dir = 0;
+            }
         }
         if (rc != 0) {
             return rc;
@@ -368,8 +413,6 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
         if (size == 0) {
             got = 0;
             rc = 0;
-        } else if (is_ext) {
-            rc = ext_read_file(kpath, data, size, &got);
         } else {
             rc = nova_read_file(kpath, data, size, &got);
         }
@@ -380,7 +423,7 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
             }
             return (rc != 0) ? rc : -NOVA_EIO;
         }
-        return open_attach(p, n, data, size, flags, 0);
+        return open_attach(p, n, data, size, flags, kpath);
     }
     rc = fs_lookup(kpath, &n);
     if (rc == -NOVA_ENOENT && (flags & FS_O_CREAT) != 0) {
@@ -479,7 +522,7 @@ static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
      * mutation), then FAT, then refresh the cache copy. EXT4 files
      * carry no stored path (read-only): refuse with EROFS. */
     if (f->owns_node) {
-        if (f->fat_path[0] == 0) {
+        if (f->store_path[0] == 0) {
             return -NOVA_EROFS;
         }
         while (total < len) {
@@ -521,7 +564,11 @@ static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
                 f->node->data = nd;
                 f->node->cap = nc;
             }
-            rc = fat_write_at(f->fat_path, f->off, kbuf, want);
+            if (fs_is_nova_path(f->store_path)) {
+                rc = nova_write_at(f->store_path, f->off, kbuf, want);
+            } else {
+                rc = fat_write_at(f->store_path, f->off, kbuf, want);
+            }
             if (rc != 0) {
                 return (total != 0) ? (int32_t)total : rc;
             }
@@ -641,8 +688,11 @@ static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
     if (fs_is_disk_path(kpath)) {
         return fat_mkdir(kpath);
     }
-    if (fs_is_ext_path(kpath) || fs_is_nova_path(kpath)) {
+    if (fs_is_ext_path(kpath)) {
         return -NOVA_EROFS;
+    }
+    if (fs_is_nova_path(kpath)) {
+        return nova_mkdir(kpath);
     }
     return fs_mkdir(kpath);
 }

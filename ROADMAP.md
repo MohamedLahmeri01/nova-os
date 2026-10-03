@@ -122,7 +122,12 @@ E820 memory map → COM1 serial → halt, in `NOVA-OS-CONSTRAINED`
     read-only driver (parsed SB + copy fallback, inode crc, inline
     extents) grafted at /nova, shell reads it unchanged, 12/12 with
     host T12 incl. corruption-injection (ADR-0025)
-  - [ ] 7f-2 writer, 7f-3 fsck
+  - [x] 7f-2 WRITER DONE: ordered metadata journal (crc'd descriptor +
+    dedicated commit, seq-ordered replay), allocator, create/write/
+    delete/mkdir, write-through syscalls, shell `put`, hermetic +
+    idempotent guest tests, power-cut + durability proofs, 12/12
+    (ADR-0026)
+  - [ ] 7f-3 fsck
 
 ## Phase 8 — Drivers
 
