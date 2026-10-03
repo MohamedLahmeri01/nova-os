@@ -19,6 +19,7 @@
 #include "fs/fs.h"
 #include "fs/fat32.h"
 #include "fs/ext4.h"
+#include "fs/nova.h"
 #include "irq/irq.h"
 #include "input/kbd.h"
 #include "time/time.h"
@@ -327,19 +328,23 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
         }
         return open_attach(p, n, data, size, flags, kpath);
     }
-    /* /ext graft (Phase 7e): EXT4 is read-only; same materialize
-     * shape, no stored path (writes rejected by mode below... note
-     * fs_file_alloc succeeds for WRONLY: refuse non-RDONLY here). */
-    if (fs_is_ext_path(kpath)) {
+    /* Read-only grafts (EXT4 in 7e, NOVA-FS in 7f-1): same
+     * materialize shape, no stored path (non-RDONLY refused). */
+    if (fs_is_ext_path(kpath) || fs_is_nova_path(kpath)) {
         uint8_t *data;
         uint32_t size = 0;
         uint32_t got = 0;
         int is_dir = 0;
         struct fs_node *n;
+        int is_ext = fs_is_ext_path(kpath);
         if ((flags & FS_O_ACCMODE) != FS_O_RDONLY) {
             return -NOVA_EROFS;
         }
-        rc = ext_stat(kpath, &size, &is_dir);
+        if (is_ext) {
+            rc = ext_stat(kpath, &size, &is_dir);
+        } else {
+            rc = nova_stat(kpath, &size, &is_dir);
+        }
         if (rc != 0) {
             return rc;
         }
@@ -363,8 +368,10 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
         if (size == 0) {
             got = 0;
             rc = 0;
-        } else {
+        } else if (is_ext) {
             rc = ext_read_file(kpath, data, size, &got);
+        } else {
+            rc = nova_read_file(kpath, data, size, &got);
         }
         if (rc != 0 || got != size) {
             kfree(n);
@@ -585,7 +592,8 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
     if (validate_usermem(namebuf, FS_MAX_NAME, 1) != 0) {
         return -NOVA_EFAULT;
     }
-    /* /disk graft: FAT listing. /ext graft: EXT4 listing. */
+    /* /disk graft: FAT listing. /ext graft: EXT4 listing.
+     * /nova graft: NOVA-FS listing. */
     if (fs_is_disk_path(kpath)) {
         char kname[FS_MAX_NAME];
         int r = fat_list_dir(kpath, index, kname);
@@ -597,6 +605,14 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
     if (fs_is_ext_path(kpath)) {
         char kname[FS_MAX_NAME];
         int r = ext_list_dir(kpath, index, kname);
+        if (r < 0) {
+            return r;
+        }
+        return copy_name_out(namebuf, kname, r);
+    }
+    if (fs_is_nova_path(kpath)) {
+        char kname[FS_MAX_NAME];
+        int r = nova_list_dir(kpath, index, kname);
         if (r < 0) {
             return r;
         }
@@ -625,7 +641,7 @@ static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
     if (fs_is_disk_path(kpath)) {
         return fat_mkdir(kpath);
     }
-    if (fs_is_ext_path(kpath)) {
+    if (fs_is_ext_path(kpath) || fs_is_nova_path(kpath)) {
         return -NOVA_EROFS;
     }
     return fs_mkdir(kpath);

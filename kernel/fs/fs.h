@@ -53,6 +53,8 @@ struct fs_file {
 int fs_is_disk_path(const char *kpath);
 /* /ext graft (Phase 7e): same rule for the EXT4 driver. */
 int fs_is_ext_path(const char *kpath);
+/* /nova graft (Phase 7f-1): same rule for the native driver. */
+int fs_is_nova_path(const char *kpath);
 /* Strip "/disk" -> FAT-relative path ("" means the FAT root). */
 const char *fs_disk_rel(const char *kpath);
 

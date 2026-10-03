@@ -20,6 +20,7 @@
 #include "fs/fs.h"
 #include "fs/fat32.h"
 #include "fs/ext4.h"
+#include "fs/nova.h"
 #include "drivers/ata.h"
 #include "thread/thread.h"
 #include "process/process.h"
@@ -104,6 +105,9 @@ static void seed_binaries(void) {
     if (fs_mkdir("/ext") != 0) {
         nova_panic("ext-mkdir-fail");
     }
+    if (fs_mkdir("/nova") != 0) {
+        nova_panic("nova-mkdir-fail");
+    }
     if (fs_create("/bin/hi", &n) != 0 || n == 0) {
         nova_panic("bin-create-fail");
     }
@@ -129,6 +133,12 @@ static int ata_slave_write(uint32_t lba, const uint8_t *src) {
  * Read-only; no sink (writes are EROFS at the syscall layer). */
 static int ata_ext_read(uint32_t lba, uint8_t *dst) {
     return ata_read_sector(ATA_DRIVE_SEC_MASTER, lba, dst);
+}
+
+/* NOVA-FS sector source (Phase 7f-1): secondary slave (P1D1).
+ * Read-only in this stage (writer arrives in 7f-2). */
+static int ata_nova_read(uint32_t lba, uint8_t *dst) {
+    return ata_read_sector(ATA_DRIVE_SEC_SLAVE, lba, dst);
 }
 
 /* Spawn a program stored in the filesystem (Phase 7b exec). Path
@@ -242,6 +252,12 @@ void nova_pm_main(const nova_boot_info_t *info) {
     }
     if (ext_selftest() != 0) {
         nova_panic("ext-selftest-fail");
+    }
+    if (nova_init(ata_nova_read) != 0) {
+        nova_panic("nova-init-fail");
+    }
+    if (nova_selftest() != 0) {
+        nova_panic("nova-selftest-fail");
     }
     {
         int sched_rc = sched_selftest();

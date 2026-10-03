@@ -118,6 +118,11 @@ E820 memory map → COM1 serial → halt, in `NOVA-OS-CONSTRAINED`
   - [x] 7f-DESIGN DONE: `docs/NOVA-FS.md` v0.1 (extent layout, ordered
     metadata journal, refusal rules, staged plan) adopted in ADR-0024;
     numbers verified by execution; implementation starts at 7f-1
+  - [x] 7f-1 READER DONE: deterministic mknova.py fixture on IDE P1D1,
+    read-only driver (parsed SB + copy fallback, inode crc, inline
+    extents) grafted at /nova, shell reads it unchanged, 12/12 with
+    host T12 incl. corruption-injection (ADR-0025)
+  - [ ] 7f-2 writer, 7f-3 fsck
 
 ## Phase 8 — Drivers
 

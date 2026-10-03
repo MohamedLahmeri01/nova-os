@@ -51,6 +51,9 @@ Superblock (1 block, selected fields):
 | 48 | 4 | checksum (crc32c of block 0..47 + magic) |
 | 64 | 16 | uuid (fixed at mkfs, deterministic fixture uses all-`NOVA` pattern) |
 | 80 | 16 | volume label (bytes, space-padded) |
+| 96 | 4 | inode table first block |
+| 100 | 4 | block bitmap block |
+| 104 | 4 | inode bitmap block |
 
 Inode (128B, ext-compatible numbering from 1, first usable 11):
 
@@ -140,10 +143,10 @@ as validate.c shared guest/host in Phase 5).
 - **Later (not this phase)**: multi-group, extent index depth 2,
   dir indexing, snapshots/COW per ADR-0006.
 
-Estimated fixture sizes (v0.1, 4KB blocks): superblock 1 + journal
-64 + bitmaps 2 + inode table 1 + root 1 + hello 1 + docs 1 + note 1
-= 72 blocks used of 128 (512KB image, padded to 1MB for VDI like
-the other fixtures).
+Estimated fixture sizes (v0.1, 4KB blocks): superblock copies 2 +
+journal 64 + bitmaps 2 + inode table 1 + root 1 + hello 1 + docs 1 +
+note 1 = 73 blocks used of 128, 55 free (512KB image, padded to 1MB
+for VDI like the other fixtures).
 
 ## 7. Open questions (decided before 7f-1 merges)
 

@@ -72,6 +72,17 @@ int fs_is_ext_path(const char *kpath) {
     return kpath[4] == 0 || kpath[4] == '/';
 }
 
+int fs_is_nova_path(const char *kpath) {
+    if (kpath == 0 || kpath[0] != '/') {
+        return 0;
+    }
+    if (kpath[1] != 'n' || kpath[2] != 'o' || kpath[3] != 'v' ||
+        kpath[4] != 'a') {
+        return 0;
+    }
+    return kpath[5] == 0 || kpath[5] == '/';
+}
+
 int fs_fd_alloc(struct process *p, struct fs_file *f) {
     uint32_t i;
     if (p == 0 || f == 0) {

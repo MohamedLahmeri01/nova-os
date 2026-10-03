@@ -267,6 +267,7 @@ def build_phase1(fault=False):
                                   ("kernel/fs/file.c", "file.o", []),
                                   ("kernel/fs/fat32.c", "fat32.o", []),
                                   ("kernel/fs/ext4.c", "ext4.o", []),
+                                  ("kernel/fs/nova.c", "novafs.o", []),
                                   (PMM_BACKEND_C, PMM_BACKEND_O, [])]:
         s = os.path.join(ROOT, src)
         if not os.path.isfile(s):
@@ -293,7 +294,7 @@ def build_phase1(fault=False):
               "validate.o", "ctx.o", "user_asm.o", "user.o", "gdt.o",
               "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
               "kbd.o", "init_blob.o", "hi_blob.o", "ramfs.o", "file.o",
-              "fat32.o", "ext4.o", "ata.o", PMM_BACKEND_O],
+              "fat32.o", "ext4.o", "novafs.o", "ata.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -536,6 +537,32 @@ def cmd_test():
                 print("[pass] T11 host ext test"); passed += 1
             else:
                 print("[fail] T11 host ext test"); failed += 1
+    # T12: host NOVA-FS test (nova.c vs the generated mknova image)
+    print("[info] T12 compiling + running host nova test...")
+    nova_raw = os.path.join(BUILD, "nova.raw")
+    r = run([sys.executable, os.path.join(ROOT, "tools", "mknova.py"),
+             nova_raw], timeout=60)
+    if r.returncode != 0:
+        print(f"[fail] T12 mknova:\n{(r.stderr or '')[:800]}")
+        failed += 1
+    else:
+        nova_exe = os.path.join(BUILD, "test_nova.exe")
+        cmd = ["gcc", "-O2", "-Wall", "-Wextra",
+               "-I", os.path.join(ROOT, "kernel"),
+               os.path.join(ROOT, "tests", "unit", "test_nova.c"),
+               os.path.join(ROOT, "kernel", "fs", "nova.c"),
+               "-o", nova_exe]
+        r = run(cmd, timeout=120)
+        if r.returncode != 0:
+            print(f"[fail] T12 nova test compile:\n{(r.stderr or '')[:1500]}")
+            failed += 1
+        else:
+            r = run([nova_exe, nova_raw], timeout=120)
+            print((r.stdout or "") + (r.stderr or ""))
+            if r.returncode == 0:
+                print("[pass] T12 host nova test"); passed += 1
+            else:
+                print("[fail] T12 host nova test"); failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 
@@ -589,6 +616,11 @@ def _assemble_and_attach(kernel_bin_name, raw_path, vdi_path):
     # EXT4 disk (Phase 7e): deterministic image on P1D0 (secondary
     # master). Same regenerate + re-attach discipline as FAT.
     rc, msg = _attach_ext_disk()
+    if rc != 0:
+        return 1, msg
+    # NOVA-FS disk (Phase 7f-1): deterministic fixture on P1D1
+    # (secondary slave). Same discipline; read-only in this stage.
+    rc, msg = _attach_nova_disk()
     if rc != 0:
         return 1, msg
     r = vbox("modifyvm", TEST_VM, "--uart1", "0x3F8", "4",
@@ -664,6 +696,39 @@ def _attach_ext_disk():
     return 0, f"{ext_raw} -> {ext_vdi} attached (IDE P1D0)"
 
 
+def _attach_nova_disk():
+    """Generate the NOVA-FS fixture image and attach it at IDE P1D1.
+
+    Returns (rc, msg). Deterministic (tools/mknova.py); padded to 1MB
+    for VDI conversion."""
+    nova_raw = os.path.join(BUILD, "nova.raw")
+    nova_vdi = os.path.join(IMAGES, "nova.vdi")
+    r = run([sys.executable, os.path.join(ROOT, "tools", "mknova.py"),
+             nova_raw], timeout=60)
+    if r.returncode != 0:
+        return 1, f"mknova: {(r.stderr or '')[:500]}"
+    with open(nova_raw, "rb") as f:
+        raw = f.read()
+    if len(raw) < 1024 * 1024:
+        raw += b"\x00" * (1024 * 1024 - len(raw))
+    with open(nova_raw, "wb") as f:
+        f.write(raw)
+    vbox("storageattach", TEST_VM, "--storagectl", "IDE",
+         "--port", "1", "--device", "1", "--medium", "none")
+    vbox("closemedium", "disk", nova_vdi, "--delete")
+    if os.path.exists(nova_vdi):
+        os.remove(nova_vdi)
+    r = vbox("convertfromraw", nova_raw, nova_vdi, "--format", "VDI")
+    if r.returncode != 0:
+        return 1, f"nova convertfromraw: {(r.stderr or '')[:800]}"
+    r = vbox("storageattach", TEST_VM, "--storagectl", "IDE",
+             "--port", "1", "--device", "1", "--type", "hdd",
+             "--medium", nova_vdi)
+    if r.returncode != 0:
+        return 1, f"nova storageattach: {(r.stderr or '')[:500]}"
+    return 0, f"{nova_raw} -> {nova_vdi} attached (IDE P1D1)"
+
+
 def _boot_expect(markers, shot_name, timeout_s=30):
     """Boot TEST_VM headless; pass iff ALL markers appear on serial.
 
@@ -712,7 +777,8 @@ def cmd_run_vbox():
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
                                        b"HEAP-OK", b"ATA-OK", b"FS-OK",
-                                       b"FAT-OK", b"EXT-OK", b"IDT-OK",
+                                       b"FAT-OK", b"EXT-OK", b"NOVA-OK",
+                                       b"IDT-OK",
                                        b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
@@ -768,7 +834,7 @@ def cmd_image():
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
                  b"HEAP-OK", b"ATA-OK", b"FS-OK", b"FAT-OK", b"EXT-OK",
-                 b"IDT-OK",
+                 b"NOVA-OK", b"IDT-OK",
                  b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]

@@ -101,7 +101,12 @@ No releases yet.
   read-only EXT4 grafted at /ext, shell `ls /ext` +
   `cat /ext/HELLO.TXT` proofs (lowercase correctly ENOENT),
   host T11 (20k-name fuzz) (ADR-0023). Fixed: leading-slash skip in
-  split_parent, 15-vs-16 byte count, Shift scancodes for uppercase.
+  split_parent, 15-vs-16   byte count, Shift scancodes for uppercase.
+- Phase 7f-1 NOVA-FS reader (tested 2026-10-03, `nova test` 12/12):
+  deterministic fixture on IDE P1D1, read-only driver (SB fallback,
+  inode crc, inline extents) grafted at /nova, shell `ls /nova` +
+  `cat` proofs, host T12 with corruption-injection (ADR-0025).
+  Fixed: SB layout pointers, stale-image refusal, edit discipline.
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the
