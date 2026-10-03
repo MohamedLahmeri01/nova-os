@@ -26,7 +26,8 @@
 #define SYS_CLOSE 12u
 #define SYS_READDIR 13u
 #define SYS_MKDIR 14u
-#define SYS_MAX 14u
+#define SYS_EXEC 15u
+#define SYS_MAX 15u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0

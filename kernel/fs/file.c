@@ -131,6 +131,10 @@ int fs_selftest(void) {
     }
     rc = fs_lookup("/docs/readme.txt", &n);
     tcheck(rc == 0 && n != 0, "seed-nested");
+    /* Seeded binary for exec (pm_main seed_binaries; absent on stale
+     * images, so this also catches seed wiring regressions). */
+    rc = fs_lookup("/bin/hi", &n);
+    tcheck(rc == 0 && n != 0 && !n->is_dir && n->size > 0, "seed-hi");
     rc = fs_lookup("/", &dir);
     tcheck(rc == 0 && dir != 0 && dir->is_dir, "root-dir");
     tcheck(name_in(dir, "hello.txt") && name_in(dir, "docs"), "root-names");

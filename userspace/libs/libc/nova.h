@@ -22,6 +22,7 @@
 #define SYS_CLOSE 12u
 #define SYS_READDIR 13u
 #define SYS_MKDIR 14u
+#define SYS_EXEC 15u
 
 #define NOVA_O_RDONLY 0u
 #define NOVA_O_WRONLY 1u
@@ -102,6 +103,10 @@ static inline int32_t nova_readdir(const char *path, uint32_t index,
 
 static inline int32_t nova_mkdir(const char *path) {
     return nova_syscall(SYS_MKDIR, (uint32_t)path, 0, 0);
+}
+
+static inline int32_t nova_exec(const char *path) {
+    return nova_syscall(SYS_EXEC, (uint32_t)path, 0, 0);
 }
 
 #endif /* NOVA_LIBC_NOVA_H */

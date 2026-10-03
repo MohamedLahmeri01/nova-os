@@ -379,6 +379,20 @@ static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
     return fs_mkdir(kpath);
 }
 
+static int32_t do_exec(uint32_t path, uint32_t b, uint32_t c) {
+    char kpath[FS_MAX_PATH + 1u];
+    int32_t plen;
+    (void)b;
+    (void)c;
+    plen = copy_user_path(path, kpath);
+    if (plen < 0) {
+        return plen;
+    }
+    /* Spawn semantics (no image replacement yet): a new process runs
+     * the file's bytes; the caller keeps running. Returns child pid. */
+    return spawn_file(kpath);
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -401,6 +415,7 @@ static const struct {
     { SYS_CLOSE, "close", do_close },
     { SYS_READDIR, "readdir", do_readdir },
     { SYS_MKDIR, "mkdir", do_mkdir },
+    { SYS_EXEC, "exec", do_exec },
 };
 
 void syscall_handler(struct syscall_frame *f) {

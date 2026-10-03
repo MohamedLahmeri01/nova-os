@@ -175,44 +175,50 @@ def cmd_build():
 
 
 def build_userspace():
-    """Compile userspace (libc + init/sh) and embed init.bin as a blob.
+    """Compile userspace programs and embed them as blobs.
 
-    init.pe links at 0x80000000 (entry asserted by init.ld); objcopy to
-    flat binary, then binary->object so the kernel links it in.
-    Returns (rc, msg). Single program for Phase 6 (exec table later).
+    init.pe (init+sh+libc) and hi.pe (hi+libc) link at 0x80000000
+    (entry asserted by init.ld); objcopy to flat binaries, then
+    binary->object so the kernel links them in. Returns (rc, msg).
+    Phase 7b: two programs (exec table: init + /bin/hi).
     """
-    usrc = [("userspace/init/init.c", "u_init.o"),
-            ("userspace/init/sh.c", "u_sh.o"),
-            ("userspace/libs/libc/string.c", "u_string.o"),
+    libc = [("userspace/libs/libc/string.c", "u_string.o"),
             ("userspace/libs/libc/stdio.c", "u_stdio.o")]
-    for src, obj in usrc:
-        s = os.path.join(ROOT, src)
-        if not os.path.isfile(s):
-            return 1, f"missing {src}"
+    progs = [("init", [("userspace/init/init.c", "u_init.o"),
+                       ("userspace/init/sh.c", "u_sh.o")] + libc),
+             ("hi", [("userspace/bin/hi.c", "u_hi.o")] + libc)]
+    for name, usrc in progs:
+        for src, obj in usrc:
+            s = os.path.join(ROOT, src)
+            if not os.path.isfile(s):
+                return 1, f"missing {src}"
+            r = run(["gcc"] + CFLAGS32 +
+                    ["-I", os.path.join(ROOT, "userspace", "libs", "libc"),
+                     "-I", os.path.join(ROOT, "userspace", "init"),
+                     "-c", s, "-o", os.path.join(BUILD, obj)], timeout=60)
+            if r.returncode != 0:
+                return 1, f"compile failed {src}:\n{(r.stderr or '')[:2000]}"
         r = run(["gcc"] + CFLAGS32 +
-                ["-I", os.path.join(ROOT, "userspace", "libs", "libc"),
-                 "-I", os.path.join(ROOT, "userspace", "init"),
-                 "-c", s, "-o", os.path.join(BUILD, obj)], timeout=60)
+                ["-Wl,-T," + os.path.join(ROOT, "userspace", "init",
+                                          "init.ld")] +
+                [os.path.join(BUILD, o) for _, o in usrc] +
+                ["-o", os.path.join(BUILD, f"{name}.pe")], timeout=60)
         if r.returncode != 0:
-            return 1, f"compile failed {src}:\n{(r.stderr or '')[:2000]}"
-    r = run(["gcc"] + CFLAGS32 +
-            ["-Wl,-T," + os.path.join(ROOT, "userspace", "init", "init.ld")] +
-            [os.path.join(BUILD, o) for _, o in usrc] +
-            ["-o", os.path.join(BUILD, "init.pe")], timeout=60)
-    if r.returncode != 0:
-        return 1, f"link failed init.pe:\n{(r.stderr or '')[:2000]}"
-    for args in [(["objcopy", "-O", "binary", "init.pe", "init.bin"]),
-                 (["objcopy", "-I", "binary", "-O", "pe-i386", "-B", "i386",
-                   "init.bin", "init_blob.o"])]:
-        # NOTE: run from BUILD so -I binary derives clean symbol names
-        # (_binary_init_bin_start, not _binary_F__NOVA_OS_...).
-        r = run(args, timeout=60, cwd=BUILD)
-        if r.returncode != 0:
-            return 1, f"objcopy failed {' '.join(args[1:3])}: {(r.stderr or '')[:500]}"
-    size = os.path.getsize(os.path.join(BUILD, "init.bin"))
-    if size == 0 or size > 65536:
-        return 1, f"init.bin size insane: {size}"
-    print(f"[ok] userspace init.bin={size}B embedded")
+            return 1, f"link failed {name}.pe:\n{(r.stderr or '')[:2000]}"
+        for args in [(["objcopy", "-O", "binary", f"{name}.pe",
+                       f"{name}.bin"]),
+                     (["objcopy", "-I", "binary", "-O", "pe-i386", "-B",
+                       "i386", f"{name}.bin", f"{name}_blob.o"])]:
+            # NOTE: run from BUILD so -I binary derives clean symbol
+            # names (_binary_init_bin_start, not _binary_F__NOVA_OS_...).
+            r = run(args, timeout=60, cwd=BUILD)
+            if r.returncode != 0:
+                return 1, (f"objcopy failed {' '.join(args[1:3])}: "
+                           f"{(r.stderr or '')[:500]}")
+        size = os.path.getsize(os.path.join(BUILD, f"{name}.bin"))
+        if size == 0 or size > 65536:
+            return 1, f"{name}.bin size insane: {size}"
+        print(f"[ok] userspace {name}.bin={size}B embedded")
     return 0, ""
 
 
@@ -283,7 +289,8 @@ def build_phase1(fault=False):
               "lapic.o", "pit.o", "syscall_entry.o", "syscall.o",
               "validate.o", "ctx.o", "user_asm.o", "user.o", "gdt.o",
               "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
-              "kbd.o", "init_blob.o", "ramfs.o", "file.o", PMM_BACKEND_O],
+              "kbd.o", "init_blob.o", "hi_blob.o", "ramfs.o", "file.o",
+              PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -576,7 +583,7 @@ def cmd_run_vbox():
                                        b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
-                                       b"SMP-OK", b"INIT-OK"],
+                                       b"SMP-OK", b"INIT-OK", b"HI-OK"],
                                        "vbox-boot-proof.png")
     if ok:
         print(f"[PASS] full init markers on serial after ~{elapsed}s "
@@ -630,6 +637,8 @@ PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"HEAP-OK", b"FS-OK", b"IDT-OK", b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]
+# NOTE: no HI-OK here: the fault image panics synchronously after
+# INIT-OK, before the spawned hi thread is ever scheduled.
 
 
 def cmd_panic_test():

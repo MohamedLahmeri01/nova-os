@@ -28,5 +28,8 @@ extern struct process *g_init_process;
 
 struct process *process_create(void);
 void process_attach(struct process *p, struct thread *t);
+/* Spawn a program image from FS bytes (Phase 7b exec, pm_main.c).
+ * Returns the child pid, or negative -errno (never panics). */
+int32_t spawn_file(const char *path);
 
 #endif /* NOVA_PROCESS_H */

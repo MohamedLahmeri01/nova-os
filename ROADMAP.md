@@ -95,6 +95,11 @@ E820 memory map → COM1 serial → halt, in `NOVA-OS-CONSTRAINED`
   per-process fd tables of 16; shell ls/cat/mkdir; interactive proof
   over VBox scancodes; `nova test` 9/9 with host T9 (20k-path fuzz)
 - [ ] 7b: exec-by-name (`run`), FAT32 read, EXT4(read), NOVA-FS design
+  - [x] 7b-exec DONE: `spawn_image`/`spawn_file`, second user program
+    `/bin/hi` (multi-binary build), `SYS_EXEC` + shell `run`,
+    boot `HI-OK` proof + interactive `child pid=N` proof, 9/9
+    (ADR-0020)
+  - [ ] FAT32 read, EXT4(read), NOVA-FS design
 
 ## Phase 8 — Drivers
 

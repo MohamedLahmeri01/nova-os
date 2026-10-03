@@ -76,6 +76,23 @@ int main(void) {
 
     check(fs_init() == 0, "init", 0, 0);
 
+    /* Mirror pm_main's seed_binaries (guest-only blob wiring): the
+     * selftest asserts /bin/hi exists, so the host seeds a dummy. */
+    {
+        struct fs_node *hi = 0;
+        uint32_t got = 0;
+        uint8_t tiny[16];
+        memset(tiny, 0x90, sizeof(tiny));
+        check(fs_mkdir("/bin") == 0, "host-bin", 0, 0);
+        check(fs_create("/bin/hi", &hi) == 0 && hi != 0, "host-hi", 0,
+              0);
+        if (hi != 0) {
+            check(fs_write_node(hi, 0, tiny, sizeof(tiny), &got) == 0 &&
+                      got == sizeof(tiny),
+                  "host-seed", got, 0);
+        }
+    }
+
     /* Seed content. */
     rc = fs_lookup("/hello.txt", &n);
     check(rc == 0 && n != 0 && !n->is_dir, "seed", (unsigned long)rc, 0);

@@ -27,46 +27,100 @@
 
 extern uint8_t binary_init_bin_start[];
 extern uint8_t binary_init_bin_end[];
+extern uint8_t binary_hi_bin_start[];
+extern uint8_t binary_hi_bin_end[];
 
-/* Spawn the builtin init program (Phase 6: linked into the kernel;
- * exec-by-name arrives with the filesystem). Own process, PD, code
- * and stack; entry is _ustart at NOVA_USER_CODE (linker-asserted). */
-static void spawn_init(void) {
+/* Spawn a user image (Phase 7b: generalized from the Phase 6 init
+ * spawn). Own process, PD, code and stack; entry is _ustart at
+ * NOVA_USER_CODE (linker-asserted in every user binary). Returns the
+ * pid, or 0 on any failure (OOM/bad size: caller decides panic vs
+ * errno). The image bytes live in kernel memory (blob or FS node). */
+static uint32_t spawn_image(const uint8_t *img, uint32_t size) {
     struct process *p;
     struct addrspace *as;
-    uint32_t size;
     uint32_t frames;
     uint32_t code;
     uint32_t stack;
+    struct thread *t;
     p = process_create();
     as = addrspace_create();
     if (p == 0 || as == 0) {
-        nova_panic("init-no-proc");
+        return 0;
     }
     p->cr3 = as->pd;
-    size = (uint32_t)(binary_init_bin_end - binary_init_bin_start);
     frames = (size + 4095u) / 4096u;
     if (size == 0 || frames > 64u) {
-        nova_panic("init-bad-size");
+        return 0;
     }
     code = pmm_alloc_contig(frames);
     stack = pmm_alloc_contig(2);
     if (code == 0 || stack == 0) {
-        nova_panic("init-no-mem");
+        return 0;
     }
     for (uint32_t i = 0; i < size; i++) {
-        ((uint8_t *)code)[i] = binary_init_bin_start[i];
+        ((uint8_t *)code)[i] = img[i];
     }
     for (uint32_t f = 0; f < frames; f++) {
         addrspace_map(as, NOVA_USER_CODE + f * 4096u, code + f * 4096u, 1);
     }
     addrspace_map(as, NOVA_USER_STACK_TOP - 8192u, stack, 1);
     addrspace_map(as, NOVA_USER_STACK_TOP - 4096u, stack + 4096u, 1);
-    if (thread_create_user(p, NOVA_USER_CODE, NOVA_USER_STACK_TOP,
-                           stack, 0, 16u) == 0) {
+    t = thread_create_user(p, NOVA_USER_CODE, NOVA_USER_STACK_TOP,
+                           stack, 0, 16u);
+    if (t == 0) {
+        return 0;
+    }
+    return p->pid;
+}
+
+/* Spawn the builtin init program (Phase 6: linked into the kernel;
+ * exec-by-name arrives with the filesystem). */
+static void spawn_init(void) {
+    uint32_t size =
+        (uint32_t)(binary_init_bin_end - binary_init_bin_start);
+    if (spawn_image(binary_init_bin_start, size) == 0) {
         nova_panic("init-spawn-fail");
     }
     serial_puts("INIT-OK\n");
+}
+
+/* Seed builtin user binaries into ramfs (Phase 7b): the hi blob
+ * becomes /bin/hi (exec proof + shell `run` target). Runs after
+ * fs_init, before fs_selftest (which asserts the seed). */
+static void seed_binaries(void) {
+    struct fs_node *n = 0;
+    uint32_t size = (uint32_t)(binary_hi_bin_end - binary_hi_bin_start);
+    uint32_t got = 0;
+    if (fs_mkdir("/bin") != 0) {
+        nova_panic("bin-mkdir-fail");
+    }
+    if (fs_create("/bin/hi", &n) != 0 || n == 0) {
+        nova_panic("bin-create-fail");
+    }
+    if (fs_write_node(n, 0, binary_hi_bin_start, size, &got) != 0 ||
+        got != size) {
+        nova_panic("bin-seed-fail");
+    }
+}
+
+/* Spawn a program stored in the filesystem (Phase 7b exec). Path
+ * must name a regular file; its bytes become the new image. Returns
+ * the child pid, or a negative -errno (never panics: user input). */
+int32_t spawn_file(const char *path) {
+    struct fs_node *n = 0;
+    uint32_t pid;
+    int rc = fs_lookup(path, &n);
+    if (rc != 0) {
+        return rc;
+    }
+    if (n->is_dir) {
+        return -NOVA_EISDIR;
+    }
+    pid = spawn_image(n->data, n->size);
+    if (pid == 0) {
+        return -NOVA_ENOSPC;
+    }
+    return (int32_t)pid;
 }
 
 void nova_pm_main(const nova_boot_info_t *info) {
@@ -134,6 +188,7 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (fs_init() != 0) {
         nova_panic("fs-init-fail");
     }
+    seed_binaries();
     if (fs_selftest() != 0) {
         nova_panic("fs-selftest-fail");
     }
@@ -166,6 +221,11 @@ void nova_pm_main(const nova_boot_info_t *info) {
     }
     smp_boot();
     spawn_init();
+    /* Boot-time exec proof (Phase 7b): run /bin/hi from the FS. Its
+     * HI-OK line in the log proves spawn-by-name end to end. */
+    if (spawn_file("/bin/hi") < 0) {
+        nova_panic("exec-proof-fail");
+    }
 #ifdef NOVA_FAULT_TEST
     serial_puts("INJECT-FAULT\n");
     __asm__ volatile("ud2"); /* deliberate #UD: proves IDT->trap->panic */

@@ -31,7 +31,7 @@ static void sh_putdec(uint32_t v) {
 }
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run clear exit");
 }
 
 static void sh_echo(const char *line) {
@@ -137,6 +137,23 @@ static void sh_mkdir(const char *line) {
     }
 }
 
+static void sh_exec(const char *line) {
+    const char *path = sh_arg(line);
+    int32_t pid;
+    if (*path == 0) {
+        nova_puts("usage: run <path>");
+        return;
+    }
+    pid = nova_exec(path);
+    if (pid < 0) {
+        nova_puts("run failed");
+        return;
+    }
+    nova_print("child pid=", 10);
+    sh_putdec((uint32_t)pid);
+    nova_putchar('\n');
+}
+
 static void sh_run(const char *line) {
     if (line[0] == 0) {
         return;
@@ -159,6 +176,9 @@ static void sh_run(const char *line) {
         sh_mkdir(line);
     } else if (nova_strcmp(line, "clear") == 0) {
         sh_clear();
+    } else if (nova_strncmp(line, "run", 3) == 0 &&
+               (line[3] == 0 || line[3] == ' ')) {
+        sh_exec(line);
     } else if (nova_strcmp(line, "exit") == 0) {
         nova_puts("bye");
         nova_exit(0);
