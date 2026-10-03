@@ -102,6 +102,10 @@ No releases yet.
   `cat /ext/HELLO.TXT` proofs (lowercase correctly ENOENT),
   host T11 (20k-name fuzz) (ADR-0023). Fixed: leading-slash skip in
   split_parent, 15-vs-16 byte count, Shift scancodes for uppercase.
+- Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
+  v0.1 (extent layout, ordered metadata journal, refusal rules,
+  staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the
+  three implemented filesystems; arithmetic verified by execution.
 - Architecture specification (`docs/ARCHITECTURE.md`)
 - ADRs 0001–0008 (kernel arch, language, memory, scheduler, IPC,
   filesystem, security, license evaluation)

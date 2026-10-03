@@ -115,6 +115,9 @@ E820 memory map → COM1 serial → halt, in `NOVA-OS-CONSTRAINED`
     indirect, case-sensitive) grafted at /ext, shell reads it
     unchanged, 11/11 with host T11 (ADR-0023)
   - [ ] NOVA-FS design
+  - [x] 7f-DESIGN DONE: `docs/NOVA-FS.md` v0.1 (extent layout, ordered
+    metadata journal, refusal rules, staged plan) adopted in ADR-0024;
+    numbers verified by execution; implementation starts at 7f-1
 
 ## Phase 8 — Drivers
 
