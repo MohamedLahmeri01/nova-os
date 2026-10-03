@@ -115,6 +115,12 @@ static int ata_slave_read(uint32_t lba, uint8_t *dst) {
     return ata_read_sector(ATA_DRIVE_SLAVE, lba, dst);
 }
 
+/* FAT sector sink (Phase 7d, same disk). Write-through; the FAT
+ * layer invalidates its sector cache on every write. */
+static int ata_slave_write(uint32_t lba, const uint8_t *src) {
+    return ata_write_sector(ATA_DRIVE_SLAVE, lba, src);
+}
+
 /* Spawn a program stored in the filesystem (Phase 7b exec). Path
  * must name a regular file; its bytes become the new image. Returns
  * the child pid, or a negative -errno (never panics: user input). */
@@ -215,7 +221,7 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (fs_selftest() != 0) {
         nova_panic("fs-selftest-fail");
     }
-    if (fat_init(ata_slave_read) != 0) {
+    if (fat_init(ata_slave_read, ata_slave_write) != 0) {
         nova_panic("fat-init-fail");
     }
     if (fat_selftest() != 0) {

@@ -13,12 +13,16 @@
 #include "syscall/syscall.h"
 
 static fat_read_sector_t g_rs;
+static fat_write_sector_t g_ws;
 static uint32_t g_spc;
 static uint32_t g_rsvd;
 static uint32_t g_data_start;
 static uint32_t g_root_clus;
 static uint32_t g_total_sec;
+static uint32_t g_free_clusters;
 static uint8_t g_sec[512];
+static uint8_t g_cache[512];
+static uint32_t g_cache_lba = 0xFFFFFFFFu;
 
 #define FAT_EOF 0x0FFFFFF8u
 #define FAT_CHAIN_MAX 4096u
@@ -35,8 +39,6 @@ static uint32_t rd32(const uint8_t *p) {
 static int read_lba(uint32_t lba, uint8_t *dst) {
     /* 1-sector cache: dir scans re-read the same LBA per entry, and
      * every PIO sector costs hundreds of VM exits. Hit rate ~100%. */
-    static uint8_t cache[512];
-    static uint32_t cache_lba = 0xFFFFFFFFu;
     uint32_t i;
     if (g_rs == 0 || dst == 0) {
         return -NOVA_EINVAL;
@@ -44,28 +46,48 @@ static int read_lba(uint32_t lba, uint8_t *dst) {
     if (lba >= g_total_sec && g_total_sec != 0) {
         return -NOVA_EIO;
     }
-    if (lba == cache_lba) {
+    if (lba == g_cache_lba) {
         for (i = 0; i < 512u; i++) {
-            dst[i] = cache[i];
+            dst[i] = g_cache[i];
         }
         return NOVA_ESUCCESS;
     }
-    if (g_rs(lba, cache) != 0) {
+    if (g_rs(lba, g_cache) != 0) {
         return -NOVA_EIO;
     }
-    cache_lba = lba;
+    g_cache_lba = lba;
     for (i = 0; i < 512u; i++) {
-        dst[i] = cache[i];
+        dst[i] = g_cache[i];
     }
     return NOVA_ESUCCESS;
 }
 
-int fat_init(fat_read_sector_t rs) {
+/* Sector write through the callback + cache invalidate (single-entry
+ * cache: any write drops it; tiny disk, always correct). */
+static int write_lba(uint32_t lba, const uint8_t *src) {
+    if (g_ws == 0 || src == 0) {
+        return -NOVA_EINVAL;
+    }
+    if (lba >= g_total_sec && g_total_sec != 0) {
+        return -NOVA_EIO;
+    }
+    if (g_ws(lba, src) != 0) {
+        return -NOVA_EIO;
+    }
+    g_cache_lba = 0xFFFFFFFFu;
+    return NOVA_ESUCCESS;
+}
+
+static int fat_next(uint32_t clus, uint32_t *out);
+static const char *strip_disk(const char *path);
+
+int fat_init(fat_read_sector_t rs, fat_write_sector_t ws) {
     uint32_t rsvd, fats, spf;
-    if (rs == 0) {
+    if (rs == 0 || ws == 0) {
         return -NOVA_EINVAL;
     }
     g_rs = rs;
+    g_ws = ws;
     g_total_sec = 0; /* unknown until BPB parses: allow LBA0 read */
     if (rs(0, g_sec) != 0) {
         return -NOVA_EIO;
@@ -96,6 +118,22 @@ int fat_init(fat_read_sector_t rs) {
     if (g_root_clus < 2 || g_data_start >= g_total_sec) {
         return -NOVA_EIO;
     }
+    /* Count free clusters once (drives FSInfo + ENOSPC honesty). */
+    {
+        uint32_t total =
+            (g_total_sec - g_data_start) / (g_spc != 0 ? g_spc : 1u);
+        uint32_t free = 0;
+        for (uint32_t c = 2; c < total + 2u; c++) {
+            uint32_t v = 0;
+            if (fat_next(c, &v) != 0) {
+                return -NOVA_EIO;
+            }
+            if (v == 0) {
+                free++;
+            }
+        }
+        g_free_clusters = free;
+    }
     return NOVA_ESUCCESS;
 }
 
@@ -116,6 +154,24 @@ static int fat_next(uint32_t clus, uint32_t *out) {
     }
     *out = rd32(g_sec + (off % 512u)) & 0x0FFFFFFFu;
     return NOVA_ESUCCESS;
+}
+
+/* Set a FAT entry (read-modify-write the FAT sector). */
+static int fat_set(uint32_t clus, uint32_t val) {
+    uint32_t off = clus * 4u;
+    uint32_t lba;
+    if (clus < 2) {
+        return -NOVA_EINVAL;
+    }
+    lba = g_rsvd + off / 512u;
+    if (read_lba(lba, g_sec) != 0) {
+        return -NOVA_EIO;
+    }
+    g_sec[off % 512u] = (uint8_t)(val & 0xFFu);
+    g_sec[(off % 512u) + 1u] = (uint8_t)((val >> 8) & 0xFFu);
+    g_sec[(off % 512u) + 2u] = (uint8_t)((val >> 16) & 0xFFu);
+    g_sec[(off % 512u) + 3u] = (uint8_t)((val >> 24) & 0x0Fu);
+    return write_lba(lba, g_sec);
 }
 
 /* Uppercase + split "NAME.EXT" into space-padded 8.3 (11B + NUL flag).
@@ -407,6 +463,7 @@ int fat_stat(const char *path, uint32_t *size_out, int *is_dir_out) {
     uint8_t attr = 0;
     uint32_t size = 0;
     int rc;
+    path = strip_disk(path);
     if (path == 0) {
         return -NOVA_EINVAL;
     }
@@ -482,6 +539,7 @@ int fat_read_file(const char *path, uint8_t *dst, uint32_t max,
     uint32_t got = 0;
     uint32_t steps = 0;
     int rc;
+    path = strip_disk(path);
     if (path == 0 || dst == 0 || len_out == 0) {
         return -NOVA_EINVAL;
     }
@@ -544,7 +602,12 @@ int fat_list_dir(const char *path, uint32_t index, char *name_out) {
     uint32_t clus;
     uint32_t steps = 0;
     uint32_t seen = 0;
-    int rc = dir_clus(path, &dclus);
+    int rc;
+    path = strip_disk(path);
+    if (path == 0 || name_out == 0) {
+        return -NOVA_EINVAL;
+    }
+    rc = dir_clus(path, &dclus);
     if (rc != 0) {
         return rc;
     }
@@ -601,6 +664,592 @@ int fat_list_dir(const char *path, uint32_t index, char *name_out) {
     return -NOVA_ENOENT;
 }
 
+/* ---------- write path (Phase 7d) ---------- */
+
+static uint32_t total_clusters(void) {
+    if (g_spc == 0 || g_total_sec <= g_data_start) {
+        return 0;
+    }
+    return (g_total_sec - g_data_start) / g_spc;
+}
+
+static void buf_zero(uint8_t *b) {
+    for (uint32_t i = 0; i < 512u; i++) {
+        b[i] = 0;
+    }
+}
+
+/* Push the in-memory free count to the FSInfo sector (best-effort
+ * hygiene for foreign readers; our alloc decisions use g_free). */
+static void fsinfo_write(void) {
+    if (read_lba(1, g_sec) != 0) {
+        return;
+    }
+    if (rd32(g_sec) != 0x41615252u ||
+        rd32(g_sec + 484) != 0x61417272u) {
+        return;
+    }
+    g_sec[488] = (uint8_t)(g_free_clusters & 0xFFu);
+    g_sec[489] = (uint8_t)((g_free_clusters >> 8) & 0xFFu);
+    g_sec[490] = (uint8_t)((g_free_clusters >> 16) & 0xFFu);
+    g_sec[491] = (uint8_t)((g_free_clusters >> 24) & 0xFFu);
+    write_lba(1, g_sec);
+}
+
+static int zero_cluster(uint32_t clus) {
+    static uint8_t zb[512];
+    uint32_t lba;
+    if (clus < 2) {
+        return -NOVA_EINVAL;
+    }
+    buf_zero(zb);
+    lba = clus_lba(clus);
+    for (uint32_t s = 0; s < g_spc; s++) {
+        if (write_lba(lba + s, zb) != 0) {
+            return -NOVA_EIO;
+        }
+    }
+    return NOVA_ESUCCESS;
+}
+
+/* Allocate n fresh clusters as a chain (zeroed data). Empty files
+ * need none (cluster 0 = no chain, size 0). */
+static int alloc_chain(uint32_t n, uint32_t *first_out) {
+    uint32_t prev = 0;
+    uint32_t first = 0;
+    uint32_t found = 0;
+    uint32_t total;
+    if (first_out == 0) {
+        return -NOVA_EINVAL;
+    }
+    if (n == 0) {
+        *first_out = 0;
+        return NOVA_ESUCCESS;
+    }
+    total = total_clusters();
+    if (total == 0) {
+        return -NOVA_EIO;
+    }
+    for (uint32_t c = 2; c < total + 2u && found < n; c++) {
+        uint32_t v = 0;
+        if (fat_next(c, &v) != 0) {
+            return -NOVA_EIO;
+        }
+        if (v != 0) {
+            continue;
+        }
+        if (fat_set(c, FAT_EOF) != 0) {
+            return -NOVA_EIO;
+        }
+        if (zero_cluster(c) != 0) {
+            return -NOVA_EIO;
+        }
+        if (prev != 0) {
+            if (fat_set(prev, c) != 0) {
+                return -NOVA_EIO;
+            }
+        } else {
+            first = c;
+        }
+        prev = c;
+        found++;
+    }
+    if (found < n) {
+        /* Short: release what we took. The free count was never
+         * decremented (that happens only on success), so don't touch
+         * it here; just rewrite FSInfo for the entries. */
+        uint32_t c = first;
+        while (c >= 2 && c < FAT_EOF) {
+            uint32_t nx = 0;
+            if (fat_next(c, &nx) != 0) {
+                break;
+            }
+            fat_set(c, 0);
+            c = nx;
+        }
+        return -NOVA_ENOSPC;
+    }
+    g_free_clusters -= found;
+    fsinfo_write();
+    *first_out = first;
+    return NOVA_ESUCCESS;
+}
+
+/* Release a chain (entries zeroed; data left stale, zeroed on next
+ * alloc by alloc_chain). */
+static int free_chain(uint32_t first) {
+    uint32_t c = first;
+    uint32_t steps = 0;
+    while (c >= 2 && c < FAT_EOF && steps++ < FAT_CHAIN_MAX) {
+        uint32_t nx = 0;
+        if (fat_next(c, &nx) != 0) {
+            return -NOVA_EIO;
+        }
+        if (fat_set(c, 0) != 0) {
+            return -NOVA_EIO;
+        }
+        if (g_free_clusters < 0xFFFFFFFFu) {
+            g_free_clusters++;
+        }
+        c = nx;
+    }
+    fsinfo_write();
+    return (c == 0 || c >= FAT_EOF) ? NOVA_ESUCCESS : -NOVA_EIO;
+}
+
+static uint32_t chain_len(uint32_t first) {
+    uint32_t c = first;
+    uint32_t n = 0;
+    while (c >= 2 && c < FAT_EOF && n < FAT_CHAIN_MAX) {
+        uint32_t nx = 0;
+        n++;
+        if (fat_next(c, &nx) != 0) {
+            break;
+        }
+        c = nx;
+    }
+    return n;
+}
+
+/* Patch the size field of a file's dir entry (re-resolve by path). */
+static int entry_set_size(const char *path, uint32_t size) {
+    uint32_t dclus;
+    uint8_t want[11];
+    int rc = split_parent(path, &dclus, want);
+    uint32_t clus;
+    uint32_t steps = 0;
+    if (rc != 0) {
+        return rc;
+    }
+    clus = dclus;
+    while (clus < FAT_EOF && steps++ < FAT_CHAIN_MAX) {
+        uint32_t per = g_spc * 16u;
+        for (uint32_t ent = 0; ent < per; ent++) {
+            uint32_t lba = clus_lba(clus) + (ent * 32u) / 512u;
+            uint32_t off = (ent * 32u) % 512u;
+            const uint8_t *e;
+            if (read_lba(lba, g_sec) != 0) {
+                return -NOVA_EIO;
+            }
+            e = g_sec + off;
+            if (e[0] == 0x00) {
+                return -NOVA_ENOENT;
+            }
+            if (e[0] == 0xE5 || e[11] == 0x0F ||
+                (e[11] & 0x08u) != 0) {
+                continue;
+            }
+            if (name_eq(e, want)) {
+                g_sec[off + 28u] = (uint8_t)(size & 0xFFu);
+                g_sec[off + 29u] = (uint8_t)((size >> 8) & 0xFFu);
+                g_sec[off + 30u] = (uint8_t)((size >> 16) & 0xFFu);
+                g_sec[off + 31u] = (uint8_t)((size >> 24) & 0xFFu);
+                return write_lba(lba, g_sec);
+            }
+        }
+        if (fat_next(clus, &clus) != 0) {
+            return -NOVA_EIO;
+        }
+    }
+    return -NOVA_ENOENT;
+}
+
+/* Patch entry cluster + size (used at create: cluster assigned after
+ * the slot is written). Same scan; sets both fields at once. */
+static int entry_set_clu_size(const char *path, uint32_t clus_new,
+                              uint32_t size) {
+    uint32_t dclus;
+    uint8_t want[11];
+    int rc = split_parent(path, &dclus, want);
+    uint32_t clus;
+    uint32_t steps = 0;
+    if (rc != 0) {
+        return rc;
+    }
+    clus = dclus;
+    while (clus < FAT_EOF && steps++ < FAT_CHAIN_MAX) {
+        uint32_t per = g_spc * 16u;
+        for (uint32_t ent = 0; ent < per; ent++) {
+            uint32_t lba = clus_lba(clus) + (ent * 32u) / 512u;
+            uint32_t off = (ent * 32u) % 512u;
+            const uint8_t *e;
+            if (read_lba(lba, g_sec) != 0) {
+                return -NOVA_EIO;
+            }
+            e = g_sec + off;
+            if (e[0] == 0x00) {
+                return -NOVA_ENOENT;
+            }
+            if (e[0] == 0xE5 || e[11] == 0x0F ||
+                (e[11] & 0x08u) != 0) {
+                continue;
+            }
+            if (name_eq(e, want)) {
+                g_sec[off + 20u] = (uint8_t)((clus_new >> 16) & 0xFFu);
+                g_sec[off + 21u] = (uint8_t)((clus_new >> 24) & 0xFFu);
+                g_sec[off + 26u] = (uint8_t)(clus_new & 0xFFu);
+                g_sec[off + 27u] = (uint8_t)((clus_new >> 8) & 0xFFu);
+                g_sec[off + 28u] = (uint8_t)(size & 0xFFu);
+                g_sec[off + 29u] = (uint8_t)((size >> 8) & 0xFFu);
+                g_sec[off + 30u] = (uint8_t)((size >> 16) & 0xFFu);
+                g_sec[off + 31u] = (uint8_t)((size >> 24) & 0xFFu);
+                return write_lba(lba, g_sec);
+            }
+        }
+        if (fat_next(clus, &clus) != 0) {
+            return -NOVA_EIO;
+        }
+    }
+    return -NOVA_ENOENT;
+}
+
+/* Find a free dir slot (0x00 or 0xE5); grow the dir by one cluster
+ * when full. Returns the slot's lba + offset. */
+static int dir_free_slot(uint32_t dclus, uint32_t *lba_out,
+                         uint32_t *off_out) {
+    uint32_t clus = dclus;
+    uint32_t steps = 0;
+    if (dclus < 2 || lba_out == 0 || off_out == 0) {
+        return -NOVA_EINVAL;
+    }
+    for (;;) {
+        uint32_t per = g_spc * 16u;
+        for (uint32_t ent = 0; ent < per; ent++) {
+            uint32_t lba = clus_lba(clus) + (ent * 32u) / 512u;
+            uint32_t off = (ent * 32u) % 512u;
+            if (read_lba(lba, g_sec) != 0) {
+                return -NOVA_EIO;
+            }
+            if (g_sec[off] == 0x00 || g_sec[off] == 0xE5) {
+                *lba_out = lba;
+                *off_out = off;
+                return NOVA_ESUCCESS;
+            }
+        }
+        /* Full cluster: append a fresh zeroed one to the dir chain. */
+        {
+            uint32_t nc = 0;
+            uint32_t tail = clus;
+            uint32_t tsteps = 0;
+            if (steps++ >= FAT_CHAIN_MAX) {
+                return -NOVA_EIO;
+            }
+            while (tail < FAT_EOF && tsteps++ < FAT_CHAIN_MAX) {
+                uint32_t nx = 0;
+                if (fat_next(tail, &nx) != 0) {
+                    return -NOVA_EIO;
+                }
+                if (nx >= FAT_EOF) {
+                    break;
+                }
+                tail = nx;
+            }
+            if (alloc_chain(1, &nc) != 0) {
+                return -NOVA_ENOSPC;
+            }
+            if (fat_set(tail, nc) != 0) {
+                return -NOVA_EIO;
+            }
+            clus = nc;
+        }
+    }
+}
+
+static void entry_fill(uint8_t *e, const uint8_t want[11], uint8_t attr) {
+    for (uint32_t i = 0; i < 11u; i++) {
+        e[i] = want[i];
+    }
+    e[11] = attr;
+    for (uint32_t i = 12; i < 32u; i++) {
+        e[i] = 0;
+    }
+}
+
+int fat_create_file(const char *path) {
+    uint32_t dclus;
+    uint8_t want[11];
+    uint32_t lba, off;
+    uint32_t dummy_clus = 0;
+    uint8_t dummy_attr = 0;
+    uint32_t dummy_size = 0;
+    int rc;
+    path = strip_disk(path);
+    if (path == 0) {
+        return -NOVA_EINVAL;
+    }
+    rc = split_parent(path, &dclus, want);
+    if (rc != 0) {
+        return rc;
+    }
+    /* Refuse when anything (file or dir) already has the name. */
+    if (dir_find(dclus, want, &dummy_clus, &dummy_attr, &dummy_size) ==
+        0) {
+        return -NOVA_EEXIST;
+    }
+    if (dir_free_slot(dclus, &lba, &off) != 0) {
+        return -NOVA_ENOSPC;
+    }
+    if (read_lba(lba, g_sec) != 0) {
+        return -NOVA_EIO;
+    }
+    entry_fill(g_sec + off, want, 0x20);
+    return write_lba(lba, g_sec);
+}
+
+int fat_write_at(const char *path, uint32_t off, const uint8_t *src,
+                 uint32_t len) {
+    uint32_t dclus;
+    uint8_t want[11];
+    uint32_t clus = 0;
+    uint8_t attr = 0;
+    uint32_t size = 0;
+    uint32_t end;
+    uint32_t need_cls, have_cls;
+    int rc;
+    path = strip_disk(path);
+    if (path == 0 || (src == 0 && len != 0)) {
+        return -NOVA_EINVAL;
+    }
+    if (len == 0) {
+        return NOVA_ESUCCESS;
+    }
+    end = off + len;
+    if (end < off || end > FS_MAX_FILE) {
+        return -NOVA_ENOSPC;
+    }
+    rc = split_parent(path, &dclus, want);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = dir_find(dclus, want, &clus, &attr, &size);
+    if (rc != 0) {
+        return rc;
+    }
+    if ((attr & 0x10u) != 0) {
+        return -NOVA_EISDIR;
+    }
+    /* Grow the chain when the write extends past it. */
+    have_cls = (clus == 0) ? 0 : chain_len(clus);
+    need_cls = (end + 511u) / 512u;
+    if (need_cls > have_cls) {
+        uint32_t first_new = 0;
+        uint32_t tail = clus;
+        uint32_t tsteps = 0;
+        if (alloc_chain(need_cls - have_cls, &first_new) != 0) {
+            return -NOVA_ENOSPC;
+        }
+        if (clus == 0) {
+            rc = entry_set_clu_size(path, first_new, end);
+            if (rc != 0) {
+                return rc;
+            }
+            clus = first_new;
+        } else {
+            while (tail >= 2 && tsteps++ < FAT_CHAIN_MAX) {
+                uint32_t nx = 0;
+                if (fat_next(tail, &nx) != 0) {
+                    return -NOVA_EIO;
+                }
+                if (nx >= FAT_EOF) {
+                    break;
+                }
+                tail = nx;
+            }
+            if (fat_set(tail, first_new) != 0) {
+                return -NOVA_EIO;
+            }
+        }
+    }
+    /* Sector writes (partial edges merge via read-modify-write). */
+    {
+        uint32_t pos = off;
+        uint32_t left = len;
+        uint32_t c = clus;
+        uint32_t skip = off / 512u;
+        uint32_t ssteps = 0;
+        while (skip-- > 0 && ssteps++ < FAT_CHAIN_MAX) {
+            if (fat_next(c, &c) != 0 || c < 2) {
+                return -NOVA_EIO;
+            }
+        }
+        while (left > 0) {
+            uint32_t lba = clus_lba(c);
+            uint32_t so = pos % 512u;
+            uint32_t n = 512u - so;
+            if (n > left) {
+                n = left;
+            }
+            if (n < 512u) {
+                if (read_lba(lba, g_sec) != 0) {
+                    return -NOVA_EIO;
+                }
+                for (uint32_t i = 0; i < n; i++) {
+                    g_sec[so + i] = src[i];
+                }
+                if (write_lba(lba, g_sec) != 0) {
+                    return -NOVA_EIO;
+                }
+            } else {
+                /* Full sector: copy via scratch (no caller aliasing
+                 * assumptions across the callback boundary). */
+                if (read_lba(lba, g_sec) != 0) {
+                    return -NOVA_EIO;
+                }
+                for (uint32_t i = 0; i < 512u; i++) {
+                    g_sec[i] = src[i];
+                }
+                if (write_lba(lba, g_sec) != 0) {
+                    return -NOVA_EIO;
+                }
+            }
+            src += n;
+            pos += n;
+            left -= n;
+            if (left > 0) {
+                if (fat_next(c, &c) != 0 || c < 2) {
+                    return -NOVA_EIO;
+                }
+            }
+        }
+    }
+    if (end > size) {
+        rc = entry_set_size(path, end);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return NOVA_ESUCCESS;
+}
+
+int fat_delete(const char *path) {
+    uint32_t dclus;
+    uint8_t want[11];
+    uint32_t clus = 0;
+    uint8_t attr = 0;
+    uint32_t size = 0;
+    uint32_t ent_lba = 0, ent_off = 0;
+    uint32_t c;
+    uint32_t steps = 0;
+    int rc;
+    int found = 0;
+    path = strip_disk(path);
+    if (path == 0) {
+        return -NOVA_EINVAL;
+    }
+    rc = split_parent(path, &dclus, want);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = dir_find(dclus, want, &clus, &attr, &size);
+    if (rc != 0) {
+        return rc;
+    }
+    if ((attr & 0x10u) != 0) {
+        return -NOVA_EISDIR;
+    }
+    /* Locate the entry position for the 0xE5 mark. */
+    c = dclus;
+    while (c < FAT_EOF && steps++ < FAT_CHAIN_MAX && !found) {
+        uint32_t per = g_spc * 16u;
+        for (uint32_t ent = 0; ent < per; ent++) {
+            uint32_t l = clus_lba(c) + (ent * 32u) / 512u;
+            uint32_t o = (ent * 32u) % 512u;
+            const uint8_t *e;
+            if (read_lba(l, g_sec) != 0) {
+                return -NOVA_EIO;
+            }
+            e = g_sec + o;
+            if (e[0] == 0x00) {
+                break;
+            }
+            if (e[0] == 0xE5 || e[11] == 0x0F ||
+                (e[11] & 0x08u) != 0) {
+                continue;
+            }
+            if (name_eq(e, want)) {
+                ent_lba = l;
+                ent_off = o;
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            if (fat_next(c, &c) != 0) {
+                return -NOVA_EIO;
+            }
+        }
+    }
+    if (!found) {
+        return -NOVA_ENOENT;
+    }
+    if (clus >= 2 && size > 0) {
+        if (free_chain(clus) != 0) {
+            return -NOVA_EIO;
+        }
+    }
+    if (read_lba(ent_lba, g_sec) != 0) {
+        return -NOVA_EIO;
+    }
+    g_sec[ent_off] = 0xE5;
+    return write_lba(ent_lba, g_sec);
+}
+
+int fat_mkdir(const char *path) {
+    uint32_t dclus;
+    uint8_t want[11];
+    uint32_t lba, off;
+    uint32_t nc = 0;
+    uint32_t dummy_clus = 0;
+    uint8_t dummy_attr = 0;
+    uint32_t dummy_size = 0;
+    int rc;
+    path = strip_disk(path);
+    if (path == 0) {
+        return -NOVA_EINVAL;
+    }
+    rc = split_parent(path, &dclus, want);
+    if (rc != 0) {
+        return rc;
+    }
+    if (dir_find(dclus, want, &dummy_clus, &dummy_attr, &dummy_size) ==
+        0) {
+        return -NOVA_EEXIST;
+    }
+    if (alloc_chain(1, &nc) != 0) {
+        return -NOVA_ENOSPC;
+    }
+    /* Dot entries: . -> self, .. -> parent dir's cluster. */
+    {
+        uint32_t dlba = clus_lba(nc);
+        if (read_lba(dlba, g_sec) != 0) {
+            return -NOVA_EIO;
+        }
+        buf_zero(g_sec);
+        entry_fill(g_sec, (const uint8_t *)".          ", 0x10);
+        g_sec[26] = (uint8_t)(nc & 0xFFu);
+        g_sec[27] = (uint8_t)((nc >> 8) & 0xFFu);
+        entry_fill(g_sec + 32, (const uint8_t *)"..         ", 0x10);
+        {
+            uint32_t pc = dclus;
+            g_sec[32 + 26] = (uint8_t)(pc & 0xFFu);
+            g_sec[32 + 27] = (uint8_t)((pc >> 8) & 0xFFu);
+        }
+        if (write_lba(dlba, g_sec) != 0) {
+            return -NOVA_EIO;
+        }
+    }
+    if (dir_free_slot(dclus, &lba, &off) != 0) {
+        return -NOVA_ENOSPC;
+    }
+    if (read_lba(lba, g_sec) != 0) {
+        return -NOVA_EIO;
+    }
+    entry_fill(g_sec + off, want, 0x10);
+    g_sec[off + 26] = (uint8_t)(nc & 0xFFu);
+    g_sec[off + 27] = (uint8_t)((nc >> 8) & 0xFFu);
+    return write_lba(lba, g_sec);
+}
+
 static int fat_eq(const uint8_t *a, const char *b, uint32_t n) {
     for (uint32_t i = 0; i < n; i++) {
         if (a[i] != (uint8_t)b[i]) {
@@ -608,6 +1257,21 @@ static int fat_eq(const uint8_t *a, const char *b, uint32_t n) {
         }
     }
     return 1;
+}
+
+/* Path convention (Phase 7d): absolute paths with an optional /disk
+ * prefix (the VFS graft passes full paths; tests use bare ones).
+ * "/disk" itself maps to the FAT root "/". */
+static const char *strip_disk(const char *path) {
+    if (path != 0 && path[0] == '/' && path[1] == 'd' &&
+        path[2] == 'i' && path[3] == 's' && path[4] == 'k' &&
+        (path[5] == 0 || path[5] == '/')) {
+        if (path[5] == 0) {
+            return "/";
+        }
+        return path + 5;
+    }
+    return path;
 }
 
 int fat_selftest(void) {
@@ -681,6 +1345,82 @@ int fat_selftest(void) {
     }
     if (fat_read_file("/DOCS", buf, sizeof(buf), &got) != -NOVA_EISDIR) {
         serial_puts("FAT-FAIL eisdir\n");
+        return -1;
+    }
+    /* Write round-trips on scratch files (hermetic: deleted after).
+     * Small file: byte-exact verify. Big file (3000B = 6 clusters):
+     * chain alloc + grow proof by size (host fuzzes full bytes). */
+    if (fat_create_file("/W.TXT") != 0) {
+        serial_puts("FAT-FAIL create\n");
+        return -1;
+    }
+    if (fat_create_file("/W.TXT") != -NOVA_EEXIST) {
+        serial_puts("FAT-FAIL exist\n");
+        return -1;
+    }
+    {
+        uint32_t i;
+        for (i = 0; i < 100u; i++) {
+            buf[i] = (uint8_t)((i * 7u + 3u) & 0xFFu);
+        }
+        if (fat_write_at("/W.TXT", 0, buf, 100u) != 0) {
+            serial_puts("FAT-FAIL write\n");
+            return -1;
+        }
+        for (i = 0; i < 512u; i++) {
+            buf[i] = 0;
+        }
+        if (fat_read_file("/W.TXT", buf, sizeof(buf), &got) != 0 ||
+            got != 100u) {
+            serial_puts("FAT-FAIL reread\n");
+            return -1;
+        }
+        for (i = 0; i < 100u; i++) {
+            if (buf[i] != (uint8_t)((i * 7u + 3u) & 0xFFu)) {
+                break;
+            }
+        }
+        if (i != 100u) {
+            serial_puts("FAT-FAIL bytes\n");
+            return -1;
+        }
+    }
+    if (fat_create_file("/BIG.BIN") != 0) {
+        serial_puts("FAT-FAIL big-create\n");
+        return -1;
+    }
+    {
+        uint32_t i;
+        for (i = 0; i < 512u; i++) {
+            buf[i] = (uint8_t)(i & 0xFFu);
+        }
+        for (uint32_t off = 0; off < 3000u; off += 512u) {
+            uint32_t n = 3000u - off;
+            if (n > 512u) {
+                n = 512u;
+            }
+            if (fat_write_at("/BIG.BIN", off, buf, n) != 0) {
+                serial_puts("FAT-FAIL big-write\n");
+                return -1;
+            }
+        }
+    }
+    if (fat_stat("/BIG.BIN", &size, &is_dir) != 0 || size != 3000u ||
+        is_dir) {
+        serial_puts("FAT-FAIL big-size\n");
+        return -1;
+    }
+    if (fat_delete("/W.TXT") != 0 || fat_delete("/BIG.BIN") != 0) {
+        serial_puts("FAT-FAIL delete\n");
+        return -1;
+    }
+    if (fat_stat("/W.TXT", &size, &is_dir) != -NOVA_ENOENT ||
+        fat_stat("/BIG.BIN", &size, &is_dir) != -NOVA_ENOENT) {
+        serial_puts("FAT-FAIL gone\n");
+        return -1;
+    }
+    if (fat_delete("/W.TXT") != -NOVA_ENOENT) {
+        serial_puts("FAT-FAIL del-missing\n");
         return -1;
     }
     serial_puts("FAT-OK\n");

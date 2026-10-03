@@ -90,6 +90,12 @@ No releases yet.
   `cat /disk/hello.txt` proofs, host T10 (20k-path fuzz) (ADR-0021).
   Fixed: IDT loaded before slow polling (timer-tick triple fault),
   fast bounded ATA spins, ENOTDIR propagation, BPB offset 32.
+- Phase 7d FAT32 write (tested 2026-10-03, `nova test` 10/10): ATA
+  sector writes, FAT allocator + create/write-at/delete/mkdir,
+  write-through syscalls with disk O_CREAT, shell `put`, interactive
+  `put`/`cat` proof, hermetic guest + host byte-exact tests
+  (ADR-0022). Fixed: empty-file materialize, fresh-VDI write stalls,
+  ENOTDIR propagation, alloc-rollback counting.
 - Architecture specification (`docs/ARCHITECTURE.md`)
 - ADRs 0001–0008 (kernel arch, language, memory, scheduler, IPC,
   filesystem, security, license evaluation)

@@ -24,4 +24,8 @@ static inline uint16_t arch_inw(uint16_t port) {
     return r;
 }
 
+static inline void arch_outw(uint16_t port, uint16_t val) {
+    __asm__ volatile("outw %0, %1" :: "a"(val), "Nd"(port));
+}
+
 #endif /* NOVA_ARCH_X86_64_IO_H */

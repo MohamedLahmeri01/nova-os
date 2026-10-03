@@ -214,19 +214,24 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
     if (p == 0) {
         return -NOVA_EINVAL;
     }
-    /* /disk graft (Phase 7c): FAT is read-only; materialize the whole
-     * file into a detached node owned by the description. */
+    /* /disk graft (Phase 7c/d): FAT files materialize into a detached
+     * node owned by the description. Writes go through to the disk
+     * (write-through via the stored path); reads use the node copy. */
     if (fs_is_disk_path(kpath)) {
         uint8_t *data;
         uint32_t size = 0;
         uint32_t got = 0;
+        uint32_t pi = 0;
         int is_dir = 0;
         struct fs_node *n;
-        if ((flags & FS_O_ACCMODE) != FS_O_RDONLY ||
-            (flags & FS_O_CREAT) != 0) {
-            return -NOVA_EROFS;
+        rc = fat_stat(kpath, &size, &is_dir);
+        if (rc == -NOVA_ENOENT && (flags & FS_O_CREAT) != 0) {
+            rc = fat_create_file(kpath);
+            if (rc == 0) {
+                size = 0;
+                is_dir = 0;
+            }
         }
-        rc = fat_stat(fs_disk_rel(kpath), &size, &is_dir);
         if (rc != 0) {
             return rc;
         }
@@ -257,7 +262,13 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
         n->data = data;
         n->size = 0;
         n->cap = size;
-        rc = fat_read_file(fs_disk_rel(kpath), data, size, &got);
+        if (size == 0) {
+            /* Empty file: no bytes to fetch (and no buffer). */
+            got = 0;
+            rc = 0;
+        } else {
+            rc = fat_read_file(kpath, data, size, &got);
+        }
         if (rc != 0 || got != size) {
             kfree(n);
             if (data != 0) {
@@ -275,6 +286,15 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
             return -NOVA_ENOSPC;
         }
         f->owns_node = 1;
+        /* Write-through needs the FAT path (node copy is a cache). */
+        while (pi <= FS_MAX_PATH) {
+            f->fat_path[pi] = kpath[pi];
+            if (kpath[pi] == 0) {
+                break;
+            }
+            pi++;
+        }
+        f->fat_path[FS_MAX_PATH] = 0;
         rc = fs_fd_alloc(p, f);
         if (rc < 0) {
             fs_file_free(f);
@@ -374,6 +394,64 @@ static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
     if (!f->writable) {
         return -NOVA_EBADF;
     }
+    /* FAT write-through (Phase 7d): node copy is a cache; the disk is
+     * truth. Grow the node buffer first (OOM fails before any disk
+     * mutation), then FAT, then refresh the cache copy. */
+    if (f->owns_node) {
+        while (total < len) {
+            uint32_t want = len - total;
+            uint32_t i;
+            int rc;
+            uint32_t end;
+            if (want > sizeof(kbuf)) {
+                want = sizeof(kbuf);
+            }
+            for (i = 0; i < want; i++) {
+                kbuf[i] = *(volatile uint8_t *)(buf + total + i);
+            }
+            end = f->off + want;
+            if (end > f->node->cap) {
+                uint32_t nc = (f->node->cap != 0) ? f->node->cap : 64u;
+                uint8_t *nd;
+                while (nc < end) {
+                    nc *= 2u;
+                }
+                if (nc > FS_MAX_FILE) {
+                    nc = FS_MAX_FILE;
+                }
+                if (end > nc) {
+                    return (total != 0) ? (int32_t)total
+                                       : -NOVA_ENOSPC;
+                }
+                nd = (uint8_t *)kmalloc(nc);
+                if (nd == 0) {
+                    return (total != 0) ? (int32_t)total
+                                       : -NOVA_ENOSPC;
+                }
+                for (i = 0; i < f->node->size; i++) {
+                    nd[i] = f->node->data[i];
+                }
+                if (f->node->data != 0) {
+                    kfree(f->node->data);
+                }
+                f->node->data = nd;
+                f->node->cap = nc;
+            }
+            rc = fat_write_at(f->fat_path, f->off, kbuf, want);
+            if (rc != 0) {
+                return (total != 0) ? (int32_t)total : rc;
+            }
+            for (i = 0; i < want; i++) {
+                f->node->data[f->off + i] = kbuf[i];
+            }
+            if (end > f->node->size) {
+                f->node->size = end;
+            }
+            f->off = end;
+            total += want;
+        }
+        return (int32_t)total;
+    }
     while (total < len) {
         uint32_t want = len - total;
         uint32_t got = 0;
@@ -426,7 +504,7 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
     /* /disk graft: FAT listing (rel "" = FAT root). */
     if (fs_is_disk_path(kpath)) {
         char kname[FS_MAX_NAME];
-        int r = fat_list_dir(fs_disk_rel(kpath), index, kname);
+        int r = fat_list_dir(kpath, index, kname);
         if (r < 0) {
             return r;
         }
@@ -459,7 +537,7 @@ static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
         return plen;
     }
     if (fs_is_disk_path(kpath)) {
-        return -NOVA_EROFS;
+        return fat_mkdir(kpath);
     }
     return fs_mkdir(kpath);
 }

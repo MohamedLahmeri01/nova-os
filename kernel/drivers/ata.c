@@ -41,10 +41,12 @@
 #define ATA_SR_DRQ 0x08u
 
 #define ATA_CMD_READ 0x20u
+#define ATA_CMD_WRITE 0x30u
 /* Bounded spins: each poll is a VM exit under VirtualBox (~µs), so
- * 10M polls = tens of seconds of wall time. 500k is still ~1000x a
- * real disk's response and fails fast on absent drives. */
-#define ATA_SPIN_MAX 500000u
+ * 10M polls = tens of seconds of wall time. 2M absorbs dynamic-VDI
+ * first-write allocation stalls (~seconds worst case) yet still fails
+ * audibly on dead drives (a learned flake: fresh-VDI first boot). */
+#define ATA_SPIN_MAX 2000000u
 
 /* LBA28 covers 128GiB; our disks are MBs (reject the rest loudly). */
 #define ATA_LBA_MAX 0x0FFFFFFFu
@@ -123,6 +125,45 @@ int ata_read_sector(uint32_t drive, uint32_t lba, uint8_t *dst) {
     return rc;
 }
 
+int ata_write_sector(uint32_t drive, uint32_t lba, const uint8_t *src) {
+    int rc;
+    if (src == 0) {
+        return -NOVA_EINVAL;
+    }
+    if (drive > ATA_DRIVE_SLAVE || lba > ATA_LBA_MAX) {
+        return -NOVA_EINVAL;
+    }
+    __asm__ volatile("cli" ::: "memory");
+    rc = wait_clear_bsy();
+    if (rc == 0) {
+        arch_outb(ATA_P_DRIVE,
+                  (uint8_t)(0xE0u | (drive << 4) |
+                            ((lba >> 24) & 0x0Fu)));
+        arch_inb(ATA_P_ALT);
+        arch_inb(ATA_P_ALT);
+        arch_inb(ATA_P_ALT);
+        arch_inb(ATA_P_ALT);
+        arch_outb(ATA_P_COUNT, 1);
+        arch_outb(ATA_P_LBA0, (uint8_t)(lba & 0xFFu));
+        arch_outb(ATA_P_LBA1, (uint8_t)((lba >> 8) & 0xFFu));
+        arch_outb(ATA_P_LBA2, (uint8_t)((lba >> 16) & 0xFFu));
+        arch_outb(ATA_P_CMD, ATA_CMD_WRITE);
+        rc = wait_drq();
+        if (rc == 0) {
+            for (uint32_t i = 0; i < 256u; i++) {
+                uint16_t w = (uint16_t)src[2u * i] |
+                             ((uint16_t)src[2u * i + 1u] << 8);
+                arch_outw(ATA_P_DATA, w);
+            }
+            /* WRITE SECTORS signals completion via a second DRQ->idle
+             * cycle; poll BSY clear (bounded) to confirm the write. */
+            rc = wait_clear_bsy();
+        }
+    }
+    __asm__ volatile("sti" ::: "memory");
+    return rc;
+}
+
 int ata_selftest(void) {
     /* 512B stack is fine; 1KB+ frames trip __chkstk_ms (no libgcc). */
     static uint8_t sec[512];
@@ -148,6 +189,39 @@ int ata_selftest(void) {
     if (!found) {
         serial_puts("ATA-FAIL tag\n");
         return -1;
+    }
+    /* Write path (slave scratch LBA 100: past the FAT volume's 64
+     * sectors, inside the 1MB image; pattern, verify, restore zeros
+     * so the fixture stays pristine for the FAT tests). */
+    {
+        uint32_t i;
+        for (i = 0; i < 512u; i++) {
+            sec[i] = (uint8_t)(i & 0xFFu);
+        }
+        if (ata_write_sector(ATA_DRIVE_SLAVE, 100, sec) != 0) {
+            serial_puts("ATA-FAIL write\n");
+            return -1;
+        }
+        for (i = 0; i < 512u; i++) {
+            sec[i] = 0;
+        }
+        if (ata_read_sector(ATA_DRIVE_SLAVE, 100, sec) != 0) {
+            serial_puts("ATA-FAIL reread\n");
+            return -1;
+        }
+        for (i = 0; i < 512u; i++) {
+            if (sec[i] != (uint8_t)(i & 0xFFu)) {
+                serial_puts("ATA-FAIL data\n");
+                return -1;
+            }
+        }
+        for (i = 0; i < 512u; i++) {
+            sec[i] = 0;
+        }
+        if (ata_write_sector(ATA_DRIVE_SLAVE, 100, sec) != 0) {
+            serial_puts("ATA-FAIL restore\n");
+            return -1;
+        }
     }
     serial_puts("ATA-OK\n");
     return NOVA_ESUCCESS;

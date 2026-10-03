@@ -31,7 +31,7 @@ static void sh_putdec(uint32_t v) {
 }
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put clear exit");
 }
 
 static void sh_echo(const char *line) {
@@ -137,6 +137,37 @@ static void sh_mkdir(const char *line) {
     }
 }
 
+static void sh_put(const char *line) {
+    const char *p = sh_arg(line);
+    char path[64];
+    const char *text;
+    uint32_t i = 0;
+    int32_t fd;
+    uint32_t n;
+    while (*p != 0 && *p != ' ' && i + 1u < sizeof(path)) {
+        path[i++] = *p++;
+    }
+    path[i] = 0;
+    while (*p == ' ') {
+        p++;
+    }
+    text = p;
+    if (path[0] == 0 || *text == 0) {
+        nova_puts("usage: put <path> <text>");
+        return;
+    }
+    fd = nova_open(path, NOVA_O_WRONLY | NOVA_O_CREAT);
+    if (fd < 0) {
+        nova_puts("put: open failed");
+        return;
+    }
+    n = nova_strlen(text);
+    if (nova_write(fd, text, n) != (int32_t)n) {
+        nova_puts("put: write failed");
+    }
+    nova_close(fd);
+}
+
 static void sh_exec(const char *line) {
     const char *path = sh_arg(line);
     int32_t pid;
@@ -179,6 +210,9 @@ static void sh_run(const char *line) {
     } else if (nova_strncmp(line, "run", 3) == 0 &&
                (line[3] == 0 || line[3] == ' ')) {
         sh_exec(line);
+    } else if (nova_strncmp(line, "put", 3) == 0 &&
+               (line[3] == 0 || line[3] == ' ')) {
+        sh_put(line);
     } else if (nova_strcmp(line, "exit") == 0) {
         nova_puts("bye");
         nova_exit(0);

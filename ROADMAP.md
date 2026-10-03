@@ -105,6 +105,11 @@ E820 memory map → COM1 serial → halt, in `NOVA-OS-CONSTRAINED`
     BPB, chains, 8.3, sector cache) grafted at /disk, shell reads it
     unchanged, 10/10 with host T9+T10 (ADR-0021)
   - [ ] FAT32 write, EXT4(read), NOVA-FS design
+  - [x] 7d-WRITE DONE: ATA WRITE SECTORS, FAT allocator (zeroed
+    chains, atomic ENOSPC), create/write-at/delete/mkdir, syscall
+    write-through + disk CREAT, shell `put`, hermetic guest round
+    trips + host full-byte checks, 10/10 (ADR-0022)
+  - [ ] EXT4(read), NOVA-FS design
 
 ## Phase 8 — Drivers
 

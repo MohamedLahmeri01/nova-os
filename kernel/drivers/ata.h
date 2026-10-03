@@ -15,6 +15,10 @@
 
 /* Read one 512B sector into dst. -EIO on timeout/error. */
 int ata_read_sector(uint32_t drive, uint32_t lba, uint8_t *dst);
+/* Write one 512B sector from src (WRITE SECTORS 0x30, same polling).
+ * -EIO on timeout/error. No safety interlock (callers pick scratch
+ * areas: the selftest uses slave LBA 100, past the FAT volume). */
+int ata_write_sector(uint32_t drive, uint32_t lba, const uint8_t *src);
 /* Mask the ATA IRQs (14/15) on the slave PIC (read-modify-write).
  * The BIOS leaves them unmasked and our IDT is not loaded yet: the
  * completion IRQ would vector through garbage and triple-fault.

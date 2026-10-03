@@ -43,6 +43,8 @@ struct fs_file {
     /* Detached (FAT-materialized) nodes are owned by the description:
      * close frees node data + node, not just the descriptor. */
     int owns_node;
+    /* FAT source path for write-through (valid iff owns_node). */
+    char fat_path[FS_MAX_PATH + 1u];
 };
 
 /* /disk graft (Phase 7c): exact "disk" first component routes to the

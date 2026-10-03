@@ -63,6 +63,15 @@ static int img_read(uint32_t lba, uint8_t *dst) {
     return 0;
 }
 
+static int img_write(uint32_t lba, const uint8_t *src) {
+    size_t off = (size_t)lba * 512u;
+    if (off + 512u > g_len) {
+        return -NOVA_EIO;
+    }
+    memcpy(g_img + off, src, 512u);
+    return 0;
+}
+
 static uint32_t lcg_state = 0x76543210u;
 
 static uint32_t lcg(void) {
@@ -103,7 +112,7 @@ int main(int argc, char **argv) {
     }
     fclose(f);
 
-    check(fat_init(img_read) == 0, "init", 0, 0);
+    check(fat_init(img_read, img_write) == 0, "init", 0, 0);
 
     /* Contract with tools/mkfat.py. */
     check(fat_stat("/HELLO.TXT", &size, &is_dir) == 0 && size == 17u &&
@@ -160,6 +169,76 @@ int main(int argc, char **argv) {
             }
         }
         check(n == 2, "ls-count", n, 0);
+    }
+
+    /* Write path on the image copy (mirrors + extends the guest
+     * hermetic round-trip): multi-cluster pattern with full read-back,
+     * mkdir + nested file, ENOSPC honesty, delete hygiene. */
+    {
+        static uint8_t pat[4096];
+        static uint8_t back[4096];
+        uint32_t g3 = 0;
+        for (uint32_t i = 0; i < sizeof(pat); i++) {
+            pat[i] = (uint8_t)((i * 13u + 7u) & 0xFFu);
+        }
+        check(fat_create_file("/W.TXT") == 0, "w-create", 0, 0);
+        check(fat_create_file("/W.TXT") == -NOVA_EEXIST, "w-exist", 0,
+              0);
+        check(fat_write_at("/W.TXT", 0, pat, 3000u) == 0, "w-3000", 0,
+              0);
+        check(fat_stat("/W.TXT", &size, &is_dir) == 0 && size == 3000u &&
+                  !is_dir,
+              "w-size", size, 0);
+        check(fat_read_file("/W.TXT", back, sizeof(back), &g3) == 0 &&
+                  g3 == 3000u && memcmp(back, pat, 3000u) == 0,
+              "w-bytes", g3, 0);
+        /* Offset overwrite inside the chain (partial-sector merge). */
+        check(fat_write_at("/W.TXT", 1000u, pat, 100u) == 0, "w-over",
+              0, 0);
+        check(fat_read_file("/W.TXT", back, sizeof(back), &g3) == 0 &&
+                  g3 == 3000u && memcmp(back + 1000u, pat, 100u) == 0 &&
+                  back[999] == (uint8_t)((999u * 13u + 7u) & 0xFFu),
+              "w-merge", g3, 0);
+        check(fat_mkdir("/NDIR") == 0, "w-mkdir", 0, 0);
+        check(fat_mkdir("/NDIR") == -NOVA_EEXIST, "w-mkdir-exist", 0,
+              0);
+        check(fat_create_file("/NDIR/F.TXT") == 0, "w-nested", 0, 0);
+        check(fat_write_at("/NDIR/F.TXT", 0, pat, 16u) == 0, "w-nw",
+              0, 0);
+        check(fat_list_dir("/NDIR", 0, name) == 5 &&
+                  strcmp(name, "F.TXT") == 0,
+              "w-nls", 0, 0);
+        check(fat_list_dir("/NDIR", 1, name) == -NOVA_ENOENT, "w-nend",
+              0, 0);
+        /* ENOSPC: 64KB needs ~128 clusters, disk holds ~26 free. */
+        {
+            static uint8_t *big = 0;
+            int wr;
+            if (big == 0) {
+                big = (uint8_t *)malloc(FS_MAX_FILE);
+            }
+            check(big != 0, "w-bigalloc", 0, 0);
+            if (big != 0) {
+                memset(big, 0xAA, FS_MAX_FILE);
+                check(fat_create_file("/HUGE.BIN") == 0, "w-huge-c",
+                      0, 0);
+                wr = fat_write_at("/HUGE.BIN", 0, big, FS_MAX_FILE);
+                check(wr == -NOVA_ENOSPC, "w-enospc",
+                      (unsigned long)wr, 0);
+                check(fat_delete("/HUGE.BIN") == 0, "w-huge-del", 0,
+                      0);
+            }
+        }
+        /* Fixture files survived the mutation storm intact. */
+        check(fat_read_file("/HELLO.TXT", buf, sizeof(buf), &got) == 0 &&
+                  got == 17u,
+              "w-fixture", got, 0);
+        check(fat_delete("/W.TXT") == 0, "w-del", 0, 0);
+        check(fat_delete("/NDIR/F.TXT") == 0, "w-deln", 0, 0);
+        check(fat_stat("/W.TXT", &size, &is_dir) == -NOVA_ENOENT,
+              "w-gone", 0, 0);
+        check(fat_delete("/W.TXT") == -NOVA_ENOENT, "w-del2", 0, 0);
+        check(fat_delete("/NDIR") == -NOVA_EISDIR, "w-deldir", 0, 0);
     }
 
     /* Randomized 8.3-ish fuzz (crash-freedom + errno discipline). */
