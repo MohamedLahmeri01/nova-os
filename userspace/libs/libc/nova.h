@@ -25,6 +25,8 @@
 #define SYS_EXEC 15u
 #define SYS_FSCK 16u
 #define SYS_PING 17u
+#define SYS_DHCP 18u
+#define SYS_NETINFO 19u
 
 /* Errno subset mirrored from the kernel ABI (negative on return). */
 #define NOVA_EHOSTUNREACH 113
@@ -120,6 +122,16 @@ static inline int32_t nova_fsck(void) {
 
 static inline int32_t nova_ping(uint32_t addr, uint32_t seq) {
     return nova_syscall(SYS_PING, addr, seq, 0);
+}
+
+static inline int32_t nova_dhcp(void) {
+    return nova_syscall(SYS_DHCP, 0, 0, 0);
+}
+
+static inline int32_t nova_netinfo(uint32_t *self, uint32_t *gw,
+                                   uint32_t *mask) {
+    return nova_syscall(SYS_NETINFO, (uint32_t)self, (uint32_t)gw,
+                        (uint32_t)mask);
 }
 
 #endif /* NOVA_LIBC_NOVA_H */

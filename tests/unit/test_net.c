@@ -184,9 +184,212 @@ int main(void) {
     {
         int32_t r = net_ping(NET_ADDR_LOOPBACK, 42);
         check(r >= 0, "ping", (unsigned long)r, 0);
-        check(net_ping(0x0A000001u, 1) == -NOVA_EHOSTUNREACH,
+        check(net_ping(0xC0000201u, 1) == -NOVA_EHOSTUNREACH,
               "noroute", 0, 0);
     }
+
+    /* UDP build pinned to the python oracle (68->67, 8B payload
+     * 0..7 = 0xdb26) + parse discipline. */
+    {
+        uint8_t pay[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+        uint16_t sp = 0, dp = 0;
+        int ul = net_udp_build(pkt, 0x0A00020Fu, 0x0A000202u, 68,
+                               67, pay, 8);
+        check(ul == 16, "udp-len", (unsigned long)ul, 0);
+        check(pkt[6] == 0xDB && pkt[7] == 0x26, "udp-pin", pkt[6],
+              pkt[7]);
+        check(net_udp_parse(pkt, 16, 0x0A00020Fu, 0x0A000202u, &sp,
+                            &dp) == 8 && sp == 68 && dp == 67,
+              "udp-rt", sp, dp);
+        pkt[15] ^= 0xFFu;
+        check(net_udp_parse(pkt, 16, 0x0A00020Fu, 0x0A000202u, &sp,
+                            &dp) == -NOVA_EINVAL,
+              "udp-mut", 0, 0);
+        pkt[15] ^= 0xFFu;
+        pkt[6] = 0;
+        pkt[7] = 0;
+        check(net_udp_parse(pkt, 16, 0x0A00020Fu, 0x0A000202u, &sp,
+                            &dp) == 8,
+              "udp-nock", 0, 0);
+        pkt[4] = 0;
+        pkt[5] = 24;
+        check(net_udp_parse(pkt, 16, 0x0A00020Fu, 0x0A000202u, &sp,
+                            &dp) == -NOVA_EINVAL,
+              "udp-lenlie", 0, 0);
+    }
+
+    /* UDP checksum vs independent check: pseudo + packet (with
+     * stored checksum) must fold to zero. */
+    for (int t = 0; t < 500; t++) {
+        uint32_t n = lcg() % 64u;
+        uint32_t s = lcg();
+        uint32_t d = lcg();
+        uint16_t sp = (uint16_t)lcg();
+        uint16_t dp = (uint16_t)lcg();
+        int ul;
+        uint8_t cat[1600];
+        for (uint32_t i = 0; i < n; i++) {
+            tmp[i] = (uint8_t)lcg();
+        }
+        ul = net_udp_build(pkt, s, d, sp, dp, tmp, n);
+        check(ul == (int)(n + 8u), "udp-len2", (unsigned long)ul,
+              n);
+        if (ul < 0) {
+            continue;
+        }
+        cat[0] = (uint8_t)(s >> 24);
+        cat[1] = (uint8_t)(s >> 16);
+        cat[2] = (uint8_t)(s >> 8);
+        cat[3] = (uint8_t)s;
+        cat[4] = (uint8_t)(d >> 24);
+        cat[5] = (uint8_t)(d >> 16);
+        cat[6] = (uint8_t)(d >> 8);
+        cat[7] = (uint8_t)d;
+        cat[8] = 0;
+        cat[9] = 17;
+        cat[10] = (uint8_t)((n + 8u) >> 8);
+        cat[11] = (uint8_t)((n + 8u) & 0xFFu);
+        memcpy(cat + 12, pkt, (size_t)(n + 8u));
+        if (oracle_ck(cat, 12 + n + 8u) != 0) {
+            check(0, "udp-oracle", n, (unsigned long)t);
+            break;
+        }
+    }
+    printf("fuzz: 500 udp checksums vs recomputation\n");
+
+    /* IP completion: fragments + dead TTL refuse (DF passes). */
+    {
+        uint8_t pr = 0;
+        uint32_t s = 0, d = 0;
+        int hl = net_ip_build(pkt, 0x0A000001u, 0x0A000002u, 17,
+                              8);
+        check(hl == 20, "ipf-len", (unsigned long)hl, 0);
+        check(net_ip_parse(pkt, 28, &pr, &s, &d) == 20, "ipf-df",
+              0, 0);
+        pkt[6] = 0x20u;
+        pkt[10] = 0;
+        pkt[11] = 0;
+        {
+            uint16_t c = net_checksum(pkt, 20);
+            pkt[10] = (uint8_t)(c >> 8);
+            pkt[11] = (uint8_t)(c & 0xFFu);
+        }
+        check(net_ip_parse(pkt, 28, &pr, &s, &d) == -NOVA_EINVAL,
+              "ipf-mf", 0, 0);
+        pkt[6] = 0x40u;
+        pkt[7] = 0x01u;
+        pkt[10] = 0;
+        pkt[11] = 0;
+        {
+            uint16_t c = net_checksum(pkt, 20);
+            pkt[10] = (uint8_t)(c >> 8);
+            pkt[11] = (uint8_t)(c & 0xFFu);
+        }
+        check(net_ip_parse(pkt, 28, &pr, &s, &d) == -NOVA_EINVAL,
+              "ipf-off", 0, 0);
+        pkt[7] = 0x00u;
+        pkt[8] = 0;
+        pkt[10] = 0;
+        pkt[11] = 0;
+        {
+            uint16_t c = net_checksum(pkt, 20);
+            pkt[10] = (uint8_t)(c >> 8);
+            pkt[11] = (uint8_t)(c & 0xFFu);
+        }
+        check(net_ip_parse(pkt, 28, &pr, &s, &d) == -NOVA_EINVAL,
+              "ipf-ttl", 0, 0);
+    }
+
+    /* DHCP validator: crafted OFFER + rogue mutants. */
+    {
+        static const uint8_t tmac[6] = { 0x08, 0x00, 0x27,
+                                         0x3C, 0xA1, 0xA1 };
+        uint8_t msg[300];
+        uint8_t mt = 0;
+        uint32_t y = 0, sv = 0, mk = 0, rt = 0, le = 0;
+        uint32_t p = 240u;
+        memset(msg, 0, sizeof(msg));
+        msg[0] = 2;
+        msg[1] = 1;
+        msg[2] = 6;
+        msg[4] = 0x12;
+        msg[5] = 0x34;
+        msg[6] = 0x56;
+        msg[7] = 0x78;
+        memcpy(msg + 28, tmac, 6);
+        msg[16] = 10;
+        msg[18] = 2;
+        msg[19] = 15;
+        msg[236] = 99;
+        msg[237] = 130;
+        msg[238] = 83;
+        msg[239] = 99;
+        msg[p++] = 53;
+        msg[p++] = 1;
+        msg[p++] = 2;
+        msg[p++] = 54;
+        msg[p++] = 4;
+        msg[p++] = 10;
+        msg[p++] = 0;
+        msg[p++] = 2;
+        msg[p++] = 2;
+        msg[p++] = 1;
+        msg[p++] = 4;
+        msg[p++] = 255;
+        msg[p++] = 255;
+        msg[p++] = 255;
+        msg[p++] = 0;
+        msg[p++] = 3;
+        msg[p++] = 4;
+        msg[p++] = 10;
+        msg[p++] = 0;
+        msg[p++] = 2;
+        msg[p++] = 2;
+        msg[p++] = 51;
+        msg[p++] = 4;
+        msg[p++] = 0;
+        msg[p++] = 0;
+        msg[p++] = 0x0E;
+        msg[p++] = 0x10;
+        msg[p++] = 255;
+        check(dhcp_parse_msg(msg, sizeof(msg), 0x12345678u, tmac,
+                             &mt, &y, &sv, &mk, &rt,
+                             &le) == 0 &&
+                  mt == 2 && y == 0x0A00020Fu &&
+                  sv == 0x0A000202u && mk == 0xFFFFFF00u &&
+                  rt == 0x0A000202u && le == 3600u,
+              "dhcp-offer", mt, le);
+        msg[4] ^= 1u;
+        check(dhcp_parse_msg(msg, sizeof(msg), 0x12345678u, tmac,
+                             &mt, &y, &sv, &mk, &rt,
+                             &le) == -NOVA_EINVAL,
+              "dhcp-xid", 0, 0);
+        msg[4] ^= 1u;
+        msg[236] = 0;
+        check(dhcp_parse_msg(msg, sizeof(msg), 0x12345678u, tmac,
+                             &mt, &y, &sv, &mk, &rt,
+                             &le) == -NOVA_EINVAL,
+              "dhcp-magic", 0, 0);
+        msg[236] = 99;
+        check(dhcp_parse_msg(msg, 200, 0x12345678u, tmac, &mt, &y,
+                             &sv, &mk, &rt, &le) == -NOVA_EINVAL,
+              "dhcp-short", 0, 0);
+        msg[28] ^= 1u;
+        check(dhcp_parse_msg(msg, sizeof(msg), 0x12345678u, tmac,
+                             &mt, &y, &sv, &mk, &rt,
+                             &le) == -NOVA_EINVAL,
+              "dhcp-chaddr", 0, 0);
+        msg[28] ^= 1u;
+        msg[19] = 0;
+        check(dhcp_parse_msg(msg, sizeof(msg), 0x12345678u, tmac,
+                             &mt, &y, &sv, &mk, &rt,
+                             &le) == -NOVA_EINVAL,
+              "dhcp-wireaddr", 0, 0);
+        msg[19] = 15;
+    }
+
+    /* No NIC on the host: acquisition refuses cleanly. */
+    check(dhcp_acquire() == -NOVA_ENODEV, "dhcp-nonic", 0, 0);
 
     /* Guest selftest runs the same stack in-guest (NET-OK). */
     check(net_selftest() == 0, "selftest", 0, 0);

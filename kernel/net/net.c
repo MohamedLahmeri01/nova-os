@@ -1,8 +1,8 @@
-/* NOVA OS IPv4 + ICMP + loopback (Phase 9a).
+/* NOVA OS IPv4 + ICMP + UDP + DHCP (Phase 9c).
  * Big-endian wire order throughout (shifts, never casts). Loopback
- * is synchronous memory (tx copies into the rx slot); real NICs
- * replace the tx/rx pair with descriptor rings (Phase 9b keeps this
- * API: upper layers never see the difference).
+ * is synchronous memory (tx copies into the rx slot); the wire goes
+ * via Ethernet + ARP through virtio-net descriptor rings. Runtime
+ * IP config (DHCP overwrites the VBox NAT defaults below).
  */
 #include <stdint.h>
 
@@ -12,6 +12,24 @@
 #include "drivers/virtio_net.h"
 #include "syscall/syscall.h"
 #include "time/time.h"
+
+/* Runtime config (init = VBox NAT defaults; dhcp_acquire sets). */
+static uint32_t g_self_ip = NET_ADDR_SELF;
+static uint32_t g_gw_ip = NET_ADDR_GW;
+static uint32_t g_net_mask = NET_ADDR_MASK;
+static uint32_t g_lease_secs;
+
+uint32_t net_self_ip(void) {
+    return g_self_ip;
+}
+
+uint32_t net_gw_ip(void) {
+    return g_gw_ip;
+}
+
+uint32_t net_netmask(void) {
+    return g_net_mask;
+}
 
 static void eth_build(uint8_t *out, const uint8_t *dst,
                       const uint8_t *src, uint16_t type,
@@ -106,6 +124,19 @@ int net_ip_parse(const uint8_t *pkt, uint32_t len, uint8_t *proto_out,
         return -NOVA_EINVAL;
     }
     if (net_checksum(pkt, ihl) != 0) {
+        return -NOVA_EINVAL;
+    }
+    /* No reassembly, ever: reserved/MF/offset refuse (DF is fine,
+     * offset zero required). Dead TTL refuses (nothing left to
+     * route with). */
+    {
+        uint32_t frag = ((uint32_t)pkt[6] << 8) | pkt[7];
+        if ((frag & 0x8000u) != 0 || (frag & 0x2000u) != 0 ||
+            (frag & 0x1FFFu) != 0) {
+            return -NOVA_EINVAL;
+        }
+    }
+    if (pkt[8] == 0) {
         return -NOVA_EINVAL;
     }
     if (proto_out != 0) {
@@ -235,8 +266,8 @@ static int32_t ping_wire(uint32_t addr, uint16_t seq) {
     if (!virtio_net_ready()) {
         return -NOVA_EHOSTUNREACH;
     }
-    if (addr != NET_ADDR_GW &&
-        (addr & NET_ADDR_MASK) != (NET_ADDR_SELF & NET_ADDR_MASK)) {
+    if (addr != g_gw_ip &&
+        (addr & g_net_mask) != (g_self_ip & g_net_mask)) {
         return -NOVA_EHOSTUNREACH;
     }
     rc = (uint32_t)arp_resolve(addr, dmac);
@@ -252,7 +283,7 @@ static int32_t ping_wire(uint32_t addr, uint16_t seq) {
     if (iclen < 0) {
         return iclen;
     }
-    iplen = net_ip_build(tx, NET_ADDR_SELF, addr, NET_PROTO_ICMP,
+    iplen = net_ip_build(tx, g_self_ip, addr, NET_PROTO_ICMP,
                          (uint16_t)iclen);
     if (iplen < 0) {
         return iplen;
@@ -280,7 +311,7 @@ static int32_t ping_wire(uint32_t addr, uint16_t seq) {
             continue;
         }
         off = net_ip_parse(rx + 14, got - 14u, &proto, &src, &dst);
-        if (off < 0 || proto != NET_PROTO_ICMP || dst != NET_ADDR_SELF ||
+        if (off < 0 || proto != NET_PROTO_ICMP || dst != g_self_ip ||
             src != addr) {
             continue;
         }
@@ -527,14 +558,14 @@ static int arp_resolve(uint32_t ip, uint8_t *mac_out) {
     if (mac_out == 0 || !virtio_net_ready()) {
         return -NOVA_EINVAL;
     }
-    if (ip == NET_ADDR_GW && g_gw_known) {
+    if (ip == g_gw_ip && g_gw_known) {
         for (i = 0; i < 6u; i++) {
             mac_out[i] = g_gw_mac[i];
         }
         return NOVA_ESUCCESS;
     }
     mymac = virtio_net_mac();
-    arp_build(arp, ARP_OP_REQ, mymac, NET_ADDR_SELF, zero, ip);
+    arp_build(arp, ARP_OP_REQ, mymac, g_self_ip, zero, ip);
     eth_build(tx, bcast, mymac, ETH_TYPE_ARP, arp, 28);
     if (virtio_net_tx(tx, 42) != 0) {
         return -NOVA_EIO;
@@ -551,21 +582,607 @@ static int arp_resolve(uint32_t ip, uint8_t *mac_out) {
             type != ETH_TYPE_ARP) {
             continue;
         }
-        if (arp_check(rx + 14, got - 14u, mymac, NET_ADDR_SELF, ip,
+        if (arp_check(rx + 14, got - 14u, mymac, g_self_ip, ip,
                       smac) != 0) {
             continue;
         }
         for (i = 0; i < 6u; i++) {
             mac_out[i] = smac[i];
-            if (ip == NET_ADDR_GW) {
+            if (ip == g_gw_ip) {
                 g_gw_mac[i] = smac[i];
             }
         }
-        if (ip == NET_ADDR_GW) {
+        if (ip == g_gw_ip) {
             g_gw_known = 1;
         }
         return NOVA_ESUCCESS;
     }
+}
+
+/* ---------- UDP (Phase 9c, wire only) ----------
+ * Datagrams over the wire path (ARP + IP + Ethernet). No loopback
+ * UDP (nothing serves it) and no sockets yet: send/recv are
+ * synchronous countdowns, ports filter inbound. Checksums use the
+ * IPv4 pseudo-header; a zero RX checksum means absent (RFC 768).
+ */
+
+#define NET_ADDR_BCAST 0xFFFFFFFFu
+
+static uint32_t cksum_add(uint32_t sum, const uint8_t *p, uint32_t n) {
+    uint32_t i = 0;
+    while (i + 1u < n) {
+        sum += ((uint32_t)p[i] << 8) | p[i + 1u];
+        if (sum > 0xFFFFu) {
+            sum = (sum & 0xFFFFu) + 1u;
+        }
+        i += 2u;
+    }
+    if (i < n) {
+        sum += (uint32_t)p[i] << 8;
+        if (sum > 0xFFFFu) {
+            sum = (sum & 0xFFFFu) + 1u;
+        }
+    }
+    return sum;
+}
+
+/* UDP checksum over pseudo-header + datagram (cksum field as
+ * stored: zero it before calling for build). */
+static uint16_t udp_cksum(uint32_t src, uint32_t dst,
+                          const uint8_t *u, uint32_t ulen) {
+    uint8_t pseudo[12];
+    uint32_t sum;
+    wr32(pseudo, src);
+    wr32(pseudo + 4, dst);
+    pseudo[8] = 0;
+    pseudo[9] = NET_PROTO_UDP;
+    pseudo[10] = (uint8_t)(ulen >> 8);
+    pseudo[11] = (uint8_t)(ulen & 0xFFu);
+    sum = cksum_add(0, pseudo, 12);
+    sum = cksum_add(sum, u, ulen);
+    return (uint16_t)(~sum & 0xFFFFu);
+}
+
+int net_udp_build(uint8_t *out, uint32_t src, uint32_t dst,
+                  uint16_t sport, uint16_t dport,
+                  const uint8_t *payload, uint32_t payload_len) {
+    uint32_t total;
+    uint16_t c;
+    uint32_t i;
+    if (out == 0 || (payload == 0 && payload_len != 0)) {
+        return -NOVA_EINVAL;
+    }
+    total = 8u + payload_len;
+    if (total < payload_len || total + 20u > NET_MTU) {
+        return -NOVA_EINVAL;
+    }
+    wr16(out, sport);
+    wr16(out + 2, dport);
+    wr16(out + 4, (uint16_t)total);
+    wr16(out + 6, 0);
+    for (i = 0; i < payload_len; i++) {
+        out[8u + i] = payload[i];
+    }
+    c = udp_cksum(src, dst, out, total);
+    if (c == 0) {
+        c = 0xFFFFu; /* 0 means absent; a computed 0 ships as all-ones */
+    }
+    wr16(out + 6, c);
+    return (int)total;
+}
+
+int net_udp_parse(const uint8_t *pkt, uint32_t len, uint32_t src,
+                  uint32_t dst, uint16_t *sport_out,
+                  uint16_t *dport_out) {
+    uint32_t ulen;
+    uint16_t stored;
+    if (pkt == 0 || len < 8u) {
+        return -NOVA_EINVAL;
+    }
+    ulen = ((uint32_t)pkt[4] << 8) | pkt[5];
+    if (ulen < 8u || ulen > len) {
+        return -NOVA_EINVAL;
+    }
+    stored = (uint16_t)((uint32_t)pkt[6] << 8 | pkt[7]);
+    if (stored != 0 && udp_cksum(src, dst, pkt, ulen) != 0) {
+        return -NOVA_EINVAL;
+    }
+    if (sport_out != 0) {
+        *sport_out = (uint16_t)((uint32_t)pkt[0] << 8 | pkt[1]);
+    }
+    if (dport_out != 0) {
+        *dport_out = (uint16_t)((uint32_t)pkt[2] << 8 | pkt[3]);
+    }
+    return 8;
+}
+
+/* Send one datagram (ARP unless broadcast). Stack stays under the
+ * 512B cap: frames live in statics. */
+int net_udp_send(uint32_t src, uint32_t dst, uint16_t sport,
+                 uint16_t dport, const uint8_t *payload,
+                 uint32_t len) {
+    static uint8_t ubuf[1480];
+    static uint8_t ipbuf[1500];
+    static uint8_t ebuf[1528];
+    const uint8_t *mymac;
+    uint8_t dmac[6];
+    int ulen, iplen;
+    uint32_t i;
+    uint32_t total;
+    if (!virtio_net_ready()) {
+        return -NOVA_EINVAL;
+    }
+    if (dst != NET_ADDR_BCAST &&
+        (dst & g_net_mask) != (g_self_ip & g_net_mask)) {
+        return -NOVA_EHOSTUNREACH;
+    }
+    ulen = net_udp_build(ubuf, src, dst, sport, dport, payload,
+                         len);
+    if (ulen < 0) {
+        return ulen;
+    }
+    iplen = net_ip_build(ipbuf, src, dst, NET_PROTO_UDP,
+                         (uint16_t)ulen);
+    if (iplen < 0) {
+        return iplen;
+    }
+    total = (uint32_t)iplen + (uint32_t)ulen;
+    for (i = 0; i < (uint32_t)ulen; i++) {
+        ipbuf[iplen + i] = ubuf[i];
+    }
+    if (dst == NET_ADDR_BCAST) {
+        for (i = 0; i < 6u; i++) {
+            dmac[i] = 0xFFu;
+        }
+    } else if (arp_resolve(dst, dmac) != 0) {
+        return -NOVA_EIO;
+    }
+    mymac = virtio_net_mac();
+    eth_build(ebuf, dmac, mymac, ETH_TYPE_IP, ipbuf, total);
+    if (virtio_net_tx(ebuf, 14u + total) != 0) {
+        return -NOVA_EIO;
+    }
+    return NOVA_ESUCCESS;
+}
+
+/* Receive one datagram for (sport,dport), copying the payload.
+ * dst_ok = 0 accepts any IP destination (pre-config acquisition);
+ * otherwise the IP dst must match. ETIMEDOUT on silence. */
+int net_udp_recv(uint8_t *out, uint32_t max, uint16_t sport,
+                 uint16_t dport, uint32_t dst_ok, uint32_t timeout,
+                 uint32_t *len_out) {
+    static uint8_t rx[1600];
+    const uint8_t *mymac;
+    if (out == 0 || len_out == 0 || !virtio_net_ready()) {
+        return -NOVA_EINVAL;
+    }
+    mymac = virtio_net_mac();
+    for (;;) {
+        uint32_t got = 0;
+        uint16_t type = 0;
+        uint8_t proto = 0;
+        uint32_t src = 0, dst = 0;
+        uint16_t gs = 0, gd = 0;
+        uint32_t ulen;
+        uint32_t n;
+        int off;
+        int rc = rx_wait(rx, sizeof(rx), timeout, &got);
+        if (rc != 0) {
+            return rc;
+        }
+        if (eth_parse(rx, got, mymac, &type) < 0 ||
+            type != ETH_TYPE_IP) {
+            continue;
+        }
+        off = net_ip_parse(rx + 14, got - 14u, &proto, &src,
+                           &dst);
+        if (off < 0 || proto != NET_PROTO_UDP) {
+            continue;
+        }
+        if (dst_ok != 0 && dst != dst_ok &&
+            dst != NET_ADDR_BCAST) {
+            continue;
+        }
+        if (net_udp_parse(rx + 14u + (uint32_t)off,
+                          got - 14u - (uint32_t)off, src, dst,
+                          &gs, &gd) != 8) {
+            continue;
+        }
+        if (gd != dport || (sport != 0 && gs != sport)) {
+            continue;
+        }
+        ulen = ((uint32_t)rx[14u + (uint32_t)off + 4u] << 8) |
+               rx[14u + (uint32_t)off + 5u];
+        if (ulen < 8u || ulen - 8u > max) {
+            return -NOVA_ENOSPC;
+        }
+        for (n = 0; n < ulen - 8u; n++) {
+            out[n] = rx[14u + (uint32_t)off + 8u + n];
+        }
+        *len_out = ulen - 8u;
+        return NOVA_ESUCCESS;
+    }
+}
+
+/* ---------- DHCP client (Phase 9c, RFC 2131 subset) ----------
+ * DISCOVER -> OFFER -> REQUEST -> ACK/NAK over broadcast UDP
+ * (sport 68, dport 67), bounded retries, then the runtime config
+ * applies. Servers are untrusted (threat model actor 4): every
+ * option length is bounds-checked, XID/chaddr/magic must match,
+ * and the offered address + mask must be sane before use.
+ */
+
+#define DHCP_OP_REQ 1u
+#define DHCP_OP_REP 2u
+#define DHCP_MSG_DISCOVER 1u
+#define DHCP_MSG_OFFER 2u
+#define DHCP_MSG_REQUEST 3u
+#define DHCP_MSG_ACK 5u
+#define DHCP_MSG_NAK 6u
+#define DHCP_OPT_MASK 1u
+#define DHCP_OPT_ROUTER 3u
+#define DHCP_OPT_REQIP 50u
+#define DHCP_OPT_LEASE 51u
+#define DHCP_OPT_MSGTYPE 53u
+#define DHCP_OPT_SERVER 54u
+#define DHCP_OPT_PRM 55u
+#define DHCP_OPT_CLIENTID 61u
+#define DHCP_OPT_END 255u
+#define DHCP_MIN_MSG 300u
+
+/* Contiguous-ones mask, neither empty nor /32 (a /32 breaks the
+ * ARP model: no on-link peers at all). */
+static int mask_sane(uint32_t m) {
+    uint32_t host;
+    if (m == 0 || m == 0xFFFFFFFFu) {
+        return -NOVA_EINVAL;
+    }
+    host = ~m;
+    if ((host & (host + 1u)) != 0) {
+        return -NOVA_EINVAL;
+    }
+    return NOVA_ESUCCESS;
+}
+
+/* Unicast, non-loopback; with a mask, not the wire or broadcast
+ * address of that subnet either. */
+static int yiaddr_sane(uint32_t y, uint32_t mask, int have_mask) {
+    uint32_t host;
+    if (y == 0 || y == 0xFFFFFFFFu) {
+        return -NOVA_EINVAL;
+    }
+    if ((y >> 28) >= 0x0Eu) {
+        return -NOVA_EINVAL;
+    }
+    if ((y >> 24) == 0x7Fu) {
+        return -NOVA_EINVAL;
+    }
+    if (have_mask) {
+        host = y & ~mask;
+        if (host == 0 || host == ~mask) {
+            return -NOVA_EINVAL;
+        }
+    }
+    return NOVA_ESUCCESS;
+}
+
+static void dhcp_wr_opt(uint8_t *o, uint32_t *pos, uint8_t code,
+                        uint8_t len, const uint8_t *val) {
+    uint32_t i;
+    o[*pos] = code;
+    o[*pos + 1u] = len;
+    for (i = 0; i < len; i++) {
+        o[*pos + 2u + i] = val[i];
+    }
+    *pos += 2u + len;
+}
+
+/* Build a DISCOVER/REQUEST into out (padded to 300B). req_ip and
+ * server_ip are the OFFERed values (REQUEST only). */
+static int dhcp_build(uint8_t *out, uint8_t msgtype, uint32_t xid,
+                      const uint8_t *mac, uint32_t req_ip,
+                      uint32_t server_ip, uint32_t secs) {
+    uint32_t p;
+    uint32_t i;
+    uint8_t mt = msgtype;
+    uint8_t cid[7];
+    uint8_t rip[4];
+    uint8_t sid[4];
+    uint8_t prm[3] = { 1, 3, 6 };
+    if (out == 0 || mac == 0 ||
+        (msgtype != DHCP_MSG_DISCOVER &&
+         msgtype != DHCP_MSG_REQUEST)) {
+        return -NOVA_EINVAL;
+    }
+    for (i = 0; i < 236u; i++) {
+        out[i] = 0;
+    }
+    out[0] = DHCP_OP_REQ;
+    out[1] = 1;
+    out[2] = 6;
+    out[3] = 0;
+    wr32(out + 4, xid);
+    wr16(out + 8, (uint16_t)(secs > 0xFFFFu ? 0xFFFFu : secs));
+    wr16(out + 10, 0x8000u); /* broadcast flag: answer loud */
+    for (i = 0; i < 6u; i++) {
+        out[28u + i] = mac[i];
+    }
+    out[236] = 99;
+    out[237] = 130;
+    out[238] = 83;
+    out[239] = 99;
+    p = 240u;
+    dhcp_wr_opt(out, &p, DHCP_OPT_MSGTYPE, 1, &mt);
+    cid[0] = 1;
+    for (i = 0; i < 6u; i++) {
+        cid[1u + i] = mac[i];
+    }
+    dhcp_wr_opt(out, &p, DHCP_OPT_CLIENTID, 7, cid);
+    if (msgtype == DHCP_MSG_REQUEST) {
+        wr32(rip, req_ip);
+        dhcp_wr_opt(out, &p, DHCP_OPT_REQIP, 4, rip);
+        wr32(sid, server_ip);
+        dhcp_wr_opt(out, &p, DHCP_OPT_SERVER, 4, sid);
+    }
+    dhcp_wr_opt(out, &p, DHCP_OPT_PRM, 3, prm);
+    out[p] = DHCP_OPT_END;
+    p++;
+    while (p < DHCP_MIN_MSG) {
+        out[p] = 0;
+        p++;
+    }
+    return (int)DHCP_MIN_MSG;
+}
+
+int dhcp_parse_msg(const uint8_t *pkt, uint32_t len, uint32_t xid,
+                   const uint8_t *chmac, uint8_t *msgtype_out,
+                   uint32_t *yiaddr_out, uint32_t *server_out,
+                   uint32_t *mask_out, uint32_t *router_out,
+                   uint32_t *lease_out) {
+    uint32_t p;
+    uint32_t i;
+    uint8_t mt = 0;
+    int have_mt = 0;
+    uint32_t srv = 0;
+    int have_srv = 0;
+    uint32_t mask = 0;
+    int have_mask = 0;
+    uint32_t router = 0;
+    int have_router = 0;
+    uint32_t lease = 0;
+    uint32_t y;
+    /* TEMP-DIAG: stage of refusal (which check fired). */
+    if (pkt == 0 || chmac == 0 || msgtype_out == 0 ||
+        yiaddr_out == 0 || server_out == 0 || mask_out == 0 ||
+        router_out == 0 || lease_out == 0) {
+        return -NOVA_EINVAL;
+    }
+    if (len < 240u) {
+        return -NOVA_EINVAL;
+    }
+    if (pkt[0] != DHCP_OP_REP || pkt[1] != 1 || pkt[2] != 6 ||
+        pkt[3] != 0) {
+        return -NOVA_EINVAL;
+    }
+    if (rd32(pkt + 4) != xid) {
+        return -NOVA_EINVAL;
+    }
+    for (i = 0; i < 6u; i++) {
+        if (pkt[28u + i] != chmac[i]) {
+                return -NOVA_EINVAL;
+        }
+    }
+    /* RFC 2132 magic cookie 99.130.83.99 (NOT hex 63..: the
+     * option walk keys off these exact decimal bytes). */
+    if (pkt[236] != 99 || pkt[237] != 130 || pkt[238] != 83 ||
+        pkt[239] != 99) {
+        return -NOVA_EINVAL;
+    }
+    p = 240u;
+    while (p < len) {
+        uint8_t code = pkt[p];
+        uint8_t ol;
+        if (code == DHCP_OPT_END) {
+            break;
+        }
+        if (code == 0) {
+            p++;
+            continue;
+        }
+        if (p + 1u >= len) {
+                return -NOVA_EINVAL;
+        }
+        ol = pkt[p + 1u];
+        if (p + 2u + (uint32_t)ol > len) {
+                return -NOVA_EINVAL;
+        }
+        switch (code) {
+        case DHCP_OPT_MSGTYPE:
+            if (ol == 1) {
+                mt = pkt[p + 2u];
+                have_mt = 1;
+            }
+            break;
+        case DHCP_OPT_SERVER:
+            if (ol == 4) {
+                srv = rd32(pkt + p + 2u);
+                have_srv = 1;
+            }
+            break;
+        case DHCP_OPT_MASK:
+            if (ol == 4) {
+                uint32_t m = rd32(pkt + p + 2u);
+                if (mask_sane(m) == 0) {
+                    mask = m;
+                    have_mask = 1;
+                }
+            }
+            break;
+        case DHCP_OPT_ROUTER:
+            if (ol >= 4 && !have_router) {
+                router = rd32(pkt + p + 2u);
+                have_router = 1;
+            }
+            break;
+        case DHCP_OPT_LEASE:
+            if (ol == 4) {
+                lease = rd32(pkt + p + 2u);
+            }
+            break;
+        default:
+            break;
+        }
+        p += 2u + (uint32_t)ol;
+    }
+    if (!have_mt ||
+        (mt != DHCP_MSG_OFFER && mt != DHCP_MSG_ACK &&
+         mt != DHCP_MSG_NAK)) {
+        return -NOVA_EINVAL;
+    }
+    *msgtype_out = mt;
+    if (mt == DHCP_MSG_NAK) {
+        return NOVA_ESUCCESS; /* explicit refusal: nothing to trust */
+    }
+    if (!have_srv) {
+        return -NOVA_EINVAL;
+    }
+    y = rd32(pkt + 16);
+    if (yiaddr_sane(y, mask, have_mask) != 0) {
+        return -NOVA_EINVAL;
+    }
+    *yiaddr_out = y;
+    *server_out = srv;
+    *mask_out = have_mask ? mask : g_net_mask;
+    *router_out = have_router ? router : srv;
+    *lease_out = lease;
+    return NOVA_ESUCCESS;
+}
+
+static void print_ip(uint32_t ip) {
+    for (int q = 3; q >= 0; q--) {
+        serial_putdec32((ip >> (uint32_t)(q * 8)) & 0xFFu);
+        if (q != 0) {
+            serial_putc('.');
+        }
+    }
+}
+
+/* Commit a validated lease (gateway moves -> re-ARP). */
+static void dhcp_apply(uint32_t y, uint32_t m, uint32_t r,
+                       uint32_t l) {
+    g_self_ip = y;
+    g_net_mask = m;
+    g_gw_ip = r;
+    g_lease_secs = l;
+    g_gw_known = 0;
+    serial_puts("DHCP-OK ip=");
+    print_ip(g_self_ip);
+    serial_puts(" mask=");
+    print_ip(g_net_mask);
+    serial_puts(" gw=");
+    print_ip(g_gw_ip);
+    serial_puts(" lease=");
+    serial_putdec32(g_lease_secs);
+    serial_putc('\n');
+}
+
+/* Bounded acquisition: 2 rounds of (DISCOVER x2 -> REQUEST x2).
+ * Worst case ~16s of silence; the live server answers in ms. */
+int dhcp_acquire(void) {
+    static uint8_t msg[320];
+    static uint8_t udp[1500];
+    const uint8_t *mymac;
+    int round;
+    if (!virtio_net_ready()) {
+        return -NOVA_ENODEV;
+    }
+    mymac = virtio_net_mac();
+    for (round = 0; round < 2; round++) {
+        uint32_t xid =
+            (g_ticks << 16) ^
+            ((uint32_t)mymac[4] << 8 | mymac[5]) ^ (uint32_t)round;
+        uint32_t t0 = g_ticks;
+        uint32_t offered = 0, server = 0;
+        int have_offer = 0;
+        int t;
+        for (t = 0; t < 2 && !have_offer; t++) {
+            uint32_t got = 0;
+            uint8_t mt = 0;
+            uint32_t y = 0, s = 0, m = 0, r = 0, l = 0;
+            if (dhcp_build(msg, DHCP_MSG_DISCOVER, xid, mymac,
+                           0, 0,
+                           (g_ticks - t0) / 100u) < 0) {
+                return -NOVA_EIO;
+            }
+            if (net_udp_send(0, NET_ADDR_BCAST,
+                             NET_PORT_DHCP_CLIENT,
+                             NET_PORT_DHCP_SERVER, msg,
+                             DHCP_MIN_MSG) != 0) {
+                return -NOVA_EIO;
+            }
+            if (net_udp_recv(udp, sizeof(udp),
+                             NET_PORT_DHCP_SERVER,
+                             NET_PORT_DHCP_CLIENT, 0, 200,
+                             &got) != 0) {
+                continue;
+            }
+            if (dhcp_parse_msg(udp, got, xid, mymac, &mt, &y,
+                               &s, &m, &r, &l) != 0) {
+                continue;
+            }
+            /* Rapid-commit style: some servers (VBox NAT) answer
+             * DISCOVER with a full ACK. XID-matched and fully
+             * validated, it commits directly. */
+            if (mt == DHCP_MSG_ACK) {
+                dhcp_apply(y, m, r, l);
+                return NOVA_ESUCCESS;
+            }
+            if (mt != DHCP_MSG_OFFER) {
+                continue;
+            }
+            offered = y;
+            server = s;
+            have_offer = 1;
+        }
+        if (!have_offer) {
+            continue;
+        }
+        for (t = 0; t < 2; t++) {
+            uint32_t got = 0;
+            uint8_t mt = 0;
+            uint32_t y = 0, s = 0, m = 0, r = 0, l = 0;
+            if (dhcp_build(msg, DHCP_MSG_REQUEST, xid, mymac,
+                           offered, server,
+                           (g_ticks - t0) / 100u) < 0) {
+                return -NOVA_EIO;
+            }
+            if (net_udp_send(0, NET_ADDR_BCAST,
+                             NET_PORT_DHCP_CLIENT,
+                             NET_PORT_DHCP_SERVER, msg,
+                             DHCP_MIN_MSG) != 0) {
+                return -NOVA_EIO;
+            }
+            if (net_udp_recv(udp, sizeof(udp),
+                             NET_PORT_DHCP_SERVER,
+                             NET_PORT_DHCP_CLIENT, 0, 200,
+                             &got) != 0) {
+                continue;
+            }
+            if (dhcp_parse_msg(udp, got, xid, mymac, &mt, &y,
+                               &s, &m, &r, &l) != 0) {
+                continue;
+            }
+            if (mt == DHCP_MSG_NAK) {
+                break; /* refused: fresh XID next round */
+            }
+            if (mt != DHCP_MSG_ACK) {
+                continue;
+            }
+            dhcp_apply(y, m, r, l);
+            return NOVA_ESUCCESS;
+        }
+    }
+    return -NOVA_ETIMEDOUT;
 }
 
 int net_init(void) {
@@ -659,10 +1276,85 @@ int net_selftest(void) {
         serial_puts("NET-FAIL ping\n");
         return -1;
     }
-    /* Unroutable destination: honest errno, not silence. */
-    if (net_ping(0x0A000001u, 1) != -NOVA_EHOSTUNREACH) {
-        serial_puts("NET-FAIL noroute\n");
-        return -1;
+    /* UDP build -> parse round-trip (pinned checksums, executed
+     * against an independent python oracle: 68->67/8B = 0xdb26,
+     * zero-src/bcast = 0xff47, odd 3B = 0xd738). */
+    {
+        uint8_t pay[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+        uint16_t sp = 0, dp = 0;
+        int ul = net_udp_build(pkt, NET_ADDR_SELF, NET_ADDR_GW,
+                               68, 67, pay, 8);
+        if (ul != 16) {
+            serial_puts("NET-FAIL udp-build\n");
+            return -1;
+        }
+        if (pkt[6] != 0xDBu || pkt[7] != 0x26u) {
+            serial_puts("NET-FAIL udp-ck\n");
+            return -1;
+        }
+        if (net_udp_parse(pkt, 16, NET_ADDR_SELF, NET_ADDR_GW,
+                          &sp, &dp) != 8 || sp != 68 || dp != 67) {
+            serial_puts("NET-FAIL udp-parse\n");
+            return -1;
+        }
+        /* Corrupt one payload byte: checksum must refuse. */
+        pkt[15] ^= 0xFFu;
+        if (net_udp_parse(pkt, 16, NET_ADDR_SELF, NET_ADDR_GW,
+                          &sp, &dp) != -NOVA_EINVAL) {
+            serial_puts("NET-FAIL udp-mutate\n");
+            return -1;
+        }
+        pkt[15] ^= 0xFFu;
+        /* Zero checksum = absent (RFC 768): accepted, documented. */
+        wr16(pkt + 6, 0);
+        if (net_udp_parse(pkt, 16, NET_ADDR_SELF, NET_ADDR_GW,
+                          &sp, &dp) != 8) {
+            serial_puts("NET-FAIL udp-nock\n");
+            return -1;
+        }
+        /* Length field lies (claims more than present): refuse. */
+        wr16(pkt + 4, 24);
+        if (net_udp_parse(pkt, 16, NET_ADDR_SELF, NET_ADDR_GW,
+                          &sp, &dp) != -NOVA_EINVAL) {
+            serial_puts("NET-FAIL udp-len\n");
+            return -1;
+        }
+    }
+    /* IP completion: fragments and dead TTL refuse (DF passes). */
+    {
+        int hl = net_ip_build(pkt, NET_ADDR_LOOPBACK,
+                              NET_ADDR_LOOPBACK, NET_PROTO_UDP, 8);
+        if (hl != 20) {
+            serial_puts("NET-FAIL ipf-build\n");
+            return -1;
+        }
+        pkt[6] = 0x20u; /* MF set */
+        pkt[7] = 0x00u;
+        wr16(pkt + 10, 0);
+        wr16(pkt + 10, net_checksum(pkt, 20));
+        if (net_ip_parse(pkt, 28, &proto, &src, &dst) !=
+            -NOVA_EINVAL) {
+            serial_puts("NET-FAIL ipf-mf\n");
+            return -1;
+        }
+        pkt[6] = 0x40u; /* DF only: offset must still be zero */
+        pkt[7] = 0x01u;
+        wr16(pkt + 10, 0);
+        wr16(pkt + 10, net_checksum(pkt, 20));
+        if (net_ip_parse(pkt, 28, &proto, &src, &dst) !=
+            -NOVA_EINVAL) {
+            serial_puts("NET-FAIL ipf-off\n");
+            return -1;
+        }
+        pkt[7] = 0x00u;
+        pkt[8] = 0; /* TTL expired in transit */
+        wr16(pkt + 10, 0);
+        wr16(pkt + 10, net_checksum(pkt, 20));
+        if (net_ip_parse(pkt, 28, &proto, &src, &dst) !=
+            -NOVA_EINVAL) {
+            serial_puts("NET-FAIL ipf-ttl\n");
+            return -1;
+        }
     }
     {
         uint32_t tx, rx;
@@ -672,12 +1364,161 @@ int net_selftest(void) {
             return -1;
         }
     }
-    /* Wire proof (Phase 9b, guest only: needs the NIC). ARP the
-     * gateway and ping it: real frames on a real wire. */
+    /* DHCP validator: crafted OFFER + mutants (rogue servers
+     * are data: every field earns its trust). */
+    {
+        static uint8_t offer[300];
+        static const uint8_t tmac[6] = { 0x08, 0x00, 0x27,
+                                         0x3C, 0xA1, 0xA1 };
+        uint8_t mt = 0;
+        uint32_t y = 0, s = 0, m = 0, r = 0, l = 0;
+        uint32_t i;
+        uint32_t p;
+        uint8_t b1[1];
+        uint8_t b4[4];
+        for (i = 0; i < sizeof(offer); i++) {
+            offer[i] = 0;
+        }
+        offer[0] = 2;
+        offer[1] = 1;
+        offer[2] = 6;
+        wr32(offer + 4, 0x12345678u);
+        for (i = 0; i < 6u; i++) {
+            offer[28u + i] = tmac[i];
+        }
+        wr32(offer + 16, 0x0A00020Fu);
+        offer[236] = 99;
+        offer[237] = 130;
+        offer[238] = 83;
+        offer[239] = 99;
+        p = 240u;
+        b1[0] = 2;
+        dhcp_wr_opt(offer, &p, DHCP_OPT_MSGTYPE, 1, b1);
+        wr32(b4, 0x0A000202u);
+        dhcp_wr_opt(offer, &p, DHCP_OPT_SERVER, 4, b4);
+        wr32(b4, 0xFFFFFF00u);
+        dhcp_wr_opt(offer, &p, DHCP_OPT_MASK, 4, b4);
+        wr32(b4, 0x0A000202u);
+        dhcp_wr_opt(offer, &p, DHCP_OPT_ROUTER, 4, b4);
+        wr32(b4, 3600u);
+        dhcp_wr_opt(offer, &p, DHCP_OPT_LEASE, 4, b4);
+        offer[p] = DHCP_OPT_END;
+        if (dhcp_parse_msg(offer, sizeof(offer), 0x12345678u,
+                           tmac, &mt, &y, &s, &m, &r,
+                           &l) != 0 ||
+            mt != 2 || y != 0x0A00020Fu || s != 0x0A000202u ||
+            m != 0xFFFFFF00u || r != 0x0A000202u || l != 3600u) {
+            serial_puts("NET-FAIL dhcp-offer\n");
+            return -1;
+        }
+        offer[4] ^= 0x01u; /* XID mismatch */
+        if (dhcp_parse_msg(offer, sizeof(offer), 0x12345678u,
+                           tmac, &mt, &y, &s, &m, &r,
+                           &l) != -NOVA_EINVAL) {
+            serial_puts("NET-FAIL dhcp-xid\n");
+            return -1;
+        }
+        offer[4] ^= 0x01u;
+        offer[236] = 0; /* bad magic */
+        if (dhcp_parse_msg(offer, sizeof(offer), 0x12345678u,
+                           tmac, &mt, &y, &s, &m, &r,
+                           &l) != -NOVA_EINVAL) {
+            serial_puts("NET-FAIL dhcp-magic\n");
+            return -1;
+        }
+        offer[236] = 99;
+        if (dhcp_parse_msg(offer, 200, 0x12345678u, tmac, &mt,
+                           &y, &s, &m, &r,
+                           &l) != -NOVA_EINVAL) {
+            serial_puts("NET-FAIL dhcp-short\n");
+            return -1;
+        }
+        offer[28] ^= 0x01u; /* not our chaddr */
+        if (dhcp_parse_msg(offer, sizeof(offer), 0x12345678u,
+                           tmac, &mt, &y, &s, &m, &r,
+                           &l) != -NOVA_EINVAL) {
+            serial_puts("NET-FAIL dhcp-chaddr\n");
+            return -1;
+        }
+        offer[28] ^= 0x01u;
+        offer[240] = DHCP_OPT_END; /* type option missing */
+        if (dhcp_parse_msg(offer, sizeof(offer), 0x12345678u,
+                           tmac, &mt, &y, &s, &m, &r,
+                           &l) != -NOVA_EINVAL) {
+            serial_puts("NET-FAIL dhcp-notype\n");
+            return -1;
+        }
+        offer[240] = DHCP_OPT_SERVER; /* length overruns packet */
+        offer[241] = 4;
+        if (dhcp_parse_msg(offer, 244, 0x12345678u, tmac, &mt,
+                           &y, &s, &m, &r,
+                           &l) != -NOVA_EINVAL) {
+            serial_puts("NET-FAIL dhcp-overrun\n");
+            return -1;
+        }
+        /* Rebuild the valid OFFER tail the mutants above trashed. */
+        p = 240u;
+        b1[0] = 2;
+        dhcp_wr_opt(offer, &p, DHCP_OPT_MSGTYPE, 1, b1);
+        wr32(b4, 0x0A000202u);
+        dhcp_wr_opt(offer, &p, DHCP_OPT_SERVER, 4, b4);
+        wr32(b4, 0xFFFFFF00u);
+        dhcp_wr_opt(offer, &p, DHCP_OPT_MASK, 4, b4);
+        wr32(b4, 0x0A000202u);
+        dhcp_wr_opt(offer, &p, DHCP_OPT_ROUTER, 4, b4);
+        wr32(b4, 3600u);
+        dhcp_wr_opt(offer, &p, DHCP_OPT_LEASE, 4, b4);
+        offer[p] = DHCP_OPT_END;
+        wr32(offer + 16, 0x0A000200u); /* wire address offered */
+        if (dhcp_parse_msg(offer, sizeof(offer), 0x12345678u,
+                           tmac, &mt, &y, &s, &m, &r,
+                           &l) != -NOVA_EINVAL) {
+            serial_puts("NET-FAIL dhcp-wireaddr\n");
+            return -1;
+        }
+        wr32(offer + 16, 0x0A00020Fu);
+        wr32(b4, 0u); /* zero mask: ignored, current kept */
+        {
+            uint32_t q = 240u;
+            uint8_t z1[1] = { 2 };
+            dhcp_wr_opt(offer, &q, DHCP_OPT_MSGTYPE, 1, z1);
+            wr32(b4, 0x0A000202u);
+            dhcp_wr_opt(offer, &q, DHCP_OPT_SERVER, 4, b4);
+            wr32(b4, 0u);
+            dhcp_wr_opt(offer, &q, DHCP_OPT_MASK, 4, b4);
+            offer[q] = DHCP_OPT_END;
+        }
+        if (dhcp_parse_msg(offer, sizeof(offer), 0x12345678u,
+                           tmac, &mt, &y, &s, &m, &r,
+                           &l) != 0 ||
+            mt != 2 || m != g_net_mask) {
+            serial_puts("NET-FAIL dhcp-zeromask\n");
+            return -1;
+        }
+        { /* NAK: valid refusal, nothing else trusted */
+            uint32_t q = 240u;
+            uint8_t n1[1] = { 6 };
+            dhcp_wr_opt(offer, &q, DHCP_OPT_MSGTYPE, 1, n1);
+            offer[q] = DHCP_OPT_END;
+            if (dhcp_parse_msg(offer, sizeof(offer),
+                               0x12345678u, tmac, &mt, &y, &s,
+                               &m, &r, &l) != 0 || mt != 6) {
+                serial_puts("NET-FAIL dhcp-nak\n");
+                return -1;
+            }
+        }
+    }
+    /* Wire proof (guest only: needs the NIC). DHCP first (dynamic
+     * config), then ARP the gateway and ping it: real frames on a
+     * real wire. */
     if (virtio_net_ready()) {
         uint8_t gw[6];
         int32_t wrtt;
-        if (arp_resolve(NET_ADDR_GW, gw) != 0) {
+        if (dhcp_acquire() != 0) {
+            serial_puts("NET-FAIL dhcp\n");
+            return -1;
+        }
+        if (arp_resolve(g_gw_ip, gw) != 0) {
             serial_puts("NET-FAIL arp\n");
             return -1;
         }
@@ -685,7 +1526,7 @@ int net_selftest(void) {
             serial_puts("NET-FAIL gw-mac\n");
             return -1;
         }
-        wrtt = net_ping(NET_ADDR_GW, 2);
+        wrtt = net_ping(g_gw_ip, 2);
         if (wrtt < 0) {
             serial_puts("NET-FAIL wire-ping\n");
             return -1;

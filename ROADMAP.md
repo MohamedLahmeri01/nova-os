@@ -163,7 +163,10 @@ Ethernet → ARP → IPv4 → ICMP → UDP → TCP → sockets (loopback first).
 - [x] 9b ARP + virtio-net + NIC recipe (driver + ARP/gateway ping over
   NAT + virtio; static 10.0.2.15/10.0.2.2; `VIRTIO-OK` +
   `NET-WIRE-OK` gates, pcap proof), 14/14 (ADR-0033)
-- [ ] 9c DHCP + UDP + IP completion (dynamic config, datagrams)
+- [x] 9c DHCP + UDP + IP completion (dynamic config via DISCOVER/ACK,
+  datagrams with pseudo-header checksums, frag/TTL discipline;
+  `SYS_DHCP` + `SYS_NETINFO`, shell `ip`/`dhcp`, `DHCP-OK` gate),
+  14/14 (ADR-0034)
 
 ## Phase 10 — Security hardening
 

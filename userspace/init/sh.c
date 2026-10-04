@@ -31,7 +31,40 @@ static void sh_putdec(uint32_t v) {
 }
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp clear exit");
+}
+
+static void sh_putip(uint32_t ip) {
+    for (int q = 3; q >= 0; q--) {
+        sh_putdec((ip >> (uint32_t)(q * 8)) & 0xFFu);
+        if (q != 0) {
+            nova_putchar('.');
+        }
+    }
+}
+
+static void sh_ip(void) {
+    uint32_t self = 0, gw = 0, mask = 0;
+    if (nova_netinfo(&self, &gw, &mask) != 0) {
+        nova_puts("netinfo failed");
+        return;
+    }
+    nova_print("ip=", 3);
+    sh_putip(self);
+    nova_print(" mask=", 6);
+    sh_putip(mask);
+    nova_print(" gw=", 4);
+    sh_putip(gw);
+    nova_putchar('\n');
+}
+
+static void sh_dhcp(void) {
+    int32_t r = nova_dhcp();
+    if (r != 0) {
+        nova_puts("dhcp failed");
+        return;
+    }
+    sh_ip();
 }
 
 static void sh_echo(const char *line) {
@@ -185,7 +218,8 @@ static void sh_fsck(const char *line) {
 
 static void sh_ping(const char *line) {
     /* ping [a.b.c.d]: dotted quad, octets 0..255, default
-     * 127.0.0.1. Only loopback routes (else EHOSTUNREACH).
+     * 127.0.0.1. Loopback plus on-link/gateway wire destinations;
+     * off-subnet is EHOSTUNREACH ("no route to host").
      * (nova_strtoi needs all-digit strings, so octets parse here.) */
     const char *p = sh_arg(line);
     uint32_t addr = 0x7F000001u;
@@ -283,6 +317,10 @@ static void sh_run(const char *line) {
     } else if (nova_strncmp(line, "ping", 4) == 0 &&
                (line[4] == 0 || line[4] == ' ')) {
         sh_ping(line);
+    } else if (nova_strcmp(line, "ip") == 0) {
+        sh_ip();
+    } else if (nova_strcmp(line, "dhcp") == 0) {
+        sh_dhcp();
     } else if (nova_strcmp(line, "exit") == 0) {
         nova_puts("bye");
         nova_exit(0);

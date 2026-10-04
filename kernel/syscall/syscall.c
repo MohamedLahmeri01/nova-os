@@ -728,6 +728,37 @@ static int32_t do_ping(uint32_t addr, uint32_t seq, uint32_t c) {
     return net_ping(addr, (uint16_t)(seq & 0xFFFFu));
 }
 
+static int32_t do_dhcp(uint32_t a, uint32_t b, uint32_t c) {
+    (void)a;
+    (void)b;
+    (void)c;
+    /* Re-run DHCP acquisition (Phase 9c): 0 or -errno (ENODEV
+     * without NIC, ETIMEDOUT on silence). No args, no user
+     * pointers; the calling thread blocks for up to ~16s. */
+    return (int32_t)dhcp_acquire();
+}
+
+static int32_t do_netinfo(uint32_t self_ptr, uint32_t gw_ptr,
+                          uint32_t mask_ptr) {
+    uint32_t *s;
+    uint32_t *g;
+    uint32_t *m;
+    /* Current runtime IP config (Phase 9c): three validated u32
+     * writes, mirroring do_meminfo. */
+    if (validate_usermem(self_ptr, 4, 1) != 0 ||
+        validate_usermem(gw_ptr, 4, 1) != 0 ||
+        validate_usermem(mask_ptr, 4, 1) != 0) {
+        return -NOVA_EFAULT;
+    }
+    s = (uint32_t *)self_ptr;
+    g = (uint32_t *)gw_ptr;
+    m = (uint32_t *)mask_ptr;
+    *s = net_self_ip();
+    *g = net_gw_ip();
+    *m = net_netmask();
+    return NOVA_ESUCCESS;
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -753,6 +784,8 @@ static const struct {
     { SYS_EXEC, "exec", do_exec },
     { SYS_FSCK, "fsck", do_fsck },
     { SYS_PING, "ping", do_ping },
+    { SYS_DHCP, "dhcp", do_dhcp },
+    { SYS_NETINFO, "netinfo", do_netinfo },
 };
 
 void syscall_handler(struct syscall_frame *f) {

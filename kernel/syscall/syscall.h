@@ -29,7 +29,9 @@
 #define SYS_EXEC 15u
 #define SYS_FSCK 16u
 #define SYS_PING 17u
-#define SYS_MAX 17u
+#define SYS_DHCP 18u
+#define SYS_NETINFO 19u
+#define SYS_MAX 19u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0

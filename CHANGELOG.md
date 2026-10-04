@@ -144,6 +144,12 @@ No releases yet.
   NAT + virtio, `VIRTIO-OK` + `NET-WIRE-OK` gates, pcap proof
   (ADR-0033). Fixed: QueueSize write-back, desc layout, 12B
   header negotiation, stale-binary/timestamp discipline.
+- Phase 9c DHCP + UDP (tested 2026-10-04, `nova test` 14/14):
+  UDP datagrams + DHCP client (dynamic self/gw/mask, rapid-commit
+  ACK accepted), frag/TTL refusal, `SYS_DHCP` + `SYS_NETINFO`,
+  shell `ip`/`dhcp`, `DHCP-OK` gate, pcap proof (ADR-0034).
+  Fixed: decimal magic cookie 99.130.83.99, self-consistent
+  build+test vectors.
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the
