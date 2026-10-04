@@ -172,6 +172,13 @@ Ethernet → ARP → IPv4 → ICMP → UDP → TCP → sockets (loopback first).
 
 Capabilities, sandboxing, resource limits, secure handles.
 
+- [x] 10a capabilities + sandbox primitive (per-process caps mask,
+  CAP_NET/CAP_SPAWN gates, monotonic SYS_CAPS, spawn inheritance,
+  shell caps/dropcap, CAPS-OK gate + T15), 15/15 (ADR-0035)
+- [ ] 10b resource limits (frames, fds, ticks, file size)
+- [ ] 10c UIDs + file ownership/permissions
+- [ ] 10d filesystem jailing
+
 ## Phase 11 — SDK
 
 Headers, cross-toolchain recipe, debugging guide, packaging stub.
