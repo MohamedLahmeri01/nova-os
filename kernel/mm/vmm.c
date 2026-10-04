@@ -119,6 +119,10 @@ void vmm_map_mmio(uint32_t phys) {    uint32_t p = phys & ~0xFFFu;
     arch_write_cr3(arch_read_cr3());
 }
 
+uint32_t vmm_kernel_pd(void) {
+    return (uint32_t)(uintptr_t)g_pd;
+}
+
 int mem_page_state(uint32_t addr, int *present, int *user,
                     int *writable) {
     uint32_t pde;

@@ -48,6 +48,29 @@ void serial_puthex32(uint32_t v) {
 }
 
 volatile uint32_t g_ticks = 1000u;
+
+/* No NIC on the host: wire paths stay dormant (ready=0), which the
+ * loopback tests rely on (noroute without hardware). */
+int virtio_net_ready(void) {
+    return 0;
+}
+
+const uint8_t *virtio_net_mac(void) {
+    static uint8_t z[6] = { 0, 0, 0, 0, 0, 0 };
+    return z;
+}
+
+int virtio_net_tx(const uint8_t *f, uint32_t l) {
+    (void)f;
+    (void)l;
+    return -NOVA_EIO;
+}
+
+int virtio_net_rx(uint8_t *o, uint32_t m) {
+    (void)o;
+    (void)m;
+    return -NOVA_EAGAIN;
+}
 /* Independent checksum oracle (different loop shape). */
 static uint16_t oracle_ck(const uint8_t *d, uint32_t n) {
     uint32_t s = 0;

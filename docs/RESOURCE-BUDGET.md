@@ -9,7 +9,9 @@ CPUs:   2
 RAM:    1024 MB
 VRAM:   16 MB
 Chipset: PIIX3, BIOS boot, PAE on, long mode on, HPET on
-NIC:    none (isolated until the net stack exists)
+NIC:    nat/virtio since 9b (was: none isolated until net existed;
+        NAT is host-contained: no host adapter or config changes;
+        see ADR-0033 for the recipe decision)
 USB:    off   Audio: none
 ```
 

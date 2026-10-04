@@ -12,6 +12,10 @@
 #define NET_MTU 1500u
 #define NET_PROTO_ICMP 1u
 #define NET_ADDR_LOOPBACK 0x7F000001u /* 127.0.0.1, host order */
+/* VBox NAT defaults (Phase 9b static config; DHCP removes this). */
+#define NET_ADDR_SELF 0x0A00020Fu    /* 10.0.2.15 */
+#define NET_ADDR_GW 0x0A000202u      /* 10.0.2.2 */
+#define NET_ADDR_MASK 0xFFFFFF00u
 
 /* Ones-complement checksum (RFC 1071) over len bytes. */
 uint16_t net_checksum(const uint8_t *data, uint32_t len);
@@ -38,9 +42,10 @@ int net_loop_tx(const uint8_t *pkt, uint32_t len);
 int net_loop_rx(uint8_t *out, uint32_t max);
 void net_loop_stats(uint32_t *tx_out, uint32_t *rx_out);
 
-/* Synchronous ping 127.0.0.1 (request -> loopback -> reply parsed).
- * Non-loopback destinations fail -EHOSTUNREACH (no route yet).
- * Returns RTT in ticks (>= 0) or negative -errno. */
+/* Synchronous ping (request -> reply parsed). Loopback is served
+ * inline; wire destinations go via Ethernet+ARP (Phase 9b).
+ * Returns RTT in ticks (>= 0) or negative -errno (EHOSTUNREACH off
+ * route, ETIMEDOUT on silence). */
 int32_t net_ping(uint32_t addr, uint16_t seq);
 
 /* Bring up loopback + deterministic selftest (checksum vectors,

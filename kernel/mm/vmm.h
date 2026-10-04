@@ -11,6 +11,10 @@ int vmm_selftest(void);
 /* Map one MMIO page identity (P|RW|PWT|PCD). For LAPIC now, general
  * device MMIO later. Panics on PMM exhaustion. */
 void vmm_map_mmio(uint32_t phys);
+/* Kernel page directory (for brief CR3 windows over MMIO that user
+ * address spaces must never map: CPL3 could otherwise poke devices
+ * directly). Switch back immediately; cli-guarded by callers. */
+uint32_t vmm_kernel_pd(void);
 /* Page query for syscall validation (Phase 5). 0 ok (outputs set),
  * nonzero if the address is outside the managed map. */
 int mem_page_state(uint32_t addr, int *present, int *user, int *writable);

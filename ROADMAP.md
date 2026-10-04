@@ -160,7 +160,10 @@ Ethernet → ARP → IPv4 → ICMP → UDP → TCP → sockets (loopback first).
 - [x] 9a LOOPBACK DONE: IPv4 build/parse + ICMP echo + loopback
   driver + checksums, `SYS_PING` + shell `ping`, `NET-OK` gate,
   T14 (oracle fuzz), 14/14 (ADR-0032)
-- [ ] 9b ARP + virtio-net + NIC recipe (driver + ARP/DHCP/UDP/IP)
+- [x] 9b ARP + virtio-net + NIC recipe (driver + ARP/gateway ping over
+  NAT + virtio; static 10.0.2.15/10.0.2.2; `VIRTIO-OK` +
+  `NET-WIRE-OK` gates, pcap proof), 14/14 (ADR-0033)
+- [ ] 9c DHCP + UDP + IP completion (dynamic config, datagrams)
 
 ## Phase 10 — Security hardening
 

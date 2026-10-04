@@ -138,6 +138,12 @@ No releases yet.
   IPv4 + ICMP echo over loopback, `SYS_PING` + shell `ping`,
   `NET-OK` gate, T14 oracle fuzz (ADR-0032). Fixed: odd-vector
   oracle, octet parser, request/reply test discipline.
+- Phase 9b virtio-net wire proof (tested 2026-10-04,
+  `nova test` 14/14): modern-only virtio-net driver (MAC +
+  MRG_RXBUF, 12B headers, 2x64 queues), ARP + gateway ping over
+  NAT + virtio, `VIRTIO-OK` + `NET-WIRE-OK` gates, pcap proof
+  (ADR-0033). Fixed: QueueSize write-back, desc layout, 12B
+  header negotiation, stale-binary/timestamp discipline.
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the
