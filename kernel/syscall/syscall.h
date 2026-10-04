@@ -31,10 +31,12 @@
 #define SYS_PING 17u
 #define SYS_DHCP 18u
 #define SYS_NETINFO 19u
-#define SYS_MAX 19u
+#define SYS_CAPS 20u
+#define SYS_MAX 20u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0
+#define NOVA_EPERM 1
 #define NOVA_ENOENT 2
 #define NOVA_EIO 5
 #define NOVA_EBADF 9

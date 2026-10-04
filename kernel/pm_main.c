@@ -28,6 +28,7 @@
 #include "drivers/virtio_net.h"
 #include "thread/thread.h"
 #include "process/process.h"
+#include "process/caps.h"
 #include "user.h"
 #include "smp.h"
 #include "../boot/boot_info.h"
@@ -54,6 +55,19 @@ static uint32_t spawn_image(const uint8_t *img, uint32_t size) {
     as = addrspace_create();
     if (p == 0 || as == 0) {
         return 0;
+    }
+    /* Inherit credentials from the spawner (Phase 10a): the child
+     * starts with no more rights than its parent. Kernel-context
+     * spawns (no current thread) grant root/all, matching init. */
+    {
+        struct thread *cur = sched_current_thread();
+        if (cur != 0 && cur->proc != 0) {
+            p->caps = cur->proc->caps;
+            p->uid = cur->proc->uid;
+        } else {
+            p->caps = CAPS_ALL;
+            p->uid = UID_ROOT;
+        }
     }
     p->cr3 = as->pd;
     frames = (size + 4095u) / 4096u;
@@ -286,6 +300,9 @@ void nova_pm_main(const nova_boot_info_t *info) {
     }
     if (net_selftest() != 0) {
         nova_panic("net-selftest-fail");
+    }
+    if (caps_selftest() != 0) {
+        nova_panic("caps-selftest-fail");
     }
     {
         int sched_rc = sched_selftest();

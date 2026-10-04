@@ -11,6 +11,7 @@
 #include "panic.h"
 #include "syscall/syscall.h"
 #include "syscall/validate.h"
+#include "process/caps.h"
 #include "mm/pmm.h"
 #include "mm/heap.h"
 #include "thread/thread.h"
@@ -698,11 +699,26 @@ static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
     return fs_mkdir(kpath);
 }
 
+/* Capability gate (Phase 10a): the calling thread's process must
+ * hold the right. No current process (early boot, kernel context)
+ * allows: gates only bind threads that exist. */
+static int need_cap(uint32_t need) {
+    struct thread *cur = sched_current_thread();
+    if (cur == 0 || cur->proc == 0) {
+        return NOVA_ESUCCESS;
+    }
+    return caps_allow(cur->proc->caps, need);
+}
+
 static int32_t do_exec(uint32_t path, uint32_t b, uint32_t c) {
     char kpath[FS_MAX_PATH + 1u];
     int32_t plen;
     (void)b;
     (void)c;
+    /* Gate first (Phase 10a): no path work for the unprivileged. */
+    if (need_cap(CAP_SPAWN) != 0) {
+        return -NOVA_EPERM;
+    }
     plen = copy_user_path(path, kpath);
     if (plen < 0) {
         return plen;
@@ -723,6 +739,10 @@ static int32_t do_fsck(uint32_t a, uint32_t b, uint32_t c) {
 
 static int32_t do_ping(uint32_t addr, uint32_t seq, uint32_t c) {
     (void)c;
+    /* Gate first (Phase 10a): network transmit needs CAP_NET. */
+    if (need_cap(CAP_NET) != 0) {
+        return -NOVA_EPERM;
+    }
     /* Synchronous loopback ping (Phase 9a): RTT ticks or -errno
      * (EHOSTUNREACH off-loopback). Real NICs make this async. */
     return net_ping(addr, (uint16_t)(seq & 0xFFFFu));
@@ -732,6 +752,11 @@ static int32_t do_dhcp(uint32_t a, uint32_t b, uint32_t c) {
     (void)a;
     (void)b;
     (void)c;
+    /* Gate first (Phase 10a): reconfiguring the network needs
+     * CAP_NET, like transmitting on it. */
+    if (need_cap(CAP_NET) != 0) {
+        return -NOVA_EPERM;
+    }
     /* Re-run DHCP acquisition (Phase 9c): 0 or -errno (ENODEV
      * without NIC, ETIMEDOUT on silence). No args, no user
      * pointers; the calling thread blocks for up to ~16s. */
@@ -757,6 +782,32 @@ static int32_t do_netinfo(uint32_t self_ptr, uint32_t gw_ptr,
     *g = net_gw_ip();
     *m = net_netmask();
     return NOVA_ESUCCESS;
+}
+
+static int32_t do_caps(uint32_t op, uint32_t mask, uint32_t c) {
+    struct thread *cur;
+    struct process *p;
+    uint32_t out;
+    (void)c;
+    /* Observe or shrink your own mask (Phase 10a): drops are
+     * monotonic (caps_drop refuses unknown bits); no interface
+     * raises caps, so sandboxes only tighten. */
+    cur = sched_current_thread();
+    if (cur == 0 || cur->proc == 0) {
+        return -NOVA_EINVAL;
+    }
+    p = cur->proc;
+    if (op == CAP_OP_GET) {
+        return (int32_t)p->caps;
+    }
+    if (op == CAP_OP_DROP) {
+        if (caps_drop(p->caps, mask, &out) != 0) {
+            return -NOVA_EINVAL;
+        }
+        p->caps = out;
+        return (int32_t)out;
+    }
+    return -NOVA_EINVAL;
 }
 
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
@@ -786,6 +837,7 @@ static const struct {
     { SYS_PING, "ping", do_ping },
     { SYS_DHCP, "dhcp", do_dhcp },
     { SYS_NETINFO, "netinfo", do_netinfo },
+    { SYS_CAPS, "caps", do_caps },
 };
 
 void syscall_handler(struct syscall_frame *f) {
@@ -814,4 +866,134 @@ void syscall_init(void) {
             nova_panic("syscall-gate-fail");
         }
     }
+}
+
+/* --- selftest: the sandbox demonstrably removes rights (Phase 10a,
+ * ADR-0007 testability rule). A capless scratch process attempts
+ * gated calls through the real dispatch (crafted frames, current
+ * thread swapped under cli so no tick can observe the fake). --- */
+int caps_selftest(void) {
+    struct process *victim;
+    struct thread fake;
+    struct thread *saved;
+    struct syscall_frame f;
+    victim = process_create();
+    if (victim == 0) {
+        serial_puts("CAPS-FAIL alloc\n");
+        return -1;
+    }
+    if (victim->caps != 0 || victim->uid != UID_NOBODY) {
+        serial_puts("CAPS-FAIL default-deny\n");
+        return -1;
+    }
+    fake.sp = 0;
+    fake.id = 0xFFFFFFFEu;
+    fake.state = THREAD_RUNNING;
+    fake.stack_base = 0;
+    fake.slice_used = 0;
+    fake.prio = 0;
+    fake.is_user = 0;
+    fake.next = 0;
+    fake.pnext = 0;
+    fake.proc = victim;
+    fake.user_stack = 0;
+    fake.user_shared = 0;
+    f.kflags = 0;
+    f.edi = 0;
+    f.esi = 0;
+    f.ebp = 0;
+    f.esp_ignored = 0;
+    f.ebx = 0;
+    f.edx = 0;
+    f.ecx = 0;
+    f.eax = 0;
+    f.eip = 0;
+    f.cs = 0;
+    f.eflags = 0;
+    f.esp = 0;
+    f.ss = 0;
+    saved = sched_current_thread();
+    /* Failure discipline: any CAPS-FAIL below returns with the CPU
+     * still masked and current still fake -- safe because pm_main
+     * panics immediately (no tick can observe the fake, halt wants
+     * interrupts off anyway). Success restores both. */
+    __asm__ volatile("cli" ::: "memory");
+    sched_enter(&fake);
+    /* Capless: ping/dhcp/exec all refuse (exec refuses before
+     * touching the bogus path: gates run first). */
+    f.eax = SYS_PING;
+    f.ebx = 0x7F000001u;
+    f.ecx = 1;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EPERM) {
+        serial_puts("CAPS-FAIL ping-open\n");
+        return -1;
+    }
+    f.eax = SYS_DHCP;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EPERM) {
+        serial_puts("CAPS-FAIL dhcp-open\n");
+        return -1;
+    }
+    f.eax = SYS_EXEC;
+    f.ebx = 0;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EPERM) {
+        serial_puts("CAPS-FAIL exec-open\n");
+        return -1;
+    }
+    /* Observe + bad-drop discipline. */
+    f.eax = SYS_CAPS;
+    f.ebx = CAP_OP_GET;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != 0) {
+        serial_puts("CAPS-FAIL get\n");
+        return -1;
+    }
+    f.eax = SYS_CAPS;
+    f.ebx = CAP_OP_DROP;
+    f.ecx = 0x04u; /* unknown bit: must not silently pass */
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EINVAL) {
+        serial_puts("CAPS-FAIL badbit\n");
+        return -1;
+    }
+    /* Grant all: the same calls now succeed (loopback ping proves
+     * the positive path end to end). */
+    victim->caps = CAPS_ALL;
+    f.eax = SYS_PING;
+    f.ebx = 0x7F000001u;
+    f.ecx = 9;
+    syscall_handler(&f);
+    if ((int32_t)f.eax < 0) {
+        serial_puts("CAPS-FAIL ping-shut\n");
+        return -1;
+    }
+    /* Drop NET: monotonic (get confirms the smaller mask; ping and
+     * dhcp refuse again; spawn still allowed). */
+    f.eax = SYS_CAPS;
+    f.ebx = CAP_OP_DROP;
+    f.ecx = CAP_NET;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != (int32_t)(CAPS_ALL & ~CAP_NET)) {
+        serial_puts("CAPS-FAIL drop\n");
+        return -1;
+    }
+    f.eax = SYS_PING;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EPERM) {
+        serial_puts("CAPS-FAIL ping-relock\n");
+        return -1;
+    }
+    f.eax = SYS_DHCP;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EPERM) {
+        serial_puts("CAPS-FAIL dhcp-relock\n");
+        return -1;
+    }
+    __asm__ volatile("sti" ::: "memory");
+    sched_enter(saved);
+    kfree(victim);
+    serial_puts("CAPS-OK\n");
+    return NOVA_ESUCCESS;
 }

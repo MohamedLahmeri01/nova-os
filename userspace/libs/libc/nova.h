@@ -27,9 +27,17 @@
 #define SYS_PING 17u
 #define SYS_DHCP 18u
 #define SYS_NETINFO 19u
+#define SYS_CAPS 20u
+
+/* Capability bits + caps ops mirrored from process/caps.h. */
+#define CAP_NET 0x01u
+#define CAP_SPAWN 0x02u
+#define CAP_OP_GET 0u
+#define CAP_OP_DROP 1u
 
 /* Errno subset mirrored from the kernel ABI (negative on return). */
 #define NOVA_EHOSTUNREACH 113
+#define NOVA_EPERM 1
 
 #define NOVA_O_RDONLY 0u
 #define NOVA_O_WRONLY 1u
@@ -132,6 +140,10 @@ static inline int32_t nova_netinfo(uint32_t *self, uint32_t *gw,
                                    uint32_t *mask) {
     return nova_syscall(SYS_NETINFO, (uint32_t)self, (uint32_t)gw,
                         (uint32_t)mask);
+}
+
+static inline int32_t nova_caps(uint32_t op, uint32_t mask) {
+    return nova_syscall(SYS_CAPS, op, mask, 0);
 }
 
 #endif /* NOVA_LIBC_NOVA_H */

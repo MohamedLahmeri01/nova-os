@@ -22,6 +22,12 @@ struct process {
     struct thread *threads;
     struct process *next;
     struct fs_file *fds[NOVA_NFD];
+    /* Phase 10a credentials: capability mask (see process/caps.h)
+     * + uid (0 = root). Default-deny: process_create zeroes both
+     * (nobody, nothing); spawn copies the parent's, init is granted
+     * explicitly at adoption. */
+    uint32_t caps;
+    uint32_t uid;
 };
 
 extern struct process *g_init_process;

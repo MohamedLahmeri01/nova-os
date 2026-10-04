@@ -30,8 +30,10 @@ static void sh_putdec(uint32_t v) {
     }
 }
 
+static const char *sh_arg(const char *line);
+
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap clear exit");
 }
 
 static void sh_putip(uint32_t ip) {
@@ -65,6 +67,47 @@ static void sh_dhcp(void) {
         return;
     }
     sh_ip();
+}
+
+static void sh_caps(void) {
+    int32_t r = nova_caps(CAP_OP_GET, 0);
+    if (r < 0) {
+        nova_puts("caps failed");
+        return;
+    }
+    nova_print("caps=", 5);
+    if ((r & CAP_NET) != 0) {
+        nova_print("net ", 4);
+    }
+    if ((r & CAP_SPAWN) != 0) {
+        nova_print("spawn ", 6);
+    }
+    if (r == 0) {
+        nova_print("none", 4);
+    }
+    nova_putchar('\n');
+}
+
+static void sh_dropcap(const char *line) {
+    const char *p = sh_arg(line);
+    uint32_t mask = 0;
+    int32_t r;
+    if (nova_strcmp(p, "net") == 0) {
+        mask = CAP_NET;
+    } else if (nova_strcmp(p, "spawn") == 0) {
+        mask = CAP_SPAWN;
+    } else if (nova_strcmp(p, "all") == 0) {
+        mask = CAP_NET | CAP_SPAWN;
+    } else {
+        nova_puts("usage: dropcap net|spawn|all");
+        return;
+    }
+    r = nova_caps(CAP_OP_DROP, mask);
+    if (r < 0) {
+        nova_puts("dropcap failed");
+        return;
+    }
+    sh_caps();
 }
 
 static void sh_echo(const char *line) {
@@ -321,6 +364,11 @@ static void sh_run(const char *line) {
         sh_ip();
     } else if (nova_strcmp(line, "dhcp") == 0) {
         sh_dhcp();
+    } else if (nova_strcmp(line, "caps") == 0) {
+        sh_caps();
+    } else if (nova_strncmp(line, "dropcap", 7) == 0 &&
+               (line[7] == 0 || line[7] == ' ')) {
+        sh_dropcap(line);
     } else if (nova_strcmp(line, "exit") == 0) {
         nova_puts("bye");
         nova_exit(0);

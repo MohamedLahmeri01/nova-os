@@ -15,6 +15,7 @@
 #include "thread/thread.h"
 #include "sched/sched.h"
 #include "process/process.h"
+#include "process/caps.h"
 
 #if defined(__i386__)
 #include "../arch/x86/cpu.h"
@@ -153,6 +154,12 @@ void sched_switch_to(struct thread *cur, struct thread *next) {
 }
 
 void sched_enter(struct thread *t) {
+    /* NULL clears (Phase 10a: selftests borrow g_current and put
+     * back whatever they found, including nothing). */
+    if (t == 0) {
+        g_current = 0;
+        return;
+    }
     g_current = t;
     t->state = THREAD_RUNNING;
 }
@@ -181,6 +188,10 @@ struct thread *sched_adopt_boot(void) {
     if (g_init_process == 0) {
         nova_panic("sched-no-proc");
     }
+    /* The first process is root with all caps (Phase 10a): every
+     * spawn inherits from here unless sandboxed down. */
+    g_init_process->caps = CAPS_ALL;
+    g_init_process->uid = UID_ROOT;
     t->proc = g_init_process;
     process_attach(g_init_process, t);
     thread_count_inc();

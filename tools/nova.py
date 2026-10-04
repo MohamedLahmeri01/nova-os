@@ -268,7 +268,8 @@ def build_phase1(fault=False):
                                  ("boot/ap_tramp.S", "ap_tramp.o", []),
                                  ("kernel/thread/thread.c", "thread.o", []),
                                  ("kernel/sched/sched.c", "sched.o", []),
-                                  ("kernel/process/process.c", "process.o", []),
+                                   ("kernel/process/process.c", "process.o", []),
+                                   ("kernel/process/caps.c", "caps.o", []),
                                   ("kernel/input/kbd.c", "kbd.o", []),
                                   ("kernel/drivers/ata.c", "ata.o", []),
                                   ("kernel/drivers/pci.c", "pci.o", []),
@@ -304,7 +305,8 @@ def build_phase1(fault=False):
               "pmm.o", "vmm.o", "heap.o", "addrspace.o", "idt.o", "irq.o",
               "lapic.o", "pit.o", "syscall_entry.o", "syscall.o",
               "validate.o", "ctx.o", "user_asm.o", "user.o", "gdt.o",
-              "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
+               "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
+               "caps.o",
               "kbd.o", "init_blob.o", "hi_blob.o", "ramfs.o", "file.o",
               "fat32.o", "ext4.o", "novafs.o", "ata.o", "pci.o",
               "vga.o", "virtio.o", "net.o", PMM_BACKEND_O],
@@ -643,6 +645,25 @@ def cmd_test():
             print("[pass] T14 host net test"); passed += 1
         else:
             print("[fail] T14 host net test"); failed += 1
+    # T15: host capability test (caps.c: allow/drop matrix + fuzz)
+    print("[info] T15 compiling + running host caps test...")
+    caps_exe = os.path.join(BUILD, "test_caps.exe")
+    cmd = ["gcc", "-O2", "-Wall", "-Wextra",
+           "-I", os.path.join(ROOT, "kernel"),
+           os.path.join(ROOT, "tests", "unit", "test_caps.c"),
+           os.path.join(ROOT, "kernel", "process", "caps.c"),
+           "-o", caps_exe]
+    r = run(cmd, timeout=120)
+    if r.returncode != 0:
+        print(f"[fail] T15 caps test compile:\n{(r.stderr or '')[:1500]}")
+        failed += 1
+    else:
+        r = run([caps_exe], timeout=120)
+        print((r.stdout or "") + (r.stderr or ""))
+        if r.returncode == 0:
+            print("[pass] T15 host caps test"); passed += 1
+        else:
+            print("[fail] T15 host caps test"); failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 
@@ -860,7 +881,7 @@ def cmd_run_vbox():
                                        b"VGA-OK", b"VIRTIO-OK", b"DMA-OK", b"FS-OK",
                                        b"FAT-OK", b"EXT-OK", b"NOVA-OK",
                                        b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
-                                       b"IDT-OK",
+                                       b"CAPS-OK", b"IDT-OK",
                                        b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
@@ -918,7 +939,7 @@ PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"HEAP-OK", b"ATA-OK", b"PCI-OK", b"VGA-OK", b"VIRTIO-OK",
                  b"DMA-OK", b"FS-OK", b"FAT-OK", b"EXT-OK",
                   b"NOVA-OK", b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
-                  b"IDT-OK",
+                  b"CAPS-OK", b"IDT-OK",
                  b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]

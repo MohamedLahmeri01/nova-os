@@ -150,6 +150,11 @@ No releases yet.
   shell `ip`/`dhcp`, `DHCP-OK` gate, pcap proof (ADR-0034).
   Fixed: decimal magic cookie 99.130.83.99, self-consistent
   build+test vectors.
+- Phase 10a capabilities (tested 2026-10-04, `nova test` 15/15):
+  per-process caps + uid, CAP_NET/CAP_SPAWN gates, monotonic
+  SYS_CAPS, spawn inheritance, shell caps/dropcap, CAPS-OK gate,
+  T15 monotonicity fuzz (ADR-0035). Fixed: NULL-safe sched_enter
+  (found via objdump on the faulting eip).
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the

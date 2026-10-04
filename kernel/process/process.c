@@ -8,6 +8,7 @@
 #include "mm/heap.h"
 #include "thread/thread.h"
 #include "process/process.h"
+#include "process/caps.h"
 
 struct process *g_init_process;
 
@@ -26,6 +27,10 @@ struct process *process_create(void) {
     for (uint32_t i = 0; i < NOVA_NFD; i++) {
         p->fds[i] = 0;
     }
+    /* Default-deny credentials (Phase 10a): spawn copies the
+     * parent's over these; init is granted at adoption. */
+    p->caps = 0;
+    p->uid = UID_NOBODY;
     return p;
 }
 
