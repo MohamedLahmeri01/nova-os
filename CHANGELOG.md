@@ -125,6 +125,11 @@ No releases yet.
   mechanism-1 scan with bridge recursion, VBox device table,
   `PCI-OK` gate with host-bridge + IDE asserts (ADR-0029). Fixed:
   PIIX4 IDE ID, VBox VGA/guest names, vendor-word slot skip.
+- Phase 8c BMIDE DMA (tested 2026-10-03, `nova test` 13/13):
+  bus-master disk I/O (PRD, MWDMA2, polled completion) with
+  DMA-vs-PIO proofs and global routing, `DMA-OK` gate (ADR-0030).
+  Fixed: direction-bit polarity (VBox asserts it), CLS/latency
+  programming, serial.log hygiene per manual boot.
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the

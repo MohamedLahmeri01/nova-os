@@ -143,6 +143,9 @@ PIIX3/ICH9, VGA/VMSVGA, i8042/PS2, Intel PRO/1000).
 - [x] 8b PCI DONE: mechanism-1 enumeration (multifunction + bridge
   recursion), known-device table for VBox hardware, host-bridge +
   IDE asserts, `PCI-OK` gate, 13/13 (ADR-0029)
+- [x] 8c BMIDE DONE: bus-master DMA (PRD builder, MWDMA2, INT poll),
+  DMA-vs-PIO equivalence + global routing (all FS gates run over
+  DMA), `DMA-OK` gate, 13/13 (ADR-0030)
 
 ## Phase 9 — Networking
 

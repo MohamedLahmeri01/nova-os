@@ -45,6 +45,17 @@ static uint32_t pci_read(uint32_t bus, uint32_t slot, uint32_t func,
     return arch_inl(PCI_DATA);
 }
 
+void pci_write(uint32_t bus, uint32_t slot, uint32_t func, uint32_t off,
+               uint32_t val) {
+    arch_outl(PCI_ADDR, pci_addr(bus, slot, func, off));
+    arch_outl(PCI_DATA, val);
+}
+
+uint32_t pci_read_cfg(uint32_t bus, uint32_t slot, uint32_t func,
+                      uint32_t off) {
+    return pci_read(bus, slot, func, off);
+}
+
 static const char *dev_name(uint16_t vendor, uint16_t device) {
     if (vendor == 0x8086u && device == 0x1237u) {
         return "440FX";

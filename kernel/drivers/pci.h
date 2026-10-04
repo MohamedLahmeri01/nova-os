@@ -26,6 +26,13 @@ struct pci_dev {
 /* Enumerate all devices (up to PCI_MAX_DEVICES, rest counted but
  * dropped). Returns the count, or negative -errno. */
 int pci_scan(void);
+/* Config dword write (mechanism 1). Needed for command-register
+ * bits (bus mastering) and BAR programming. */
+void pci_write(uint32_t bus, uint32_t slot, uint32_t func, uint32_t off,
+               uint32_t val);
+/* Config dword read (mechanism 1). For read-modify-write cycles. */
+uint32_t pci_read_cfg(uint32_t bus, uint32_t slot, uint32_t func,
+                      uint32_t off);
 /* Devices found by the last scan (valid until the next scan). */
 uint32_t pci_count(void);
 const struct pci_dev *pci_get(uint32_t i);

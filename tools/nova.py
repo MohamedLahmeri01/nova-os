@@ -831,7 +831,7 @@ def cmd_run_vbox():
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
                                        b"HEAP-OK", b"ATA-OK", b"PCI-OK",
-                                       b"FS-OK",
+                                       b"DMA-OK", b"FS-OK",
                                        b"FAT-OK", b"EXT-OK", b"NOVA-OK",
                                        b"IDT-OK",
                                        b"TIMER-OK",
@@ -888,8 +888,8 @@ def cmd_image():
 
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
-                 b"HEAP-OK", b"ATA-OK", b"PCI-OK", b"FS-OK", b"FAT-OK",
-                 b"EXT-OK",
+                 b"HEAP-OK", b"ATA-OK", b"PCI-OK", b"DMA-OK", b"FS-OK",
+                 b"FAT-OK", b"EXT-OK",
                  b"NOVA-OK", b"IDT-OK",
                  b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
