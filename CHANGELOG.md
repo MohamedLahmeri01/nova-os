@@ -118,6 +118,9 @@ No releases yet.
   shell `fsck`, self-audit gate, T13 (pristine + 4 mutation classes)
   (ADR-0027). Fixed: global `-mno-sse -mno-mmx` (SSE #UD with no
   XMM state), verified zero SIMD in both binaries.
+- Phase 8a loader budget (tested 2026-10-03, `nova test` 13/13):
+  stage1 chunked INT13 loop (496/510B), cap 127 -> 768 sectors,
+  padded 140-sector boot proof (ADR-0028).
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the

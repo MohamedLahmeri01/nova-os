@@ -335,8 +335,10 @@ def build_phase1(fault=False):
     if not kbd.startswith(b"\x31\xed\x6a\x02\x9d\xfc\xbf"):
         return 1, f"{kb_name} stage2 prologue wrong (layout broken)"
     sectors = (kbn + 511) // 512
-    if sectors > 127:
-        return 1, f"kernel too big for single INT13 load: {sectors} sectors"
+    # Phase 8a: stage1 loops INT13 in <=127-sector chunks, so the cap
+    # is memory (kernel must end below the 0x90000 pm stack), not BIOS.
+    if sectors > 768:
+        return 1, f"kernel too big for stage1 load: {sectors} sectors"
     return 0, {"stage1_bytes": s1n, "kernel_bytes": kbn,
                "kernel_sectors": sectors}
 
@@ -626,8 +628,8 @@ def _assemble_and_attach(kernel_bin_name, raw_path, vdi_path):
     with open(os.path.join(BUILD, kernel_bin_name), "rb") as f:
         kb = f.read()
     sectors = (len(kb) + 511) // 512
-    if sectors > 127:
-        return 1, f"kernel too big for single INT13 load: {sectors} sectors"
+    if sectors > 768:
+        return 1, f"kernel too big for stage1 load: {sectors} sectors"
     idx = bytes(s1).find(b"NVSC")
     s1[idx + 4:idx + 6] = sectors.to_bytes(2, "little")
     s1 += b"\x00" * (510 - len(s1)) + b"\x55\xAA"

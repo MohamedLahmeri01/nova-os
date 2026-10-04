@@ -39,16 +39,36 @@ _start:
     cmpw $0xAA55, %bx
     jne disk_err
 
-    /* Patch DAP count (image builder filled ksec_patch), then load. */
-    movw ksec_patch, %ax
-    testw %ax, %ax
+    /* Patch DAP count (image builder filled ksec_patch), then load.
+     * Multi-chunk (Phase 8a): DAP count caps at 127/call on real
+     * BIOSes, so loop: first chunk uses the template LBA/seg values
+     * directly (zero init cost), later chunks advance both. */
+    movw ksec_patch, %cx
+    testw %cx, %cx
     jz disk_err
+load_chunk:
+    movw %cx, %ax
+    cmpw $127, %ax
+    jbe have_n
+    movw $127, %ax
+have_n:
     movw %ax, dap_count
+    pushw %cx
+    pushw %ax
     movw $dap, %si
     movb $0x42, %ah
     movb boot_drive, %dl
     int $0x13
     jc disk_err
+    popw %ax
+    popw %cx
+    subw %ax, %cx
+    jz load_done
+    addw %ax, dap_lba
+    shlw $5, %ax
+    addw %ax, dap_seg
+    jmp load_chunk
+load_done:
 
     /* A20: BIOS call first, then fast gate at port 0x92. */
     movw $0x2401, %ax
@@ -195,7 +215,9 @@ dap:
 dap_count:
     .word 8                /* patched at runtime from ksec_patch */
     .word 0                /* offset */
+dap_seg:
     .word 0x1000           /* segment -> linear 0x10000 */
+dap_lba:
     .long 1, 0             /* LBA */
 nvsc_magic:
     .long 0x4353564E       /* file bytes "NVSC"; count word follows */
