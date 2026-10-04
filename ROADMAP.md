@@ -127,7 +127,10 @@ E820 memory map → COM1 serial → halt, in `NOVA-OS-CONSTRAINED`
     delete/mkdir, write-through syscalls, shell `put`, hermetic +
     idempotent guest tests, power-cut + durability proofs, 12/12
     (ADR-0026)
-  - [ ] 7f-3 fsck
+  - [x] 7f-3 FSCK DONE: host `novafsck.py` (SB/journal/bitmaps/inodes/
+    dirs/orphans) + in-guest `nova_fsck()` behind `SYS_FSCK` + shell
+    `fsck`, self-audit gate, T13 (pristine + 4 mutants), 13/13
+    (ADR-0027)
 
 ## Phase 8 — Drivers
 

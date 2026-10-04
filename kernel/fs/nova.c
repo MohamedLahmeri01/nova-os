@@ -123,8 +123,8 @@ static int sb_check(uint32_t blk, uint32_t *total_out) {
         return -NOVA_EIO;
     }
     total = rd32(sb + 12);
-    if (total == 0) {
-        return -NOVA_EIO;
+    if (total == 0 || total > 1024u) {
+        return -NOVA_EIO; /* v0.1 small-image bound (ref arrays) */
     }
     if (rd32(sb + 28) != NOVA_ROOT_INO) {
         return -NOVA_EIO;
@@ -1689,6 +1689,196 @@ int nova_mkdir(const char *path) {
     return NOVA_ESUCCESS;
 }
 
+/* Verify-only audit (Phase 7f-3): mirrors tools/novafsck.py over
+ * the live disk. Read-only (no repairs, no journal writes). Counts
+ * problems; 0 = clean. Small static state (no heap this early is
+ * fine — heap exists, but statics keep it obviously bounded). */
+static uint8_t fs_ref_blocks[128]; /* bit i = block i referenced */
+static uint8_t fs_ref_inodes[16]; /* bit i = inode i+1 referenced */
+
+static void ref_mark(uint8_t *set, uint32_t bit) {
+    set[bit / 8u] = (uint8_t)(set[bit / 8u] | (1u << (bit % 8u)));
+}
+
+static int ref_test(const uint8_t *set, uint32_t bit) {
+    return (set[bit / 8u] & (uint8_t)(1u << (bit % 8u))) != 0;
+}
+
+int nova_fsck(void) {
+    uint32_t problems = 0;
+    uint32_t b;
+    /* SB copies (re-verify live; init adopted one of them). */
+    {
+        uint32_t total = 0;
+        if (sb_check(0, &total) != 0) {
+            problems++;
+            if (sb_check(g_blocks - 1u, &total) != 0) {
+                return (int)(problems + 100u);
+            }
+        }
+    }
+    for (b = 0; b < 16u; b++) {
+        fs_ref_blocks[b] = 0;
+    }
+    fs_ref_inodes[0] = 0;
+    fs_ref_inodes[1] = 0;
+    /* Inodes: checksums + extent bounds, collect references.
+     * Capped at 128 inodes (static ref arrays; v0.1 images stay far
+     * below — larger counts are refused, not walked). */
+    for (uint32_t ino = 2;
+         ino <= g_inodes && ino <= 128u && g_inodes <= 128u; ino++) {
+        uint8_t ib[NOVA_INODE_SIZE];
+        uint32_t count;
+        /* 128B stack buffer: fine (512B is the trip line). */
+        if (inode_read(ino, ib) != 0) {
+            uint32_t bit = ino - 1u;
+            uint8_t marked = 0;
+            /* Distinguish free (skip) from corrupt (count): probe
+             * the bitmap directly (first sector covers 4096 bits). */
+            if (read_block(g_ibmap, g_blk) != 0) {
+                problems++;
+                continue;
+            }
+            marked = g_blk[bit / 8u];
+            if ((marked & (uint8_t)(1u << (bit % 8u))) == 0) {
+                continue;
+            }
+            problems++;
+            continue;
+        }
+        ref_mark(fs_ref_inodes, ino - 1u);
+        count = rd16(ib + 42);
+        if (count > 4u) {
+            problems++;
+            continue;
+        }
+        for (uint32_t e = 0; e < count; e++) {
+            uint32_t bs = rd32(ib + 48 + e * 8u);
+            uint32_t bl = rd16(ib + 48 + e * 8u + 4u);
+            for (uint32_t k = 0; k < bl; k++) {
+                if (bs + k >= g_blocks) {
+                    problems++;
+                } else {
+                    ref_mark(fs_ref_blocks, bs + k);
+                }
+            }
+        }
+    }
+    /* Dir walk from root (explicit stack; collects reachability).
+     * Each popped dir scans fully; subdirs push once (seen set).
+     * Files only need reachability marking (refs already known). */
+    {
+        uint32_t stack[16];
+        int top = 0;
+        uint8_t seen[16] = { 0 };
+        stack[0] = NOVA_ROOT_INO;
+        ref_mark(seen, NOVA_ROOT_INO - 1u);
+        while (top >= 0) {
+            uint32_t cur = stack[top--];
+            uint8_t di[NOVA_INODE_SIZE];
+            uint32_t dblk = 0;
+            uint32_t at = 0;
+            if (inode_read(cur, di) != 0) {
+                problems++;
+                continue;
+            }
+            if (!ino_is_dir(di)) {
+                problems++;
+                continue;
+            }
+            if (ino_block(di, 0, &dblk) != 0 || dblk == 0) {
+                problems++;
+                continue;
+            }
+            if (read_block(dblk, g_blk) != 0) {
+                problems++;
+                continue;
+            }
+            while (at + 8u <= NOVA_BLOCKS) {
+                uint32_t ei = rd32(g_blk + at);
+                uint32_t rl = rd16(g_blk + at + 4u);
+                uint8_t ft = g_blk[at + 7u];
+                if (rl < 8u || at + rl > NOVA_BLOCKS || rl == 0) {
+                    problems++;
+                    break;
+                }
+                if (ei != 0) {
+                    if (ei > 128u) {
+                        problems++;
+                    } else if (!ref_test(seen, ei - 1u)) {
+                        ref_mark(seen, ei - 1u);
+                        if (ft == 2 && top + 1 < 16) {
+                            stack[++top] = ei;
+                        }
+                    }
+                }
+                at += rl;
+            }
+        }
+        /* Orphans: referenced inodes never reached. */
+        for (uint32_t i = 0; i < 128u; i++) {
+            if (ref_test(fs_ref_inodes, i) && !ref_test(seen, i)) {
+                problems++;
+            }
+        }
+    }
+    /* Bitmaps vs reality. */
+    if (read_block(g_bbmap, g_blk) != 0) {
+        problems++;
+    } else {
+        for (uint32_t blk = 0; blk < g_blocks && blk < 1024u; blk++) {
+            int marked =
+                (g_blk[blk / 8u] & (uint8_t)(1u << (blk % 8u))) != 0;
+            int refd = ref_test(fs_ref_blocks, blk);
+            /* Metadata residency (SB/journal/bitmaps/table) is
+             * expected-marked without inode refs — and must be. */
+            int meta = (blk == 0) || (blk >= g_jstart &&
+                                      blk < g_jstart + g_jcount) ||
+                       blk == g_bbmap || blk == g_ibmap ||
+                       blk == g_inotab || blk == g_blocks - 1u;
+            if (refd && !marked) {
+                problems++;
+            }
+            if (marked && !refd && !meta) {
+                problems++;
+            }
+            if (meta && !marked) {
+                problems++;
+            }
+        }
+    }
+    if (read_block(g_ibmap, g_blk) != 0) {
+        problems++;
+    } else {
+        uint32_t marked_n = 0;
+        for (uint32_t ino = 1; ino <= 128u; ino++) {
+            int marked = (g_blk[(ino - 1u) / 8u] &
+                          (uint8_t)(1u << ((ino - 1u) % 8u))) != 0;
+            int refd = ref_test(fs_ref_inodes, ino - 1u);
+            if (marked) {
+                marked_n++;
+            }
+            /* Inode 1 is reserved-set (fixture convention). */
+            if (ino == 1) {
+                if (!marked) {
+                    problems++;
+                }
+                continue;
+            }
+            if (refd && !marked) {
+                problems++;
+            }
+            if (marked && !refd) {
+                problems++;
+            }
+        }
+        if (g_free_inodes + marked_n != g_inodes && g_inodes <= 128u) {
+            problems++;
+        }
+    }
+    return (int)problems;
+}
+
 static int nova_eq(const uint8_t *a, const char *b, uint32_t n) {
     for (uint32_t i = 0; i < n; i++) {
         if (a[i] != (uint8_t)b[i]) {
@@ -1865,6 +2055,12 @@ int nova_selftest(void) {
     }
     if (nova_delete("/W.TXT") != -NOVA_ENOENT) {
         serial_puts("NOVA-FAIL del-missing\n");
+        return -1;
+    }
+    /* Self-audit (Phase 7f-3): the verify pass must agree the disk
+     * is clean after the hermetic round-trips above. */
+    if (nova_fsck() != 0) {
+        serial_puts("NOVA-FAIL self-fsck\n");
         return -1;
     }
     serial_puts("NOVA-OK\n");

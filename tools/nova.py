@@ -48,6 +48,10 @@ SERIAL_LOG = os.path.join(BUILD, "serial.log")
 CFLAGS32 = ["-m32", "-ffreestanding", "-nostdlib", "-nostartfiles",
             "-fno-pic", "-fno-pie", "-fno-asynchronous-unwind-tables",
             "-fno-omit-frame-pointer",
+            # No SIMD anywhere (Phase 7f-3 lesson): CR4.OSFXSR is never
+            # set and ctx_switch saves no XMM state, so any SSE/MMX
+            # instruction faults #UD (found via fsck's zeroing loop).
+            "-mno-sse", "-mno-mmx",
             "-fno-builtin", "-Wall", "-Wextra", "-Os"]
 
 # Phase 2a allocator choice (see docs/adr/ADR-0010-allocator.md).
@@ -563,6 +567,52 @@ def cmd_test():
                 print("[pass] T12 host nova test"); passed += 1
             else:
                 print("[fail] T12 host nova test"); failed += 1
+    # T13: host fsck (novafsck.py on pristine + mutation classes)
+    print("[info] T13 running host fsck checks...")
+    fsck_py = os.path.join(ROOT, "tools", "novafsck.py")
+    r = run([sys.executable, fsck_py, nova_raw], timeout=120)
+    if r.returncode != 0:
+        print(f"[fail] T13 fsck pristine:\n{(r.stdout or '')[:800]}")
+        failed += 1
+    else:
+        import shutil
+        mut_ok = True
+        # Each mutant class must be DETECTED (nonzero exit).
+        muts = []
+        base = None
+        with open(nova_raw, "rb") as f:
+            base = bytearray(f.read())
+        cases = []
+        d = bytearray(base)
+        d[67 * 4096 + 384 + 10] ^= 0xFF
+        cases.append(("ino-cksum", bytes(d)))
+        d = bytearray(base)
+        d[68 * 4096 + 4] = 0x07
+        cases.append(("dir-reclen", bytes(d)))
+        d = bytearray(base)
+        d[65 * 4096 + 69 // 8] &= ~(1 << (69 % 8))
+        cases.append(("bitmap", bytes(d)))
+        d = bytearray(base)
+        d[1024] ^= 0xFF
+        cases.append(("sb-copy", bytes(d)))
+        for name, img in cases:
+            mp = os.path.join(BUILD, f"novafsck-{name}.raw")
+            with open(mp, "wb") as f:
+                f.write(img)
+            muts.append(mp)
+            r = run([sys.executable, fsck_py, mp, "--quiet"],
+                    timeout=60)
+            if r.returncode == 0:
+                print(f"[fail] T13 fsck missed {name}")
+                mut_ok = False
+        for mp in muts:
+            if os.path.exists(mp):
+                os.remove(mp)
+        if mut_ok:
+            print("[pass] T13 host fsck (pristine + 4 mutants)")
+            passed += 1
+        else:
+            failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 

@@ -31,7 +31,7 @@ static void sh_putdec(uint32_t v) {
 }
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck clear exit");
 }
 
 static void sh_echo(const char *line) {
@@ -168,6 +168,21 @@ static void sh_put(const char *line) {
     nova_close(fd);
 }
 
+static void sh_fsck(const char *line) {
+    int32_t r;
+    (void)line;
+    r = nova_fsck();
+    if (r == 0) {
+        nova_puts("fsck ok");
+    } else if (r < 0) {
+        nova_puts("fsck failed");
+    } else {
+        nova_print("fsck problems=", 15);
+        sh_putdec((uint32_t)r);
+        nova_putchar('\n');
+    }
+}
+
 static void sh_exec(const char *line) {
     const char *path = sh_arg(line);
     int32_t pid;
@@ -213,6 +228,8 @@ static void sh_run(const char *line) {
     } else if (nova_strncmp(line, "put", 3) == 0 &&
                (line[3] == 0 || line[3] == ' ')) {
         sh_put(line);
+    } else if (nova_strcmp(line, "fsck") == 0) {
+        sh_fsck(line);
     } else if (nova_strcmp(line, "exit") == 0) {
         nova_puts("bye");
         nova_exit(0);

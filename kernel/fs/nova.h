@@ -38,6 +38,10 @@ int nova_write_at(const char *path, uint32_t off, const uint8_t *src,
                   uint32_t len);
 int nova_delete(const char *path);
 int nova_mkdir(const char *path);
+/* Verify-only audit (Phase 7f-3): SB copies, bitmaps-vs-reality,
+ * inode checksums, dir chains, orphans. Read-only (no repairs).
+ * Returns the problem count (0 = clean). */
+int nova_fsck(void);
 /* Deterministic selftest on the known fixture content. Prints
  * NOVA-OK. Nonzero on failure (fatal). */
 int nova_selftest(void);

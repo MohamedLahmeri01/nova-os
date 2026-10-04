@@ -113,6 +113,11 @@ No releases yet.
   idempotent guest tests, power-cut + cross-boot durability proofs
   (ADR-0026). Fixed: replay ordering, slot splitting, slack-loop
   underflow, per-call block budget.
+- Phase 7f-3 fsck (tested 2026-10-03, `nova test` 13/13): host
+  `novafsck.py` plus in-guest `nova_fsck()` behind `SYS_FSCK` +
+  shell `fsck`, self-audit gate, T13 (pristine + 4 mutation classes)
+  (ADR-0027). Fixed: global `-mno-sse -mno-mmx` (SSE #UD with no
+  XMM state), verified zero SIMD in both binaries.
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the

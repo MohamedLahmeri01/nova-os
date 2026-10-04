@@ -711,6 +711,15 @@ static int32_t do_exec(uint32_t path, uint32_t b, uint32_t c) {
     return spawn_file(kpath);
 }
 
+static int32_t do_fsck(uint32_t a, uint32_t b, uint32_t c) {
+    (void)a;
+    (void)b;
+    (void)c;
+    /* Verify-only audit of the native FS (Phase 7f-3). No args, no
+     * user pointers: returns the problem count (0 = clean). */
+    return (int32_t)nova_fsck();
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -734,6 +743,7 @@ static const struct {
     { SYS_READDIR, "readdir", do_readdir },
     { SYS_MKDIR, "mkdir", do_mkdir },
     { SYS_EXEC, "exec", do_exec },
+    { SYS_FSCK, "fsck", do_fsck },
 };
 
 void syscall_handler(struct syscall_frame *f) {
