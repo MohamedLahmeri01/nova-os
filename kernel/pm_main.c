@@ -23,6 +23,7 @@
 #include "fs/nova.h"
 #include "drivers/ata.h"
 #include "drivers/pci.h"
+#include "drivers/vga.h"
 #include "thread/thread.h"
 #include "process/process.h"
 #include "user.h"
@@ -242,6 +243,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
     }
     if (pci_selftest() != 0) {
         nova_panic("pci-selftest-fail");
+    }
+    vga_init();
+    if (vga_selftest() != 0) {
+        nova_panic("vga-selftest-fail");
     }
     if (fs_init() != 0) {
         nova_panic("fs-init-fail");

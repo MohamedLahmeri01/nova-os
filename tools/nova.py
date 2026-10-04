@@ -268,6 +268,7 @@ def build_phase1(fault=False):
                                   ("kernel/input/kbd.c", "kbd.o", []),
                                   ("kernel/drivers/ata.c", "ata.o", []),
                                   ("kernel/drivers/pci.c", "pci.o", []),
+                                  ("kernel/drivers/vga.c", "vga.o", []),
                                   ("kernel/fs/ramfs.c", "ramfs.o", []),
                                   ("kernel/fs/file.c", "file.o", []),
                                   ("kernel/fs/fat32.c", "fat32.o", []),
@@ -300,7 +301,7 @@ def build_phase1(fault=False):
               "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
               "kbd.o", "init_blob.o", "hi_blob.o", "ramfs.o", "file.o",
               "fat32.o", "ext4.o", "novafs.o", "ata.o", "pci.o",
-              PMM_BACKEND_O],
+              "vga.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -831,7 +832,7 @@ def cmd_run_vbox():
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
                                        b"HEAP-OK", b"ATA-OK", b"PCI-OK",
-                                       b"DMA-OK", b"FS-OK",
+                                       b"VGA-OK", b"DMA-OK", b"FS-OK",
                                        b"FAT-OK", b"EXT-OK", b"NOVA-OK",
                                        b"IDT-OK",
                                        b"TIMER-OK",
@@ -888,8 +889,8 @@ def cmd_image():
 
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
-                 b"HEAP-OK", b"ATA-OK", b"PCI-OK", b"DMA-OK", b"FS-OK",
-                 b"FAT-OK", b"EXT-OK",
+                 b"HEAP-OK", b"ATA-OK", b"PCI-OK", b"VGA-OK", b"DMA-OK",
+                 b"FS-OK", b"FAT-OK", b"EXT-OK",
                  b"NOVA-OK", b"IDT-OK",
                  b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",

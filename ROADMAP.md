@@ -146,6 +146,12 @@ PIIX3/ICH9, VGA/VMSVGA, i8042/PS2, Intel PRO/1000).
 - [x] 8c BMIDE DONE: bus-master DMA (PRD builder, MWDMA2, INT poll),
   DMA-vs-PIO equivalence + global routing (all FS gates run over
   DMA), `DMA-OK` gate, 13/13 (ADR-0030)
+- [x] 8d VGA DONE: text console mirror (80x25, cursor, scroll),
+  cell + cursor selftest, `VGA-OK` gate, screenshot proof, 13/13
+  (ADR-0031)
+- [ ] 8e virtio: BLOCKED (no virtio device attachable: VirtIO-SCSI
+  rejected by VBox; virtio-net needs NIC recipe change) -> Phase 9
+  with the net stack (driver + ARP/DHCP/UDP/IP together)
 
 ## Phase 9 — Networking
 

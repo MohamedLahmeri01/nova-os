@@ -130,6 +130,10 @@ No releases yet.
   DMA-vs-PIO proofs and global routing, `DMA-OK` gate (ADR-0030).
   Fixed: direction-bit polarity (VBox asserts it), CLS/latency
   programming, serial.log hygiene per manual boot.
+- Phase 8d VGA console (tested 2026-10-03, `nova test` 13/13):
+  80x25 text mirror at the serial choke point, cell + cursor
+  selftest, `VGA-OK` gate, screenshot proof (ADR-0031). Deferred:
+  virtio (no attachable device; net recipe decision -> Phase 9).
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the
