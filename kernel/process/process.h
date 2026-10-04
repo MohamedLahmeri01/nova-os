@@ -28,6 +28,12 @@ struct process {
      * explicitly at adoption. */
     uint32_t caps;
     uint32_t uid;
+    /* Phase 10b ceilings (see process/rlimit.h): fd count, file
+     * size, mapped frames. Defaults are the hard ceilings (no
+     * behavior change until lowered); spawn copies the parent's. */
+    uint32_t rlimit_nofd;
+    uint32_t rlimit_fsize;
+    uint32_t rlimit_frames;
 };
 
 extern struct process *g_init_process;

@@ -29,6 +29,7 @@
 #include "thread/thread.h"
 #include "process/process.h"
 #include "process/caps.h"
+#include "process/rlimit.h"
 #include "user.h"
 #include "smp.h"
 #include "../boot/boot_info.h"
@@ -64,11 +65,15 @@ static uint32_t spawn_image(const uint8_t *img, uint32_t size) {
         if (cur != 0 && cur->proc != 0) {
             p->caps = cur->proc->caps;
             p->uid = cur->proc->uid;
+            p->rlimit_nofd = cur->proc->rlimit_nofd;
+            p->rlimit_fsize = cur->proc->rlimit_fsize;
+            p->rlimit_frames = cur->proc->rlimit_frames;
         } else {
             p->caps = CAPS_ALL;
             p->uid = UID_ROOT;
         }
     }
+    as->max_mapped = p->rlimit_frames;
     p->cr3 = as->pd;
     frames = (size + 4095u) / 4096u;
     if (size == 0 || frames > 64u) {
@@ -83,10 +88,17 @@ static uint32_t spawn_image(const uint8_t *img, uint32_t size) {
         ((uint8_t *)code)[i] = img[i];
     }
     for (uint32_t f = 0; f < frames; f++) {
-        addrspace_map(as, NOVA_USER_CODE + f * 4096u, code + f * 4096u, 1);
+        if (addrspace_map(as, NOVA_USER_CODE + f * 4096u,
+                          code + f * 4096u, 1) != 0) {
+            return 0; /* frame ceiling (Phase 10b): no partial child */
+        }
     }
-    addrspace_map(as, NOVA_USER_STACK_TOP - 8192u, stack, 1);
-    addrspace_map(as, NOVA_USER_STACK_TOP - 4096u, stack + 4096u, 1);
+    if (addrspace_map(as, NOVA_USER_STACK_TOP - 8192u, stack, 1) !=
+            0 ||
+        addrspace_map(as, NOVA_USER_STACK_TOP - 4096u,
+                      stack + 4096u, 1) != 0) {
+        return 0;
+    }
     t = thread_create_user(p, NOVA_USER_CODE, NOVA_USER_STACK_TOP,
                            stack, 0, 16u);
     if (t == 0) {
@@ -303,6 +315,9 @@ void nova_pm_main(const nova_boot_info_t *info) {
     }
     if (caps_selftest() != 0) {
         nova_panic("caps-selftest-fail");
+    }
+    if (rlim_selftest() != 0) {
+        nova_panic("rlim-selftest-fail");
     }
     {
         int sched_rc = sched_selftest();

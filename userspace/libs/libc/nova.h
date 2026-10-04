@@ -28,12 +28,20 @@
 #define SYS_DHCP 18u
 #define SYS_NETINFO 19u
 #define SYS_CAPS 20u
+#define SYS_RLIMIT 21u
 
 /* Capability bits + caps ops mirrored from process/caps.h. */
 #define CAP_NET 0x01u
 #define CAP_SPAWN 0x02u
 #define CAP_OP_GET 0u
 #define CAP_OP_DROP 1u
+
+/* Rlimit resources + ops mirrored from process/rlimit.h. */
+#define RLIM_NOFD 0u
+#define RLIM_FSIZE 1u
+#define RLIM_FRAMES 2u
+#define RLIM_OP_GET 0u
+#define RLIM_OP_SET 1u
 
 /* Errno subset mirrored from the kernel ABI (negative on return). */
 #define NOVA_EHOSTUNREACH 113
@@ -144,6 +152,11 @@ static inline int32_t nova_netinfo(uint32_t *self, uint32_t *gw,
 
 static inline int32_t nova_caps(uint32_t op, uint32_t mask) {
     return nova_syscall(SYS_CAPS, op, mask, 0);
+}
+
+static inline int32_t nova_rlimit(uint32_t op, uint32_t which,
+                                  uint32_t value) {
+    return nova_syscall(SYS_RLIMIT, op, which, value);
 }
 
 #endif /* NOVA_LIBC_NOVA_H */

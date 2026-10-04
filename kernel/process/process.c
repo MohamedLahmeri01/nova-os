@@ -9,6 +9,7 @@
 #include "thread/thread.h"
 #include "process/process.h"
 #include "process/caps.h"
+#include "process/rlimit.h"
 
 struct process *g_init_process;
 
@@ -31,6 +32,11 @@ struct process *process_create(void) {
      * parent's over these; init is granted at adoption. */
     p->caps = 0;
     p->uid = UID_NOBODY;
+    /* Open ceilings (Phase 10b): no behavior change until lowered;
+     * spawn copies the parent's over these. */
+    p->rlimit_nofd = RLIM_NOFD_DEF;
+    p->rlimit_fsize = RLIM_FSIZE_DEF;
+    p->rlimit_frames = RLIM_FRAMES_DEF;
     return p;
 }
 

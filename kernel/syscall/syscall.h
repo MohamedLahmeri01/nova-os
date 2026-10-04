@@ -32,7 +32,8 @@
 #define SYS_DHCP 18u
 #define SYS_NETINFO 19u
 #define SYS_CAPS 20u
-#define SYS_MAX 20u
+#define SYS_RLIMIT 21u
+#define SYS_MAX 21u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0
@@ -47,6 +48,7 @@
 #define NOVA_EISDIR 21
 #define NOVA_EINVAL 22
 #define NOVA_EMFILE 24
+#define NOVA_EFBIG 27
 #define NOVA_ENOSPC 28
 #define NOVA_EROFS 30
 #define NOVA_ENAMETOOLONG 36

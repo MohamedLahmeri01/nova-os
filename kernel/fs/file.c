@@ -11,6 +11,7 @@
 #include "panic.h"
 #include "mm/heap.h"
 #include "fs/fs.h"
+#include "process/rlimit.h"
 #include "syscall/syscall.h"
 
 struct fs_file *fs_file_alloc(struct fs_node *n, uint32_t flags) {
@@ -85,8 +86,19 @@ int fs_is_nova_path(const char *kpath) {
 
 int fs_fd_alloc(struct process *p, struct fs_file *f) {
     uint32_t i;
+    uint32_t used = 0;
     if (p == 0 || f == 0) {
         return -NOVA_EINVAL;
+    }
+    /* FD ceiling (Phase 10b): count live descriptions against the
+     * process limit (capped by the table size regardless). */
+    for (i = 0; i < NOVA_NFD; i++) {
+        if (p->fds[i] != 0) {
+            used++;
+        }
+    }
+    if (used >= p->rlimit_nofd || used >= NOVA_NFD) {
+        return -NOVA_EMFILE;
     }
     for (i = 0; i < NOVA_NFD; i++) {
         if (p->fds[i] == 0) {
@@ -253,6 +265,13 @@ int fs_selftest(void) {
             fake.fds[i] = 0;
         }
         fake.pid = 999;
+        /* Stack processes bypass process_create: set every field
+         * the fd layer reads (limit open or garbage denies). */
+        fake.caps = 0;
+        fake.uid = 0;
+        fake.rlimit_nofd = NOVA_NFD;
+        fake.rlimit_fsize = FS_MAX_FILE;
+        fake.rlimit_frames = RLIM_FRAMES_HARD;
         rc = fs_lookup("/hello.txt", &n);
         tcheck(rc == 0, "fd-lookup");
         for (i = 0; i <= NOVA_NFD; i++) {

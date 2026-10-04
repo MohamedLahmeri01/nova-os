@@ -175,7 +175,9 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 10a capabilities + sandbox primitive (per-process caps mask,
   CAP_NET/CAP_SPAWN gates, monotonic SYS_CAPS, spawn inheritance,
   shell caps/dropcap, CAPS-OK gate + T15), 15/15 (ADR-0035)
-- [ ] 10b resource limits (frames, fds, ticks, file size)
+- [x] 10b resource limits (fd count, file size, mapped frames;
+  lower-only SYS_RLIMIT, shell rlimit, RLIM-OK gate + T16),
+  16/16 (ADR-0036; CPU quotas deferred: need kill-from-preemption)
 - [ ] 10c UIDs + file ownership/permissions
 - [ ] 10d filesystem jailing
 

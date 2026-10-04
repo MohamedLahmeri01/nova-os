@@ -11,6 +11,8 @@
 #include "mm/pmm.h"
 #include "mm/heap.h"
 #include "mm/addrspace.h"
+#include "process/rlimit.h"
+#include "syscall/syscall.h"
 
 #if defined(__i386__)
 #include "../arch/x86/cpu.h"
@@ -48,6 +50,8 @@ struct addrspace *addrspace_create(void) {
         npd[i] = (i < KERNEL_PDS) ? kpd[i] : 0;
     }
     as->pd = pd;
+    as->mapped = 0;
+    as->max_mapped = RLIM_FRAMES_DEF;
     return as;
 }
 
@@ -66,13 +70,16 @@ void addrspace_destroy(struct addrspace *as) {
     kfree(as);
 }
 
-void addrspace_map(struct addrspace *as, uint32_t virt, uint32_t phys,
-                   int writable) {
+int addrspace_map(struct addrspace *as, uint32_t virt, uint32_t phys,
+                  int writable) {
     uint32_t pdi;
     uint32_t *pt;
     if (as == 0 || virt < USER_BASE || (virt & 0xFFFu) != 0 ||
         (phys & 0xFFFu) != 0) {
         nova_panic("addrspace-bad-map");
+    }
+    if (as->mapped >= as->max_mapped) {
+        return -NOVA_ENOSPC;
     }
     pdi = virt >> 22;
     {
@@ -93,4 +100,6 @@ void addrspace_map(struct addrspace *as, uint32_t virt, uint32_t phys,
     }
     pt[(virt >> 12) & 0x3FFu] =
         phys | PTE_P | PTE_US | (writable ? PTE_RW : 0u);
+    as->mapped++;
+    return NOVA_ESUCCESS;
 }

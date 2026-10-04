@@ -33,7 +33,7 @@ static void sh_putdec(uint32_t v) {
 static const char *sh_arg(const char *line);
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit clear exit");
 }
 
 static void sh_putip(uint32_t ip) {
@@ -108,6 +108,64 @@ static void sh_dropcap(const char *line) {
         return;
     }
     sh_caps();
+}
+
+static void sh_rlshow(void) {
+    int32_t v;
+    v = nova_rlimit(RLIM_OP_GET, RLIM_NOFD, 0);
+    nova_print("nofd=", 5);
+    sh_putdec((uint32_t)v);
+    v = nova_rlimit(RLIM_OP_GET, RLIM_FSIZE, 0);
+    nova_print(" fsize=", 7);
+    sh_putdec((uint32_t)v);
+    v = nova_rlimit(RLIM_OP_GET, RLIM_FRAMES, 0);
+    nova_print(" frames=", 8);
+    sh_putdec((uint32_t)v);
+    nova_putchar('\n');
+}
+
+static void sh_rlimit(const char *line) {
+    /* rlimit | rlimit <nofd|fsize|frames> <value>: observe or
+     * lower (raising refuses: limits only tighten). */
+    const char *p = sh_arg(line);
+    char name[8];
+    uint32_t i = 0;
+    uint32_t which = 0;
+    int ok = 0;
+    int32_t r;
+    int val;
+    if (*p == 0) {
+        sh_rlshow();
+        return;
+    }
+    while (*p != 0 && *p != ' ' && i + 1u < sizeof(name)) {
+        name[i++] = *p++;
+    }
+    name[i] = 0;
+    while (*p == ' ') {
+        p++;
+    }
+    if (nova_strcmp(name, "nofd") == 0) {
+        which = RLIM_NOFD;
+    } else if (nova_strcmp(name, "fsize") == 0) {
+        which = RLIM_FSIZE;
+    } else if (nova_strcmp(name, "frames") == 0) {
+        which = RLIM_FRAMES;
+    } else {
+        nova_puts("usage: rlimit [nofd|fsize|frames value]");
+        return;
+    }
+    val = nova_strtoi(p, &ok);
+    if (!ok || val < 0) {
+        nova_puts("usage: rlimit [nofd|fsize|frames value]");
+        return;
+    }
+    r = nova_rlimit(RLIM_OP_SET, which, (uint32_t)val);
+    if (r < 0) {
+        nova_puts("rlimit refused");
+        return;
+    }
+    sh_rlshow();
 }
 
 static void sh_echo(const char *line) {
@@ -369,6 +427,9 @@ static void sh_run(const char *line) {
     } else if (nova_strncmp(line, "dropcap", 7) == 0 &&
                (line[7] == 0 || line[7] == ' ')) {
         sh_dropcap(line);
+    } else if (nova_strncmp(line, "rlimit", 6) == 0 &&
+               (line[6] == 0 || line[6] == ' ')) {
+        sh_rlimit(line);
     } else if (nova_strcmp(line, "exit") == 0) {
         nova_puts("bye");
         nova_exit(0);

@@ -12,6 +12,8 @@
 #include "syscall/syscall.h"
 #include "syscall/validate.h"
 #include "process/caps.h"
+#include "process/rlimit.h"
+#include "mm/addrspace.h"
 #include "mm/pmm.h"
 #include "mm/heap.h"
 #include "thread/thread.h"
@@ -519,6 +521,19 @@ static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
     if (!f->writable) {
         return -NOVA_EBADF;
     }
+    /* File-size ceiling (Phase 10b): clamp the request to the
+     * remaining allowance (partial writes allowed up to the
+     * limit); EFBIG when already at/past it. Empty writes skip
+     * the gate (always succeed, like before). */
+    if (len != 0) {
+        uint32_t oklen = len;
+        int r = rlimit_fsize_allow(p->rlimit_fsize, f->off, len,
+                                   &oklen);
+        if (r != 0) {
+            return r;
+        }
+        len = oklen;
+    }
     /* FAT write-through (Phase 7d): node copy is a cache; the disk is
      * truth. Grow the node buffer first (OOM fails before any disk
      * mutation), then FAT, then refresh the cache copy. EXT4 files
@@ -810,6 +825,48 @@ static int32_t do_caps(uint32_t op, uint32_t mask, uint32_t c) {
     return -NOVA_EINVAL;
 }
 
+static int32_t do_rlimit(uint32_t op, uint32_t which, uint32_t value) {
+    struct thread *cur;
+    struct process *p;
+    uint32_t *field;
+    uint32_t hard;
+    uint32_t out;
+    /* Observe or lower your own ceilings (Phase 10b): raising is
+     * privilege gain (EPERM); unknown resources refuse (EINVAL).
+     * Lowering below current use is allowed: only future
+     * allocations feel it (fds, writes), and future spawns inherit
+     * the tightened frame ceiling. */
+    cur = sched_current_thread();
+    if (cur == 0 || cur->proc == 0) {
+        return -NOVA_EINVAL;
+    }
+    p = cur->proc;
+    if (which == RLIM_NOFD) {
+        field = &p->rlimit_nofd;
+        hard = RLIM_NOFD_HARD;
+    } else if (which == RLIM_FSIZE) {
+        field = &p->rlimit_fsize;
+        hard = RLIM_FSIZE_HARD;
+    } else if (which == RLIM_FRAMES) {
+        field = &p->rlimit_frames;
+        hard = RLIM_FRAMES_HARD;
+    } else {
+        return -NOVA_EINVAL;
+    }
+    if (op == RLIM_OP_GET) {
+        return (int32_t)*field;
+    }
+    if (op == RLIM_OP_SET) {
+        int r = rlimit_set_rule(*field, value, hard, &out);
+        if (r != 0) {
+            return r;
+        }
+        *field = out;
+        return (int32_t)out;
+    }
+    return -NOVA_EINVAL;
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -838,6 +895,7 @@ static const struct {
     { SYS_DHCP, "dhcp", do_dhcp },
     { SYS_NETINFO, "netinfo", do_netinfo },
     { SYS_CAPS, "caps", do_caps },
+    { SYS_RLIMIT, "rlimit", do_rlimit },
 };
 
 void syscall_handler(struct syscall_frame *f) {
@@ -995,5 +1053,175 @@ int caps_selftest(void) {
     sched_enter(saved);
     kfree(victim);
     serial_puts("CAPS-OK\n");
+    return NOVA_ESUCCESS;
+}
+
+/* --- selftest: ceilings demonstrably bind (Phase 10b). A scratch
+ * process exercises SYS_RLIMIT (get/lower/raise-refuse/bad-which),
+ * the fd ceiling (alloc/EMFILE under a lowered cap), the fsize
+ * clamp (vectors), and the frame ceiling (map/map/refuse on a
+ * capped address space). Prints RLIM-OK. --- */
+int rlim_selftest(void) {
+    struct process *tp;
+    struct thread fake;
+    struct thread *saved;
+    struct syscall_frame f;
+    struct fs_file fa, fb, fc;
+    struct addrspace *as;
+    uint32_t f1, f2;
+    uint32_t oklen;
+    int d0, d1;
+    tp = process_create();
+    if (tp == 0) {
+        serial_puts("RLIM-FAIL alloc\n");
+        return -1;
+    }
+    if (tp->rlimit_nofd != RLIM_NOFD_DEF ||
+        tp->rlimit_fsize != RLIM_FSIZE_DEF ||
+        tp->rlimit_frames != RLIM_FRAMES_DEF) {
+        serial_puts("RLIM-FAIL defaults\n");
+        return -1;
+    }
+    /* Direct fd proof (no scheduler needed: alloc takes the proc).
+     * Stack files are never dropped (drop frees: stack must not
+     * reach kfree); slots are cleared by hand at the end. */
+    d0 = fs_fd_alloc(tp, &fa);
+    d1 = fs_fd_alloc(tp, &fb);
+    if (d0 != 0 || d1 != 1) {
+        serial_puts("RLIM-FAIL fd-open\n");
+        return -1;
+    }
+    fake.sp = 0;
+    fake.id = 0xFFFFFFFDu;
+    fake.state = THREAD_RUNNING;
+    fake.stack_base = 0;
+    fake.slice_used = 0;
+    fake.prio = 0;
+    fake.is_user = 0;
+    fake.next = 0;
+    fake.pnext = 0;
+    fake.proc = tp;
+    fake.user_stack = 0;
+    fake.user_shared = 0;
+    f.kflags = 0;
+    f.edi = 0;
+    f.esi = 0;
+    f.ebp = 0;
+    f.esp_ignored = 0;
+    f.ebx = 0;
+    f.edx = 0;
+    f.ecx = 0;
+    f.eax = 0;
+    f.eip = 0;
+    f.cs = 0;
+    f.eflags = 0;
+    f.esp = 0;
+    f.ss = 0;
+    saved = sched_current_thread();
+    /* Same failure discipline as caps_selftest: returns below run
+     * masked with a borrowed current; pm_main panics at once. */
+    __asm__ volatile("cli" ::: "memory");
+    sched_enter(&fake);
+    /* Observe defaults through dispatch. */
+    f.eax = SYS_RLIMIT;
+    f.ebx = RLIM_OP_GET;
+    f.ecx = RLIM_NOFD;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != (int32_t)RLIM_NOFD_DEF) {
+        serial_puts("RLIM-FAIL get-nofd\n");
+        return -1;
+    }
+    /* Lower nofd to 2 (2 already open): allowed, binds at once. */
+    f.eax = SYS_RLIMIT;
+    f.ebx = RLIM_OP_SET;
+    f.ecx = RLIM_NOFD;
+    f.edx = 2;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != 2) {
+        serial_puts("RLIM-FAIL set-nofd\n");
+        return -1;
+    }
+    if (fs_fd_alloc(tp, &fc) != -NOVA_EMFILE) {
+        serial_puts("RLIM-FAIL fd-ceiling\n");
+        return -1;
+    }
+    /* Raising refuses (privilege); over-hard refuses (range);
+     * unknown resource refuses. */
+    f.eax = SYS_RLIMIT;
+    f.ebx = RLIM_OP_SET;
+    f.ecx = RLIM_NOFD;
+    f.edx = 3;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EPERM) {
+        serial_puts("RLIM-FAIL raise\n");
+        return -1;
+    }
+    f.eax = SYS_RLIMIT;
+    f.ebx = RLIM_OP_SET;
+    f.ecx = RLIM_NOFD;
+    f.edx = NOVA_NFD + 1u;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EINVAL) {
+        serial_puts("RLIM-FAIL overhard\n");
+        return -1;
+    }
+    f.eax = SYS_RLIMIT;
+    f.ebx = RLIM_OP_SET;
+    f.ecx = 9u;
+    f.edx = 1;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EINVAL) {
+        serial_puts("RLIM-FAIL badwhich\n");
+        return -1;
+    }
+    /* fsize clamp vectors (the do_write gate shares this logic). */
+    if (rlimit_fsize_allow(100, 0, 50, &oklen) != 0 ||
+        oklen != 50) {
+        serial_puts("RLIM-FAIL clamp-open\n");
+        return -1;
+    }
+    if (rlimit_fsize_allow(100, 80, 50, &oklen) != 0 ||
+        oklen != 20) {
+        serial_puts("RLIM-FAIL clamp-trim\n");
+        return -1;
+    }
+    if (rlimit_fsize_allow(100, 100, 10, &oklen) !=
+        -NOVA_EFBIG) {
+        serial_puts("RLIM-FAIL clamp-full\n");
+        return -1;
+    }
+    if (rlimit_fsize_allow(100, 150, 10, &oklen) !=
+        -NOVA_EFBIG) {
+        serial_puts("RLIM-FAIL clamp-past\n");
+        return -1;
+    }
+    /* Frame ceiling on a capped address space (map/map/refuse). */
+    as = addrspace_create();
+    f1 = pmm_alloc_frame();
+    f2 = pmm_alloc_frame();
+    if (as == 0 || f1 == 0 || f2 == 0) {
+        serial_puts("RLIM-FAIL as-alloc\n");
+        return -1;
+    }
+    as->max_mapped = 2;
+    if (addrspace_map(as, USER_BASE, f1, 1) != 0 ||
+        addrspace_map(as, USER_BASE + 4096u, f2, 1) != 0) {
+        serial_puts("RLIM-FAIL as-open\n");
+        return -1;
+    }
+    if (addrspace_map(as, USER_BASE + 8192u, f1, 1) !=
+        -NOVA_ENOSPC) {
+        serial_puts("RLIM-FAIL as-ceiling\n");
+        return -1;
+    }
+    addrspace_destroy(as);
+    pmm_free_frame(f1);
+    pmm_free_frame(f2);
+    tp->fds[d0] = 0;
+    tp->fds[d1] = 0;
+    __asm__ volatile("sti" ::: "memory");
+    sched_enter(saved);
+    kfree(tp);
+    serial_puts("RLIM-OK\n");
     return NOVA_ESUCCESS;
 }
