@@ -21,6 +21,7 @@
 #include "fs/fat32.h"
 #include "fs/ext4.h"
 #include "fs/nova.h"
+#include "net/net.h"
 #include "drivers/ata.h"
 #include "drivers/pci.h"
 #include "drivers/vga.h"
@@ -272,6 +273,12 @@ void nova_pm_main(const nova_boot_info_t *info) {
     }
     if (nova_selftest() != 0) {
         nova_panic("nova-selftest-fail");
+    }
+    if (net_init() != 0) {
+        nova_panic("net-init-fail");
+    }
+    if (net_selftest() != 0) {
+        nova_panic("net-selftest-fail");
     }
     {
         int sched_rc = sched_selftest();

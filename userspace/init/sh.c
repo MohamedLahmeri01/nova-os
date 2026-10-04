@@ -31,7 +31,7 @@ static void sh_putdec(uint32_t v) {
 }
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping clear exit");
 }
 
 static void sh_echo(const char *line) {
@@ -183,6 +183,56 @@ static void sh_fsck(const char *line) {
     }
 }
 
+static void sh_ping(const char *line) {
+    /* ping [a.b.c.d]: dotted quad, octets 0..255, default
+     * 127.0.0.1. Only loopback routes (else EHOSTUNREACH).
+     * (nova_strtoi needs all-digit strings, so octets parse here.) */
+    const char *p = sh_arg(line);
+    uint32_t addr = 0x7F000001u;
+    uint32_t seq = 1;
+    if (*p != 0) {
+        addr = 0;
+        for (int q = 0; q < 4; q++) {
+            int val = 0;
+            int n = 0;
+            while (*p >= '0' && *p <= '9') {
+                val = val * 10 + (*p - '0');
+                n++;
+                p++;
+            }
+            if (n == 0 || n > 3 || val > 255) {
+                nova_puts("usage: ping [a.b.c.d]");
+                return;
+            }
+            addr = (addr << 8) | (uint32_t)val;
+            if (q < 3) {
+                if (*p != '.') {
+                    nova_puts("usage: ping [a.b.c.d]");
+                    return;
+                }
+                p++;
+            } else if (*p != 0) {
+                nova_puts("usage: ping [a.b.c.d]");
+                return;
+            }
+        }
+    }
+    {
+        int32_t r = nova_ping(addr, seq);
+        if (r == -NOVA_EHOSTUNREACH) {
+            nova_puts("no route to host");
+        } else if (r < 0) {
+            nova_puts("ping failed");
+        } else {
+            nova_print("reply seq=", 10);
+            sh_putdec(seq);
+            nova_print(" time=", 6);
+            sh_putdec((uint32_t)r);
+            nova_putchar('\n');
+        }
+    }
+}
+
 static void sh_exec(const char *line) {
     const char *path = sh_arg(line);
     int32_t pid;
@@ -230,6 +280,9 @@ static void sh_run(const char *line) {
         sh_put(line);
     } else if (nova_strcmp(line, "fsck") == 0) {
         sh_fsck(line);
+    } else if (nova_strncmp(line, "ping", 4) == 0 &&
+               (line[4] == 0 || line[4] == ' ')) {
+        sh_ping(line);
     } else if (nova_strcmp(line, "exit") == 0) {
         nova_puts("bye");
         nova_exit(0);

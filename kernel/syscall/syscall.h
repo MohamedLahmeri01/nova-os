@@ -28,7 +28,8 @@
 #define SYS_MKDIR 14u
 #define SYS_EXEC 15u
 #define SYS_FSCK 16u
-#define SYS_MAX 16u
+#define SYS_PING 17u
+#define SYS_MAX 17u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0
@@ -46,6 +47,7 @@
 #define NOVA_EROFS 30
 #define NOVA_ENAMETOOLONG 36
 #define NOVA_ENOSYS 38
+#define NOVA_EHOSTUNREACH 113
 
 #define SYSCALL_MAX_PRINT 1024u
 #define SYSCALL_MAX_RANGE 4096u

@@ -134,6 +134,10 @@ No releases yet.
   80x25 text mirror at the serial choke point, cell + cursor
   selftest, `VGA-OK` gate, screenshot proof (ADR-0031). Deferred:
   virtio (no attachable device; net recipe decision -> Phase 9).
+- Phase 9a loopback net (tested 2026-10-03, `nova test` 14/14):
+  IPv4 + ICMP echo over loopback, `SYS_PING` + shell `ping`,
+  `NET-OK` gate, T14 oracle fuzz (ADR-0032). Fixed: odd-vector
+  oracle, octet parser, request/reply test discipline.
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the

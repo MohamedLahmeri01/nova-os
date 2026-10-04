@@ -157,6 +157,11 @@ PIIX3/ICH9, VGA/VMSVGA, i8042/PS2, Intel PRO/1000).
 
 Ethernet → ARP → IPv4 → ICMP → UDP → TCP → sockets (loopback first).
 
+- [x] 9a LOOPBACK DONE: IPv4 build/parse + ICMP echo + loopback
+  driver + checksums, `SYS_PING` + shell `ping`, `NET-OK` gate,
+  T14 (oracle fuzz), 14/14 (ADR-0032)
+- [ ] 9b ARP + virtio-net + NIC recipe (driver + ARP/DHCP/UDP/IP)
+
 ## Phase 10 — Security hardening
 
 Capabilities, sandboxing, resource limits, secure handles.

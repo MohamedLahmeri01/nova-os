@@ -20,6 +20,7 @@
 #include "fs/fat32.h"
 #include "fs/ext4.h"
 #include "fs/nova.h"
+#include "net/net.h"
 #include "irq/irq.h"
 #include "input/kbd.h"
 #include "time/time.h"
@@ -720,6 +721,13 @@ static int32_t do_fsck(uint32_t a, uint32_t b, uint32_t c) {
     return (int32_t)nova_fsck();
 }
 
+static int32_t do_ping(uint32_t addr, uint32_t seq, uint32_t c) {
+    (void)c;
+    /* Synchronous loopback ping (Phase 9a): RTT ticks or -errno
+     * (EHOSTUNREACH off-loopback). Real NICs make this async. */
+    return net_ping(addr, (uint16_t)(seq & 0xFFFFu));
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -744,6 +752,7 @@ static const struct {
     { SYS_MKDIR, "mkdir", do_mkdir },
     { SYS_EXEC, "exec", do_exec },
     { SYS_FSCK, "fsck", do_fsck },
+    { SYS_PING, "ping", do_ping },
 };
 
 void syscall_handler(struct syscall_frame *f) {

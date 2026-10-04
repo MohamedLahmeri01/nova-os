@@ -274,6 +274,7 @@ def build_phase1(fault=False):
                                   ("kernel/fs/fat32.c", "fat32.o", []),
                                   ("kernel/fs/ext4.c", "ext4.o", []),
                                   ("kernel/fs/nova.c", "novafs.o", []),
+                                  ("kernel/net/net.c", "net.o", []),
                                   (PMM_BACKEND_C, PMM_BACKEND_O, [])]:
         s = os.path.join(ROOT, src)
         if not os.path.isfile(s):
@@ -301,7 +302,7 @@ def build_phase1(fault=False):
               "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
               "kbd.o", "init_blob.o", "hi_blob.o", "ramfs.o", "file.o",
               "fat32.o", "ext4.o", "novafs.o", "ata.o", "pci.o",
-              "vga.o", PMM_BACKEND_O],
+              "vga.o", "net.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -618,6 +619,25 @@ def cmd_test():
             passed += 1
         else:
             failed += 1
+    # T14: host network test (net.c: checksums, round-trips, fuzz)
+    print("[info] T14 compiling + running host net test...")
+    net_exe = os.path.join(BUILD, "test_net.exe")
+    cmd = ["gcc", "-O2", "-Wall", "-Wextra",
+           "-I", os.path.join(ROOT, "kernel"),
+           os.path.join(ROOT, "tests", "unit", "test_net.c"),
+           os.path.join(ROOT, "kernel", "net", "net.c"),
+           "-o", net_exe]
+    r = run(cmd, timeout=120)
+    if r.returncode != 0:
+        print(f"[fail] T14 net test compile:\n{(r.stderr or '')[:1500]}")
+        failed += 1
+    else:
+        r = run([net_exe], timeout=120)
+        print((r.stdout or "") + (r.stderr or ""))
+        if r.returncode == 0:
+            print("[pass] T14 host net test"); passed += 1
+        else:
+            print("[fail] T14 host net test"); failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 
@@ -834,7 +854,7 @@ def cmd_run_vbox():
                                        b"HEAP-OK", b"ATA-OK", b"PCI-OK",
                                        b"VGA-OK", b"DMA-OK", b"FS-OK",
                                        b"FAT-OK", b"EXT-OK", b"NOVA-OK",
-                                       b"IDT-OK",
+                                       b"NET-OK", b"IDT-OK",
                                        b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
@@ -890,8 +910,8 @@ def cmd_image():
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
                  b"HEAP-OK", b"ATA-OK", b"PCI-OK", b"VGA-OK", b"DMA-OK",
-                 b"FS-OK", b"FAT-OK", b"EXT-OK",
-                 b"NOVA-OK", b"IDT-OK",
+                 b"FS-OK",                  b"FAT-OK", b"EXT-OK",
+                 b"NOVA-OK", b"NET-OK", b"IDT-OK",
                  b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]
