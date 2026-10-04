@@ -140,6 +140,9 @@ PIIX3/ICH9, VGA/VMSVGA, i8042/PS2, Intel PRO/1000).
 - [x] 8a LOADER DONE: stage1 chunked INT13 (127/call loop, 496/510B),
   cap raised 127 -> 768 sectors (memory-bound), padded 140-sector
   boot proof, 13/13 (ADR-0028)
+- [x] 8b PCI DONE: mechanism-1 enumeration (multifunction + bridge
+  recursion), known-device table for VBox hardware, host-bridge +
+  IDE asserts, `PCI-OK` gate, 13/13 (ADR-0029)
 
 ## Phase 9 — Networking
 

@@ -22,6 +22,7 @@
 #include "fs/ext4.h"
 #include "fs/nova.h"
 #include "drivers/ata.h"
+#include "drivers/pci.h"
 #include "thread/thread.h"
 #include "process/process.h"
 #include "user.h"
@@ -238,6 +239,9 @@ void nova_pm_main(const nova_boot_info_t *info) {
     ata_init();
     if (ata_selftest() != 0) {
         nova_panic("ata-selftest-fail");
+    }
+    if (pci_selftest() != 0) {
+        nova_panic("pci-selftest-fail");
     }
     if (fs_init() != 0) {
         nova_panic("fs-init-fail");

@@ -120,7 +120,11 @@ No releases yet.
   XMM state), verified zero SIMD in both binaries.
 - Phase 8a loader budget (tested 2026-10-03, `nova test` 13/13):
   stage1 chunked INT13 loop (496/510B), cap 127 -> 768 sectors,
-  padded 140-sector boot proof (ADR-0028).
+  padded 140-sector   boot proof (ADR-0028).
+- Phase 8b PCI enumeration (tested 2026-10-03, `nova test` 13/13):
+  mechanism-1 scan with bridge recursion, VBox device table,
+  `PCI-OK` gate with host-bridge + IDE asserts (ADR-0029). Fixed:
+  PIIX4 IDE ID, VBox VGA/guest names, vendor-word slot skip.
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the
