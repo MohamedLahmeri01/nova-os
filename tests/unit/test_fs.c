@@ -14,6 +14,7 @@
 #include "process/process.h"
 #include "process/rlimit.h"
 #include "fs/fs.h"
+#include "fs/nova.h"
 #include "syscall/syscall.h"
 
 static int g_failed;
@@ -65,6 +66,14 @@ void serial_puthex32(uint32_t v) {
 struct thread;
 struct thread *sched_current_thread(void) {
     return 0;
+}
+
+/* No NOVA-FS image on this host (ramfs-only): nova paths refuse
+ * here; the guest covers the journaled path. */
+int nova_chmod(const char *path, uint16_t mode) {
+    (void)path;
+    (void)mode;
+    return -NOVA_ENOSYS;
 }
 
 static uint32_t lcg_state = 0x12345678u;

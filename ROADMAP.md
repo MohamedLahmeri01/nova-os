@@ -226,8 +226,9 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 13c native file identity (ext4/nova uid/gid/mode
   passthrough, fixture identities, create stamping),
   20/20 (ADR-0048)
-- [ ] 13d+ candidates: user sockets + DNS, on-disk chmod,
-  IRQ-driven virtio
+- [x] 13d on-disk chmod (journaled NOVA-FS mode writes,
+  fs_chmod routing, round-trip proofs), 20/20 (ADR-0049)
+- [ ] 13e+ candidates: user sockets + DNS, IRQ-driven virtio
 
 
 ## Non-goals for 0.x

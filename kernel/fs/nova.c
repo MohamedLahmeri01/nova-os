@@ -1566,6 +1566,60 @@ int nova_delete(const char *path) {
     return NOVA_ESUCCESS;
 }
 
+/* Change permission bits through the journal (Phase 13d): type
+ * bits preserved, perm bits replaced. Owner-or-root enforced
+ * here (the fs layer delegates whole). Single-pair transaction:
+ * staged table block home. */
+int nova_chmod(const char *path, uint16_t mode) {
+    uint32_t dino;
+    const char *last;
+    uint32_t llen;
+    uint32_t ei = 0;
+    uint8_t ft = 0;
+    uint32_t size = 0;
+    uint8_t fi[NOVA_INODE_SIZE];
+    uint32_t itab;
+    uint32_t uid;
+    uint16_t old;
+    uint16_t nm;
+    struct jpair pairs[1];
+    int rc;
+    path = strip_nova(path);
+    if (path == 0) {
+        return -NOVA_EINVAL;
+    }
+    rc = split_parent(path, &dino, &last, &llen);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = dir_find(dino, last, llen, &ei, &ft, &size);
+    if (rc != 0) {
+        return rc;
+    }
+    if (inode_read(ei, fi) != 0) {
+        return -NOVA_EIO;
+    }
+    uid = fs_current_uid();
+    if (uid != 0 && uid != rd16(fi + 2)) {
+        return -NOVA_EACCES;
+    }
+    old = rd16(fi);
+    nm = (uint16_t)((old & 0xF000u) | (mode & 0777u));
+    fi[0] = (uint8_t)(nm & 0xFFu);
+    fi[1] = (uint8_t)(nm >> 8);
+    itab = g_inotab + (ei - 1u) / NOVA_INODES_PER_BLOCK;
+    if (read_block(itab, g_pool[0]) != 0) {
+        return -NOVA_EIO;
+    }
+    itable_patch(g_pool[0], ei, fi);
+    pairs[0].home = itab;
+    pairs[0].data = g_pool[0];
+    if (journal_commit(pairs, 1) != 0) {
+        return -NOVA_EIO;
+    }
+    return NOVA_ESUCCESS;
+}
+
 int nova_mkdir(const char *path) {
     uint32_t dino;
     const char *last;
@@ -2054,6 +2108,27 @@ int nova_selftest(void) {
         if (nova_inode_info("/W.TXT", &uid, &gid, &mode) != 0 ||
             uid != 0 || gid != 0 || mode != 0644) {
             serial_puts("NOVA-FAIL create-id\n");
+            return -1;
+        }
+    }
+    /* On-disk chmod (Phase 13d): journaled mode write through
+     * the fs layer (full /nova path routing), persists on
+     * re-read. Restored after: delete below is mode-blind, but
+     * leave no surprises. */
+    {
+        uint32_t uid = 0, gid = 0;
+        uint16_t mode = 0;
+        if (fs_chmod("/nova/W.TXT", 0600) != 0) {
+            serial_puts("NOVA-FAIL chmod\n");
+            return -1;
+        }
+        if (nova_inode_info("/W.TXT", &uid, &gid, &mode) != 0 ||
+            mode != 0600 || uid != 0) {
+            serial_puts("NOVA-FAIL chmod-read\n");
+            return -1;
+        }
+        if (fs_chmod("/nova/W.TXT", 0644) != 0) {
+            serial_puts("NOVA-FAIL chmod-back\n");
             return -1;
         }
     }

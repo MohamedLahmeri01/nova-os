@@ -42,6 +42,9 @@ int nova_write_at(const char *path, uint32_t off, const uint8_t *src,
                   uint32_t len);
 int nova_delete(const char *path);
 int nova_mkdir(const char *path);
+/* Change permission bits through the journal (type bits kept).
+ * Owner-or-root enforced inside. 0 or -errno. */
+int nova_chmod(const char *path, uint16_t mode);
 /* Verify-only audit (Phase 7f-3): SB copies, bitmaps-vs-reality,
  * inode checksums, dir chains, orphans. Read-only (no repairs).
  * Returns the problem count (0 = clean). */

@@ -50,15 +50,26 @@ void serial_puthex32(uint32_t v) {
     printf("%08x", v);
 }
 
-/* No scheduler on host: creators stamp root, exactly like guest
- * boot context (NULL current). nova_create_file stamps via these. */
-uint32_t fs_current_uid(void) {
+/* ramfs/file layer for fs_chmod routing (real code, like guest):
+ * heap from malloc, no scheduler (root everywhere). */
+void *kmalloc(uint32_t size) {
+    if (size == 0) {
+        return 0;
+    }
+    return malloc((size_t)size);
+}
+
+void kfree(void *ptr) {
+    free(ptr);
+}
+
+struct thread;
+struct thread *sched_current_thread(void) {
     return 0;
 }
 
-uint32_t fs_current_gid(void) {
-    return 0;
-}
+/* No scheduler on host: file.c's fs_current_* resolve to root
+ * through the stub above, like guest boot context. */
 
 /* --- image-backed sector source (mutable copy for injection) --- */
 
@@ -242,6 +253,25 @@ int main(int argc, char **argv) {
               "w-gone", 0, 0);
         check(nova_delete("/W.TXT") == -NOVA_ENOENT, "w-del2", 0, 0);
         check(nova_delete("/NDIR") == -NOVA_EISDIR, "w-deldir", 0, 0);
+    }
+
+    /* On-disk chmod (Phase 13d): journaled mode write, persists
+     * on re-read, owner-or-root (host stubs root). Hermetic. */
+    {
+        uint32_t uid = 0, gid = 0;
+        uint16_t mode = 0;
+        check(nova_create_file("/CHM.TXT") == 0, "c-create", 0, 0);
+        check(nova_inode_info("/CHM.TXT", &uid, &gid, &mode) == 0 &&
+                  uid == 0 && gid == 0 && mode == 0644,
+              "c-stamp", uid, mode);
+        check(nova_chmod("/CHM.TXT", 0600) == 0, "c-chmod", 0, 0);
+        check(nova_inode_info("/CHM.TXT", &uid, &gid, &mode) == 0 &&
+                  mode == 0600 && uid == 0,
+              "c-read", uid, mode);
+        check(nova_chmod("/CHM.TXT", 0644) == 0, "c-back", 0, 0);
+        check(nova_chmod("/NOPE.TXT", 0644) == -NOVA_ENOENT,
+              "c-missing", 0, 0);
+        check(nova_delete("/CHM.TXT") == 0, "c-del", 0, 0);
     }
 
     /* Power-cut simulation: kill the commit block of a real

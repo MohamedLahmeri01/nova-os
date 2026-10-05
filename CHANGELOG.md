@@ -204,6 +204,10 @@ No releases yet.
 - Phase 13c native identity (tested 2026-10-05, `nova test` 20/20):
   ext4/nova uid/gid/mode passthrough, fixture identities,
   create-time stamping (ADR-0048).
+- Phase 13d on-disk chmod (tested 2026-10-05, `nova test` 20/20):
+  journaled NOVA-FS mode writes, fs_chmod routing, round-trip
+  proofs (ADR-0049).
+
 
 
 

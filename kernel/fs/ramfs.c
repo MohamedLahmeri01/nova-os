@@ -13,6 +13,7 @@
 #include "panic.h"
 #include "mm/heap.h"
 #include "fs/fs.h"
+#include "fs/nova.h"
 #include "syscall/syscall.h"
 
 static struct fs_node g_root;
@@ -252,13 +253,18 @@ int fs_chmod(const char *path, uint16_t mode) {
     if (path == 0) {
         return -NOVA_EINVAL;
     }
-    /* Graft namespaces refuse here (EROFS) -- but only for global
-     * callers. Jailed callers never reach foreign ground: their
-     * lookup below fails ENOENT first, keeping grafts invisible. */
-    if (fs_current_jail() == 0 &&
-        (fs_is_disk_path(path) || fs_is_ext_path(path) ||
-         fs_is_nova_path(path))) {
-        return -NOVA_EROFS;
+    /* Graft namespaces (EROFS) -- but only for global callers.
+     * Jailed callers never reach foreign ground: their lookup
+     * below fails ENOENT first, keeping grafts invisible. NOVA-FS
+     * alone journals mode writes, so its paths route through
+     * (owner-or-root enforced inside nova_chmod). */
+    if (fs_current_jail() == 0) {
+        if (fs_is_disk_path(path) || fs_is_ext_path(path)) {
+            return -NOVA_EROFS;
+        }
+        if (fs_is_nova_path(path)) {
+            return nova_chmod(path, mode);
+        }
     }
     rc = fs_lookup(path, &n);
     if (rc != 0) {

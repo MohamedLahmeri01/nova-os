@@ -717,7 +717,8 @@ def cmd_test():
                 print("[pass] T11 host ext test"); passed += 1
             else:
                 print("[fail] T11 host ext test"); failed += 1
-    # T12: host NOVA-FS test (nova.c vs the generated mknova image)
+    # T12: host NOVA-FS test (nova.c + ramfs/file routing vs the
+    # generated mknova image)
     print("[info] T12 compiling + running host nova test...")
     nova_raw = os.path.join(BUILD, "nova.raw")
     r = run([sys.executable, os.path.join(ROOT, "tools", "mknova.py"),
@@ -731,6 +732,8 @@ def cmd_test():
                "-I", os.path.join(ROOT, "kernel"),
                os.path.join(ROOT, "tests", "unit", "test_nova.c"),
                os.path.join(ROOT, "kernel", "fs", "nova.c"),
+               os.path.join(ROOT, "kernel", "fs", "ramfs.c"),
+               os.path.join(ROOT, "kernel", "fs", "file.c"),
                "-o", nova_exe]
         r = run(cmd, timeout=120)
         if r.returncode != 0:

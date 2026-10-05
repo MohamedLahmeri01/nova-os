@@ -1613,6 +1613,12 @@ int perm_selftest(void) {
         serial_puts("PERM-FAIL chmod-deny\n");
         return -1;
     }
+    /* Native deny (Phase 13d): NOTE.TXT belongs to uid 1000 on
+     * disk, so a stranger's chmod refuses at the inode. */
+    if (fs_chmod("/nova/DOCS/NOTE.TXT", 0644) != -NOVA_EACCES) {
+        serial_puts("PERM-FAIL nova-deny\n");
+        return -1;
+    }
     /* Open gates bind (0600 root file vs nobody). */
     if (fs_open_check(tp, n, FS_O_RDONLY) != -NOVA_EACCES) {
         serial_puts("PERM-FAIL open-r\n");
