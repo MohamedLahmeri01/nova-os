@@ -279,6 +279,7 @@ def build_phase1(fault=False):
                                   ("kernel/drivers/pci.c", "pci.o", []),
                                    ("kernel/drivers/vga.c", "vga.o", []),
                                    ("kernel/drivers/fb.c", "fb.o", []),
+                                   ("kernel/gui/comp.c", "comp.o", []),
                                   ("kernel/drivers/virtio_net.c", "virtio.o", []),
                                   ("kernel/fs/ramfs.c", "ramfs.o", []),
                                   ("kernel/fs/file.c", "file.o", []),
@@ -314,7 +315,7 @@ def build_phase1(fault=False):
                "caps.o", "rlimit.o",
                "kbd.o", "init_blob.o", "hi_blob.o", "uname_blob.o", "ramfs.o", "file.o",
               "fat32.o", "ext4.o", "novafs.o", "ata.o", "pci.o",
-               "vga.o", "fb.o", "virtio.o", "net.o", PMM_BACKEND_O],
+               "vga.o", "fb.o", "comp.o", "virtio.o", "net.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -916,6 +917,25 @@ def cmd_test():
             passed += 1
         else:
             failed += 1
+    # T19: host compositor test (comp.c vs stub VRAM + selftest)
+    print("[info] T19 compiling + running host compositor test...")
+    comp_exe = os.path.join(BUILD, "test_comp.exe")
+    cmd = ["gcc", "-O2", "-Wall", "-Wextra",
+           "-I", os.path.join(ROOT, "kernel"),
+           os.path.join(ROOT, "tests", "unit", "test_comp.c"),
+           os.path.join(ROOT, "kernel", "gui", "comp.c"),
+           "-o", comp_exe]
+    r = run(cmd, timeout=120)
+    if r.returncode != 0:
+        print(f"[fail] T19 compositor test compile:\n{(r.stderr or '')[:1500]}")
+        failed += 1
+    else:
+        r = run([comp_exe], timeout=120)
+        print((r.stdout or "") + (r.stderr or ""))
+        if r.returncode == 0:
+            print("[pass] T19 host compositor test"); passed += 1
+        else:
+            print("[fail] T19 host compositor test"); failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 
@@ -1130,7 +1150,7 @@ def cmd_run_vbox():
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
                                        b"HEAP-OK", b"ATA-OK", b"PCI-OK",
-                                       b"FB-OK", b"VIRTIO-OK",
+                                       b"FB-OK", b"COMP-OK", b"VIRTIO-OK",
                                        b"DMA-OK", b"FS-OK",
                                        b"FAT-OK", b"EXT-OK", b"NOVA-OK",
                                        b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
@@ -1190,7 +1210,7 @@ def cmd_image():
 
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
-                 b"HEAP-OK", b"ATA-OK", b"PCI-OK", b"FB-OK",
+                 b"HEAP-OK", b"ATA-OK", b"PCI-OK", b"FB-OK", b"COMP-OK",
                  b"VIRTIO-OK", b"DMA-OK", b"FS-OK", b"FAT-OK", b"EXT-OK",
                   b"NOVA-OK", b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
                   b"CAPS-OK", b"RLIM-OK", b"PERM-OK", b"JAIL-OK",

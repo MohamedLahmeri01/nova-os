@@ -200,9 +200,12 @@ Capabilities, sandboxing, resource limits, secure handles.
 
 - [x] 12a framebuffer (mode 13h via stage1, fb driver +
   palette, splash, FB-OK gate + screenshot), 18/18 (ADR-0041)
-- [ ] 12b compositor (layers + keyboard focus + demo scene)
-- [ ] 12c+ window system, toolkit, desktop shell (mouse driver
-  first; beyond minimal desktop)
+- [x] 12b compositor (fixed window pool, id-ordered layers,
+  highlight focus + cycle, full-repaint present, demo scene
+  with COMP-FOCUS markers, COMP-OK gate + T19 stub-VRAM
+  test), 19/19 (ADR-0042)
+- [ ] 12c+ window system, toolkit, desktop shell (font first,
+  then widgets; mouse driver before any pointer)
 
 ## Non-goals for 0.x
 

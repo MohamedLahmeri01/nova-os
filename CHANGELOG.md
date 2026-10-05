@@ -181,6 +181,11 @@ No releases yet.
   VGA mode 13h from stage1, fb driver + DAC palette, splash,
   FB-OK gate, screenshot proof; VGA text retired from boot
   (ADR-0041).
+- Phase 12b compositor (tested 2026-10-05, `nova test` 19/19):
+  window pool + z-order layers, focus highlight + cycle,
+  demo scene with markers, COMP-OK gate, T19 pixel test
+  (ADR-0042).
+
 
 
 

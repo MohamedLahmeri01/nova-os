@@ -25,6 +25,7 @@
 #include "drivers/ata.h"
 #include "drivers/pci.h"
 #include "drivers/fb.h"
+#include "gui/comp.h"
 #include "drivers/virtio_net.h"
 #include "thread/thread.h"
 #include "process/process.h"
@@ -296,6 +297,12 @@ void nova_pm_main(const nova_boot_info_t *info) {
         nova_panic("fb-selftest-fail");
     }
     fb_splash();
+    /* Compositor (Phase 12b): prove layers + focus, then leave the
+     * demo scene up (it repaints over the splash: final screen). */
+    if (comp_selftest() != 0) {
+        nova_panic("comp-selftest-fail");
+    }
+    comp_demo();
     if (virtio_net_init() != 0) {
         nova_panic("virtio-init-fail");
     }
