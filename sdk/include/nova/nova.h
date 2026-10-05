@@ -7,6 +7,8 @@
 
 #include <stdint.h>
 
+#include "nova/types.h"
+
 #define SYS_YIELD 0u
 #define SYS_EXIT 1u
 #define SYS_PRINT 2u
@@ -32,6 +34,11 @@
 #define SYS_CRED 22u
 #define SYS_CHMOD 23u
 #define SYS_CHROOT 24u
+#define SYS_FOCUS 25u
+#define SYS_WINOPEN 26u
+#define SYS_WINSTAT 27u
+#define SYS_WINTITLE 28u
+#define SYS_WINCLOSE 29u
 
 /* Capability bits + caps ops mirrored from process/caps.h. */
 #define CAP_NET 0x01u
@@ -178,6 +185,27 @@ static inline int32_t nova_chmod(const char *path, uint32_t mode) {
 
 static inline int32_t nova_chroot(const char *path) {
     return nova_syscall(SYS_CHROOT, (uint32_t)path, 0, 0);
+}
+
+static inline int32_t nova_winfocus(void) {
+    return nova_syscall(SYS_FOCUS, 0, 0, 0);
+}
+
+static inline int32_t nova_winopen(const struct nova_winopen *args) {
+    return nova_syscall(SYS_WINOPEN, (uint32_t)args, 0, 0);
+}
+
+static inline int32_t nova_winstat(struct nova_winstat *buf,
+                                   uint32_t max) {
+    return nova_syscall(SYS_WINSTAT, (uint32_t)buf, max, 0);
+}
+
+static inline int32_t nova_wintitle(uint32_t id, const char *text) {
+    return nova_syscall(SYS_WINTITLE, id, (uint32_t)text, 0);
+}
+
+static inline int32_t nova_winclose(uint32_t id) {
+    return nova_syscall(SYS_WINCLOSE, id, 0, 0);
 }
 
 #endif /* NOVA_LIBC_NOVA_H */

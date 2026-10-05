@@ -294,8 +294,7 @@ def build_phase1(fault=False):
             return 1, f"missing {src}"
         extra = []
         if src.endswith(".c"):
-            extra = ["-I", os.path.join(ROOT, "kernel"),
-                     "-I", os.path.join(ROOT, "kernel", "mm")] + extra_defs
+            extra = ["-I", os.path.join(ROOT, "kernel"), "-I", os.path.join(ROOT, "kernel", "mm"), "-I", os.path.join(ROOT, "sdk", "include")] + extra_defs
         elif src.endswith(".S"):
             extra = ["-I", os.path.join(ROOT, "boot")]
         r = run(["gcc"] + CFLAGS32 + extra + ["-c", s, "-o",
@@ -923,6 +922,7 @@ def cmd_test():
     comp_exe = os.path.join(BUILD, "test_comp.exe")
     cmd = ["gcc", "-O2", "-Wall", "-Wextra",
            "-I", os.path.join(ROOT, "kernel"),
+           "-I", os.path.join(ROOT, "sdk", "include"),
            os.path.join(ROOT, "tests", "unit", "test_comp.c"),
            os.path.join(ROOT, "kernel", "gui", "comp.c"),
            os.path.join(ROOT, "kernel", "gui", "font.c"),
@@ -1157,7 +1157,8 @@ def cmd_run_vbox():
                                        b"FAT-OK", b"EXT-OK", b"NOVA-OK",
                                        b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
                                        b"CAPS-OK", b"RLIM-OK", b"PERM-OK",
-                                       b"JAIL-OK", b"SDK-OK", b"IDT-OK",
+                                       b"JAIL-OK", b"SDK-OK", b"WIN-OK",
+                                       b"IDT-OK",
                                        b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
@@ -1216,7 +1217,7 @@ PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"VIRTIO-OK", b"DMA-OK", b"FS-OK", b"FAT-OK", b"EXT-OK",
                   b"NOVA-OK", b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
                   b"CAPS-OK", b"RLIM-OK", b"PERM-OK", b"JAIL-OK",
-                  b"IDT-OK",
+                  b"WIN-OK", b"IDT-OK",
                  b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]

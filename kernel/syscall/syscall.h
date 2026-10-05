@@ -36,7 +36,12 @@
 #define SYS_CRED 22u
 #define SYS_CHMOD 23u
 #define SYS_CHROOT 24u
-#define SYS_MAX 24u
+#define SYS_FOCUS 25u
+#define SYS_WINOPEN 26u
+#define SYS_WINSTAT 27u
+#define SYS_WINTITLE 28u
+#define SYS_WINCLOSE 29u
+#define SYS_MAX 29u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0

@@ -11,8 +11,13 @@
 
 #include <stdint.h>
 
+#include "nova/types.h"
+
 #define COMP_MAXWIN 8u
 #define COMP_TITLE_H 12u
+/* Desktop bar (Phase 12d): persistent top strip, painted last
+ * (always on top). Shows "NOVA OS" + the focused title. */
+#define COMP_BAR_H 12u
 
 /* Open a window (clipped to the screen at paint). Returns the id
  * (lowest free slot) or negative -errno (EINVAL on empty/off
@@ -30,6 +35,14 @@ int comp_focus_next(void);
 /* Set the title (Phase 12c: up to 15 chars, black on the title
  * bar). EINVAL on unused id. */
 int comp_title(uint32_t id, const char *s);
+/* Snapshot live windows into out (up to max; returns the live
+ * count even past max, so (NULL, 0) probes the count). */
+int comp_stat(struct nova_winstat *out, uint32_t max);
+/* Deterministic dispatch proof (guest selftest over crafted
+ * frames + direct calls): empty focus, bad memory, bad ids,
+ * count probe, positive focus/stat/close. Prints WIN-OK.
+ * Nonzero on failure (fatal: panic). */
+int win_selftest(void);
 /* Current focus id, or -1. */
 int comp_focused(void);
 /* Repaint everything (bg + windows back-to-front). */

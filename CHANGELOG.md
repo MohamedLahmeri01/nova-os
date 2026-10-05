@@ -188,6 +188,10 @@ No releases yet.
 - Phase 12c text + titles (tested 2026-10-05, `nova test` 19/19):
   BIOS font with fallback, fb_text, window titles, console
   demo, title-ink proofs, T19 synthetic pixels (ADR-0043).
+- Phase 12d window system (tested 2026-10-05, `nova test` 19/19):
+  5 window syscalls + shared types.h, menu bar, shell window
+  commands, WIN-OK gate (ADR-0044). Phase 12 complete.
+
 
 
 

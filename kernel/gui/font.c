@@ -9,7 +9,6 @@
 
 #include "serial.h"
 #include "gui/font.h"
-
 static uint8_t g_font[FONT_GLYPHS][FONT_ROWS];
 static int g_fallback;
 
@@ -35,7 +34,10 @@ static void font_boxes(void) {
 }
 
 void font_init(void) {
-    uint32_t vec = *(volatile uint32_t *)0x10Cu;
+    /* Through a variable (never a literal zero: GCC proves
+     * absolute-zero dereferences and warns, correctly). */
+    uintptr_t ivt = 0x10Cu;
+    uint32_t vec = *(volatile uint32_t *)ivt;
     uint32_t phys =
         ((vec >> 16) & 0xFFFFu) * 16u + (vec & 0xFFFFu);
     uint32_t ink = 0;

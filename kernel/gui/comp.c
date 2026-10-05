@@ -140,6 +140,44 @@ void comp_present(void) {
             paint_one(i);
         }
     }
+    /* Desktop bar, always on top (Phase 12d): identity left,
+     * focused title right of it (black on... white on black). */
+    fb_rect(0, 0, FB_W, COMP_BAR_H, FB_BLACK);
+    fb_text(4, 2, "NOVA OS", FB_WHITE);
+    if (g_focus >= 0 && g_wins[g_focus].used &&
+        g_wins[g_focus].title[0] != 0) {
+        fb_text(70, 2, g_wins[g_focus].title, FB_WHITE);
+    }
+}
+
+int comp_stat(struct nova_winstat *out, uint32_t max) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < COMP_MAXWIN; i++) {
+        if (!g_wins[i].used) {
+            continue;
+        }
+        if (out != 0 && n < max) {
+            out[n].id = i;
+            out[n].x = g_wins[i].x;
+            out[n].y = g_wins[i].y;
+            out[n].w = g_wins[i].w;
+            out[n].h = g_wins[i].h;
+            out[n].focused = (g_focus == (int)i) ? 1u : 0u;
+            out[n].color = g_wins[i].color;
+            out[n]._pad[0] = 0;
+            out[n]._pad[1] = 0;
+            out[n]._pad[2] = 0;
+            for (uint32_t k = 0; k < 16u; k++) {
+                out[n].title[k] = g_wins[i].title[k];
+                if (g_wins[i].title[k] == 0) {
+                    break;
+                }
+            }
+            out[n].title[15] = 0;
+        }
+        n++;
+    }
+    return (int)n;
 }
 
 static void demo_wait(uint32_t ticks) {
@@ -156,18 +194,20 @@ static void demo_mark(int id) {
 
 /* Console body (redrawn after every present: presents repaint). */
 static void demo_console_text(void) {
-    fb_text(16, 28, "NOVA OS 12c", FB_WHITE);
-    fb_text(16, 38, "FB-OK", FB_WHITE);
-    fb_text(16, 48, "COMP-OK", FB_WHITE);
+    fb_text(16, 36, "NOVA OS 12c", FB_WHITE);
+    fb_text(16, 46, "FB-OK", FB_WHITE);
+    fb_text(16, 56, "COMP-OK", FB_WHITE);
 }
 
 void comp_demo(void) {
     int a, b, c;
     /* Console + two alerts (back-to-front by id). Titles prove
-     * text on screen; the console body proves multi-line text. */
-    a = comp_open(8, 8, 190, 184, FB_BLUE);
-    b = comp_open(170, 20, 140, 70, FB_RED);
-    c = comp_open(150, 110, 150, 80, FB_GREEN);
+     * text on screen; the console body proves multi-line text.
+     * Geometry starts below the desktop bar (bar covers y 0..12;
+     * nothing legible may live up there). */
+    a = comp_open(8, 16, 190, 176, FB_BLUE);
+    b = comp_open(170, 28, 140, 70, FB_RED);
+    c = comp_open(150, 122, 150, 76, FB_GREEN);
     if (a != 0 || b != 1 || c != 2) {
         return; /* selftest covers errors; demo never panics */
     }

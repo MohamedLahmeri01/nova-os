@@ -34,7 +34,7 @@ static const char *sh_arg(const char *line);
 static void sh_denied(const char *what);
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle clear exit");
 }
 
 static void sh_putip(uint32_t ip) {
@@ -265,6 +265,155 @@ static void sh_chroot(const char *line) {
         return;
     }
     nova_puts("chroot ok");
+}
+
+static const char *sh_nextnum(const char *p, int *val) {
+    char tok[12];
+    uint32_t i = 0;
+    int ok = 0;
+    while (*p == ' ') {
+        p++;
+    }
+    while (*p != 0 && *p != ' ' && i + 1u < sizeof(tok)) {
+        tok[i++] = *p++;
+    }
+    tok[i] = 0;
+    if (i == 0 || (*p != 0 && *p != ' ')) {
+        return 0;
+    }
+    *val = nova_strtoi(tok, &ok);
+    if (!ok) {
+        return 0;
+    }
+    return p;
+}
+
+static void sh_putstrn(const char *s, uint32_t max) {
+    uint32_t i = 0;
+    while (i < max && s[i] != 0) {
+        nova_putchar(s[i]);
+        i++;
+    }
+}
+
+static void sh_focus(void) {
+    int32_t r = nova_winfocus();
+    if (r < 0) {
+        nova_puts("no windows");
+        return;
+    }
+    nova_print("focus id=", 9);
+    sh_putdec((uint32_t)r);
+    nova_putchar('\n');
+}
+
+static void sh_wins(void) {
+    static struct nova_winstat ws[8];
+    int32_t n = nova_winstat(ws, 8);
+    int32_t i;
+    if (n < 0) {
+        nova_puts("wins failed");
+        return;
+    }
+    if (n == 0) {
+        nova_puts("no windows");
+        return;
+    }
+    for (i = 0; i < n && i < 8; i++) {
+        sh_putdec(ws[i].id);
+        nova_putchar(' ');
+        sh_putdec(ws[i].x);
+        nova_putchar(',');
+        sh_putdec(ws[i].y);
+        nova_putchar(' ');
+        sh_putdec(ws[i].w);
+        nova_putchar('x');
+        sh_putdec(ws[i].h);
+        nova_putchar(' ');
+        if (ws[i].focused != 0) {
+            nova_print("* ", 2);
+        }
+        sh_putstrn(ws[i].title, 16);
+        nova_putchar('\n');
+    }
+}
+
+static void sh_winopen(const char *line) {
+    const char *p = sh_arg(line);
+    int v[5];
+    struct nova_winopen args;
+    int32_t r;
+    for (int k = 0; k < 5; k++) {
+        p = sh_nextnum(p, &v[k]);
+        if (p == 0 || v[k] < 0) {
+            nova_puts("usage: winopen x y w h color");
+            return;
+        }
+    }
+    while (*p == ' ') {
+        p++;
+    }
+    if (*p != 0 || v[4] > 15) {
+        nova_puts("usage: winopen x y w h color");
+        return;
+    }
+    args.x = (uint32_t)v[0];
+    args.y = (uint32_t)v[1];
+    args.w = (uint32_t)v[2];
+    args.h = (uint32_t)v[3];
+    args.color = (uint8_t)v[4];
+    args._pad[0] = 0;
+    args._pad[1] = 0;
+    args._pad[2] = 0;
+    r = nova_winopen(&args);
+    if (r < 0) {
+        nova_puts("winopen failed");
+        return;
+    }
+    nova_print("win id=", 7);
+    sh_putdec((uint32_t)r);
+    nova_putchar('\n');
+}
+
+static void sh_winclose(const char *line) {
+    const char *p = sh_arg(line);
+    int id = 0;
+    int32_t r;
+    p = sh_nextnum(p, &id);
+    if (p == 0 || id < 0) {
+        nova_puts("usage: winclose id");
+        return;
+    }
+    r = nova_winclose((uint32_t)id);
+    if (r != 0) {
+        nova_puts("winclose failed");
+        return;
+    }
+    nova_puts("winclose ok");
+}
+
+static void sh_wintitle(const char *line) {
+    const char *p = sh_arg(line);
+    int id = 0;
+    int32_t r;
+    p = sh_nextnum(p, &id);
+    if (p == 0 || id < 0) {
+        nova_puts("usage: wintitle id text");
+        return;
+    }
+    while (*p == ' ') {
+        p++;
+    }
+    if (*p == 0) {
+        nova_puts("usage: wintitle id text");
+        return;
+    }
+    r = nova_wintitle((uint32_t)id, p);
+    if (r != 0) {
+        nova_puts("wintitle failed");
+        return;
+    }
+    nova_puts("wintitle ok");
 }
 
 static void sh_echo(const char *line) {
@@ -561,6 +710,19 @@ static void sh_run(const char *line) {
     } else if (nova_strncmp(line, "chroot", 6) == 0 &&
                (line[6] == 0 || line[6] == ' ')) {
         sh_chroot(line);
+    } else if (nova_strcmp(line, "focus") == 0) {
+        sh_focus();
+    } else if (nova_strcmp(line, "wins") == 0) {
+        sh_wins();
+    } else if (nova_strncmp(line, "winopen", 7) == 0 &&
+               (line[7] == 0 || line[7] == ' ')) {
+        sh_winopen(line);
+    } else if (nova_strncmp(line, "winclose", 8) == 0 &&
+               (line[8] == 0 || line[8] == ' ')) {
+        sh_winclose(line);
+    } else if (nova_strncmp(line, "wintitle", 8) == 0 &&
+               (line[8] == 0 || line[8] == ' ')) {
+        sh_wintitle(line);
     } else if (nova_strcmp(line, "exit") == 0) {
         nova_puts("bye");
         nova_exit(0);

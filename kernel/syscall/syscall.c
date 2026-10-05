@@ -13,6 +13,9 @@
 #include "syscall/validate.h"
 #include "process/caps.h"
 #include "process/rlimit.h"
+#include "gui/comp.h"
+#include "drivers/fb.h"
+#include "nova/types.h"
 #include "mm/addrspace.h"
 #include "mm/pmm.h"
 #include "mm/heap.h"
@@ -956,8 +959,7 @@ static int32_t do_chmod(uint32_t path, uint32_t mode, uint32_t c) {
     return fs_chmod(kpath, (uint16_t)mode);
 }
 
-static int32_t do_chroot(uint32_t path, uint32_t b, uint32_t c) {
-    char kpath[FS_MAX_PATH + 1u];
+static int32_t do_chroot(uint32_t path, uint32_t b, uint32_t c) {    char kpath[FS_MAX_PATH + 1u];
     struct process *p;
     struct fs_node *n = 0;
     int32_t plen;
@@ -984,6 +986,79 @@ static int32_t do_chroot(uint32_t path, uint32_t b, uint32_t c) {
     }
     p->jail_root = n;
     return NOVA_ESUCCESS;
+}
+
+/* Window management (Phase 12d): ungated in v0.1 (any local
+ * process arranges the shared console screen; per-window
+ * ownership + a GUI capability are future). All user memory
+ * validated like every other call. */
+static int32_t do_winfocus(uint32_t a, uint32_t b, uint32_t c) {
+    int id;
+    (void)a;
+    (void)b;
+    (void)c;
+    /* Cycle + repaint (the visible change); -1 when empty. */
+    id = comp_focus_next();
+    comp_present();
+    return id;
+}
+
+static int32_t do_winopen(uint32_t args, uint32_t b, uint32_t c) {
+    struct nova_winopen k;
+    const struct nova_winopen *u;
+    (void)b;
+    (void)c;
+    if (validate_usermem(args, sizeof(k), 0) != 0) {
+        return -NOVA_EFAULT;
+    }
+    u = (const struct nova_winopen *)args;
+    k.x = u->x;
+    k.y = u->y;
+    k.w = u->w;
+    k.h = u->h;
+    k.color = u->color;
+    /* Geometry validated inside comp_open (EINVAL flows). */
+    return comp_open(k.x, k.y, k.w, k.h, k.color);
+}
+
+static int32_t do_winstat(uint32_t buf, uint32_t max, uint32_t c) {
+    uint32_t nbytes;
+    (void)c;
+    /* max entries bound the copy (93*44 = 4092 <= 4096 range
+     * cap); count-only probe when max is 0. */
+    if (max > 93u) {
+        return -NOVA_EINVAL;
+    }
+    nbytes = max * (uint32_t)sizeof(struct nova_winstat);
+    if (max != 0 && validate_usermem(buf, nbytes, 1) != 0) {
+        return -NOVA_EFAULT;
+    }
+    return comp_stat(max == 0 ? 0 : (struct nova_winstat *)buf,
+                     max);
+}
+
+static int32_t do_wintitle(uint32_t id, uint32_t str, uint32_t c) {
+    char kbuf[16];
+    (void)c;
+    if (validate_usermem(str, sizeof(kbuf), 0) != 0) {
+        return -NOVA_EFAULT;
+    }
+    for (uint32_t i = 0; i < sizeof(kbuf); i++) {
+        kbuf[i] = *(volatile char *)(str + i);
+    }
+    kbuf[sizeof(kbuf) - 1u] = 0; /* truncation documented */
+    return comp_title(id, kbuf);
+}
+
+static int32_t do_winclose(uint32_t id, uint32_t b, uint32_t c) {
+    int rc;
+    (void)b;
+    (void)c;
+    rc = comp_close(id);
+    if (rc == 0) {
+        comp_present();
+    }
+    return rc;
 }
 
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
@@ -1018,6 +1093,11 @@ static const struct {
     { SYS_CRED, "cred", do_cred },
     { SYS_CHMOD, "chmod", do_chmod },
     { SYS_CHROOT, "chroot", do_chroot },
+    { SYS_FOCUS, "winfocus", do_winfocus },
+    { SYS_WINOPEN, "winopen", do_winopen },
+    { SYS_WINSTAT, "winstat", do_winstat },
+    { SYS_WINTITLE, "wintitle", do_wintitle },
+    { SYS_WINCLOSE, "winclose", do_winclose },
 };
 
 void syscall_handler(struct syscall_frame *f) {
@@ -1670,5 +1750,112 @@ int jail_selftest(void) {
     sched_enter(saved);
     kfree(tp);
     serial_puts("JAIL-OK\n");
+    return NOVA_ESUCCESS;
+}
+
+/* --- selftest: window dispatch binds (Phase 12d). No current
+ * needed (handlers are proc-agnostic): crafted frames drive real
+ * dispatch against the empty pool (comp_demo runs later). Empty
+ * focus, bad pointers, bad ids, over-max stat refuse; a direct
+ * open + dispatched focus + direct stat prove the positive path.
+ * Prints WIN-OK. --- */
+int win_selftest(void) {
+    struct syscall_frame f;
+    struct nova_winstat st[COMP_MAXWIN];
+    int id;
+    f.kflags = 0;
+    f.edi = 0;
+    f.esi = 0;
+    f.ebp = 0;
+    f.esp_ignored = 0;
+    f.ebx = 0;
+    f.edx = 0;
+    f.ecx = 0;
+    f.eax = 0;
+    f.eip = 0;
+    f.cs = 0;
+    f.eflags = 0;
+    f.esp = 0;
+    f.ss = 0;
+    /* Empty pool: focus finds nothing. */
+    f.eax = SYS_FOCUS;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -1) {
+        serial_puts("WIN-FAIL focus-empty\n");
+        return -1;
+    }
+    /* Bad user memory refuses before anything happens. */
+    f.eax = SYS_WINOPEN;
+    f.ebx = 0;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EFAULT) {
+        serial_puts("WIN-FAIL open-null\n");
+        return -1;
+    }
+    f.eax = SYS_WINTITLE;
+    f.ebx = 0;
+    f.ecx = 0;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EFAULT) {
+        serial_puts("WIN-FAIL title-null\n");
+        return -1;
+    }
+    f.eax = SYS_WINSTAT;
+    f.ebx = 0;
+    f.ecx = 94u;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EINVAL) {
+        serial_puts("WIN-FAIL stat-max\n");
+        return -1;
+    }
+    /* Count probe on empty pool (NULL,0 is legal). */
+    f.eax = SYS_WINSTAT;
+    f.ebx = 0;
+    f.ecx = 0;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != 0) {
+        serial_puts("WIN-FAIL stat-zero\n");
+        return -1;
+    }
+    /* Unused id refuses (pool still empty). */
+    f.eax = SYS_WINCLOSE;
+    f.ebx = 7;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EINVAL) {
+        serial_puts("WIN-FAIL close-empty\n");
+        return -1;
+    }
+    /* Positive path: direct open, dispatched focus, direct stat
+     * (user buffers are unreachable from here; the copy loop is
+     * reviewed, the validation above executed). */
+    id = comp_open(10, 150, 60, 40, FB_RED);
+    if (id != 0) {
+        serial_puts("WIN-FAIL open\n");
+        return -1;
+    }
+    f.eax = SYS_FOCUS;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != 0) {
+        serial_puts("WIN-FAIL focus\n");
+        return -1;
+    }
+    if (comp_stat(st, COMP_MAXWIN) != 1 || st[0].id != 0 ||
+        st[0].x != 10u || st[0].focused != 1u ||
+        st[0].title[0] != 0) {
+        serial_puts("WIN-FAIL stat\n");
+        return -1;
+    }
+    f.eax = SYS_WINCLOSE;
+    f.ebx = 0;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != 0) {
+        serial_puts("WIN-FAIL close\n");
+        return -1;
+    }
+    if (comp_stat(0, 0) != 0) {
+        serial_puts("WIN-FAIL drain\n");
+        return -1;
+    }
+    serial_puts("WIN-OK\n");
     return NOVA_ESUCCESS;
 }

@@ -6,7 +6,7 @@
 > names), and `nova test` fails when it goes stale.
 
 ABI version: v1 (`NOVA_ABI_VERSION`). Numbers stable
-within a major version (SYS_MAX = 24). Convention:
+within a major version (SYS_MAX = 29). Convention:
 EAX = number; EBX, ECX, EDX = args; EAX = result
 (non-negative success, negative -errno).
 
@@ -39,6 +39,11 @@ EAX = number; EBX, ECX, EDX = args; EAX = result
 | 22 | SYS_CRED | cred |
 | 23 | SYS_CHMOD | chmod |
 | 24 | SYS_CHROOT | chroot |
+| 25 | SYS_FOCUS | winfocus |
+| 26 | SYS_WINOPEN | winopen |
+| 27 | SYS_WINSTAT | winstat |
+| 28 | SYS_WINTITLE | wintitle |
+| 29 | SYS_WINCLOSE | winclose |
 
 ## Errnos (negative on return)
 

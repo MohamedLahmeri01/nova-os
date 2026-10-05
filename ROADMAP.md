@@ -207,8 +207,10 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 12c text + titles (BIOS 8x8 font with validation +
   fallback, fb_text, window titles, console demo, title-ink
   proofs + T19 synthetic-font pixels), 19/19 (ADR-0043)
-- [ ] 12d window system completion + desktop shell (keyboard
-  focus first; mouse driver before any pointer)
+- [x] 12d window system + desktop bar (FOCUS/WINOPEN/STAT/
+  TITLE/CLOSE syscalls, shared types.h, menu bar, shell
+  focus/wins/winopen/winclose/wintitle, WIN-OK gate),
+  19/19 (ADR-0044). Phase 12 complete.
 
 ## Non-goals for 0.x
 

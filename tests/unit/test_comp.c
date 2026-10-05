@@ -134,20 +134,21 @@ int main(void) {
           0);
     check(fb_get(10, 60) == FB_RED, "back-tall", fb_get(10, 60),
           0);
-    /* Focus border: white 2px on the focused window edge. */
-    check(fb_get(0, 0) == FB_WHITE, "focus-border",
-          fb_get(0, 0), 0);
+    /* Focus border: white 2px on the focused window edge
+     * (below the menu bar, which owns y 0..12). */
+    check(fb_get(0, 50) == FB_WHITE, "focus-border",
+          fb_get(0, 50), 0);
     comp_focus(1);
     comp_present();
-    check(fb_get(0, 0) == FB_GRAY, "unfocus-border",
-          fb_get(0, 0), 0);
+    check(fb_get(0, 50) == FB_GRAY, "unfocus-border",
+          fb_get(0, 50), 0);
     check(fb_get(50, 50) == FB_WHITE, "refocus-border",
           fb_get(50, 50), 0);
     /* Close one: background shows through. */
     check(comp_close(0) == 0, "close", 0, 0);
     comp_present();
-    check(fb_get(10, 10) == FB_DARKGRAY, "bg-through",
-          fb_get(10, 10), 0);
+    check(fb_get(10, 50) == FB_DARKGRAY, "bg-through",
+          fb_get(10, 50), 0);
     check(comp_close(1) == 0, "close2", 0, 0);
 
     /* Text through a synthetic font ('X' diagonals only): title

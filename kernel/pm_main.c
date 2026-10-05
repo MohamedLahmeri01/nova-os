@@ -300,12 +300,12 @@ void nova_pm_main(const nova_boot_info_t *info) {
         nova_panic("fb-selftest-fail");
     }
     fb_splash();
-    /* Compositor (Phase 12b): prove layers + focus, then leave the
-     * demo scene up (it repaints over the splash: final screen). */
+    /* Compositor (Phase 12b): prove layers + focus (the demo
+     * scene paints later, after every selftest, so the pool is
+     * deterministically empty here and for win_selftest). */
     if (comp_selftest() != 0) {
         nova_panic("comp-selftest-fail");
     }
-    comp_demo();
     if (virtio_net_init() != 0) {
         nova_panic("virtio-init-fail");
     }
@@ -355,6 +355,9 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (jail_selftest() != 0) {
         nova_panic("jail-selftest-fail");
     }
+    if (win_selftest() != 0) {
+        nova_panic("win-selftest-fail");
+    }
     {
         int sched_rc = sched_selftest();
         if (sched_rc != 0) {
@@ -380,6 +383,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
         }
     }
     smp_boot();
+    /* Demo scene (Phase 12b/12d): every selftest is done and the
+     * pool is empty, so ids pack 0,1,2 deterministically. This
+     * repaints the final screen (over the splash). */
+    comp_demo();
     spawn_init();
     /* Boot-time exec proof (Phase 7b): run /bin/hi from the FS. Its
      * HI-OK line in the log proves spawn-by-name end to end. */
