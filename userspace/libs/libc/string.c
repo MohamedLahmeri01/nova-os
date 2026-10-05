@@ -1,7 +1,7 @@
 /* NOVA OS libc: strings (Phase 6). */
 #include <stdint.h>
 
-#include "string.h"
+#include "nova/string.h"
 
 uint32_t nova_strlen(const char *s) {
     uint32_t n = 0;

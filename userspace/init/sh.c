@@ -6,9 +6,9 @@
  */
 #include <stdint.h>
 
-#include "nova.h"
-#include "stdio.h"
-#include "string.h"
+#include "nova/nova.h"
+#include "nova/stdio.h"
+#include "nova/string.h"
 #include "sh.h"
 
 #define SH_LINE_MAX 128u

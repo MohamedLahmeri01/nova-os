@@ -169,6 +169,11 @@ No releases yet.
   graft invisibility, narrowing-only SYS_CHROOT, spawn
   inheritance, shell chroot, JAIL-OK gate, T9 walk vectors
   (ADR-0038). Phase 10 complete.
+- Phase 11a SDK headers (tested 2026-10-05, `nova test` 17/17):
+  sdk/include + user.ld, program manifest, /bin/uname
+  sample, generated docs/ABI.md + T17 freshness, SDK-OK gate
+  (ADR-0039).
+
 
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,

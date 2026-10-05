@@ -4,8 +4,8 @@
  */
 #include <stdint.h>
 
-#include "nova.h"
-#include "stdio.h"
+#include "nova/nova.h"
+#include "nova/stdio.h"
 
 static void hi_putdec(uint32_t v) {
     char buf[10];

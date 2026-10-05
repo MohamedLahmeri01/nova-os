@@ -1,8 +1,8 @@
 /* NOVA OS libc: console I/O (Phase 6). */
 #include <stdint.h>
 
-#include "nova.h"
-#include "stdio.h"
+#include "nova/nova.h"
+#include "nova/stdio.h"
 
 void nova_putchar(char c) {
     nova_print(&c, 1);

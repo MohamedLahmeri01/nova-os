@@ -39,6 +39,8 @@ extern uint8_t binary_init_bin_start[];
 extern uint8_t binary_init_bin_end[];
 extern uint8_t binary_hi_bin_start[];
 extern uint8_t binary_hi_bin_end[];
+extern uint8_t binary_uname_bin_start[];
+extern uint8_t binary_uname_bin_end[];
 
 /* Spawn a user image (Phase 7b: generalized from the Phase 6 init
  * spawn). Own process, PD, code and stack; entry is _ustart at
@@ -120,12 +122,15 @@ static void spawn_init(void) {
 }
 
 /* Seed builtin user binaries into ramfs (Phase 7b): the hi blob
- * becomes /bin/hi (exec proof + shell `run` target). /disk is a
+ * becomes /bin/hi (exec proof + shell `run` target), the uname
+ * blob /bin/uname (Phase 11a SDK sample). /disk is a
  * placeholder dir: paths under it route to the FAT driver (7c).
  * Runs after fs_init, before fs_selftest (which asserts the seed). */
 static void seed_binaries(void) {
     struct fs_node *n = 0;
     uint32_t size = (uint32_t)(binary_hi_bin_end - binary_hi_bin_start);
+    uint32_t usize =
+        (uint32_t)(binary_uname_bin_end - binary_uname_bin_start);
     uint32_t got = 0;
     if (fs_mkdir("/bin") != 0) {
         nova_panic("bin-mkdir-fail");
@@ -145,6 +150,15 @@ static void seed_binaries(void) {
     if (fs_write_node(n, 0, binary_hi_bin_start, size, &got) != 0 ||
         got != size) {
         nova_panic("bin-seed-fail");
+    }
+    n = 0;
+    if (fs_create("/bin/uname", &n) != 0 || n == 0) {
+        nova_panic("uname-create-fail");
+    }
+    if (fs_write_node(n, 0, binary_uname_bin_start, usize, &got) !=
+            0 ||
+        got != usize) {
+        nova_panic("uname-seed-fail");
     }
 }
 
@@ -356,6 +370,12 @@ void nova_pm_main(const nova_boot_info_t *info) {
      * HI-OK line in the log proves spawn-by-name end to end. */
     if (spawn_file("/bin/hi") < 0) {
         nova_panic("exec-proof-fail");
+    }
+    /* SDK sample proof (Phase 11a): run /bin/uname from the FS. Its
+     * SDK-OK line proves a third program built purely against
+     * sdk/include links, seeds, spawns, and calls home. */
+    if (spawn_file("/bin/uname") < 0) {
+        nova_panic("sdk-proof-fail");
     }
 #ifdef NOVA_FAULT_TEST
     serial_puts("INJECT-FAULT\n");

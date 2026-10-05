@@ -188,7 +188,10 @@ Capabilities, sandboxing, resource limits, secure handles.
 
 ## Phase 11 — SDK
 
-Headers, cross-toolchain recipe, debugging guide, packaging stub.
+- [x] 11a headers + sample (sdk/include + user.ld, program
+  manifest, /bin/uname reference, generated docs/ABI.md +
+  T17 freshness, SDK-OK gate), 17/17 (ADR-0039)
+- [ ] 11b debugging guide + `nova dist` packaging stub
 
 ## Phase 12 — Desktop (explicitly last)
 
