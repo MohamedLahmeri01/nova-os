@@ -1,7 +1,12 @@
 # Changelog
 
 All notable changes will be documented here. Format follows Keep a Changelog.
-No releases yet.
+## 0.1.0 - 2026-10-05 (first release)
+
+All Phase 0-13d work, suite 20/20 on the constrained VM.
+Versioned binaries + manifest via `nova dist`; ABI v1;
+see docs/RELEASE.md for scope and limitations.
+
 
 ## [Unreleased] — 0.0.0-phase0
 

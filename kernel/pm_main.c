@@ -220,6 +220,9 @@ int32_t spawn_file(const char *path) {
 
 void nova_pm_main(const nova_boot_info_t *info) {
     serial_puts("NOVA-OS-BOOT-MARKER-v0\n");
+#ifdef NOVA_VERSION
+    serial_puts("NOVA-OS " NOVA_VERSION "\n");
+#endif
     if (info->magic != NOVA_BOOT_MAGIC ||
         info->version != NOVA_BOOT_INFO_VERSION) {
         nova_panic("bad-boot-info");

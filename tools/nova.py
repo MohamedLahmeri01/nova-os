@@ -38,6 +38,14 @@ REQUIRED_DOCS = ["docs/ARCHITECTURE.md", "docs/ENVIRONMENT.md",
                  "docs/TESTING-STRATEGY.md", "docs/RESOURCE-BUDGET.md",
                  "docs/TOOLCHAIN.md", "ROADMAP.md", "README.md"]
 
+# Release version (single source: VERSION file at tree root).
+def tree_version():
+    try:
+        with open(os.path.join(ROOT, "VERSION")) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return "dev"
+
 # Phase 1 boot-test contract: the guest must print this on COM1.
 MARKER = b"NOVA-OS-BOOT-MARKER"
 IMAGE_RAW = os.path.join(IMAGES, "nova-os.raw")
@@ -205,6 +213,7 @@ def build_userspace():
             if not os.path.isfile(s):
                 return 1, f"missing {src}"
             r = run(["gcc"] + CFLAGS32 +
+                    ['-DNOVA_VERSION="%s"' % tree_version()] +
                     ["-I", os.path.join(ROOT, "sdk", "include"),
                      "-I", os.path.join(ROOT, "userspace", "init"),
                      "-c", s, "-o", os.path.join(BUILD, obj)], timeout=60)
@@ -295,7 +304,7 @@ def build_phase1(fault=False):
             return 1, f"missing {src}"
         extra = []
         if src.endswith(".c"):
-            extra = ["-I", os.path.join(ROOT, "kernel"), "-I", os.path.join(ROOT, "kernel", "mm"), "-I", os.path.join(ROOT, "sdk", "include")] + extra_defs
+            extra = ["-I", os.path.join(ROOT, "kernel"), "-I", os.path.join(ROOT, "kernel", "mm"), "-I", os.path.join(ROOT, "sdk", "include"), '-DNOVA_VERSION="%s"' % tree_version()] + extra_defs
         elif src.endswith(".S"):
             extra = ["-I", os.path.join(ROOT, "boot")]
         r = run(["gcc"] + CFLAGS32 + extra + ["-c", s, "-o",
@@ -436,20 +445,36 @@ def cmd_abi():
     return 0
 
 
-def dist_assemble(outdir):
+def cmd_version():
+    """Print tool + tree version, ABI, and commit."""
+    print("== nova version ==")
+    print(f"tree: {tree_version()}")
+    r = run(["git", "rev-parse", "--short", "HEAD"], timeout=30)
+    print(f"commit: {(r.stdout or '').strip() if r.returncode == 0 else 'unknown'}")
+    rc, res = render_abi()
+    if rc == 0:
+        for line in res.splitlines():
+            if line.startswith("ABI version:"):
+                print(line)
+                break
+    return 0
+
+
+def dist_assemble(outdir, version):
     """Package the current build outputs + docs into outdir.
 
-    Lays out binaries, ABI reference, changelog, SDK readme, and
-    a manifest (date, commit, ABI version, per-file bytes+sha256).
-    Returns (rc, msg): msg is outdir on success. Never rebuilds:
-    missing build outputs fail loudly (run nova build first).
+    Lays out binaries, ABI reference, changelog, SDK readme,
+    VERSION, and a manifest (version, date, commit, ABI version,
+    per-file bytes+sha256). Returns (rc, msg): msg is outdir on
+    success. Never rebuilds: missing build outputs fail loudly
+    (run nova build first).
     """
     import hashlib
     import datetime
     bins = ["kernel.bin", "init.bin", "hi.bin", "uname.bin"]
     docs = [os.path.join("docs", "ABI.md"),
             os.path.join("sdk", "README.md"),
-            "CHANGELOG.md"]
+            "CHANGELOG.md", "VERSION"]
     for n in bins:
         if not os.path.isfile(os.path.join(BUILD, n)):
             return 1, f"missing build/{n} (run nova build first)"
@@ -487,6 +512,7 @@ def dist_assemble(outdir):
         rows.append((base, len(data),
                      hashlib.sha256(data).hexdigest()))
     lines = ["NOVA OS distribution",
+             f"version: {version}",
              f"date: {day} (UTC)",
              f"commit: {sha}",
              f"abi: v{abi}",
@@ -508,8 +534,9 @@ def cmd_dist():
     import datetime
     day = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y%m%d")
-    outdir = os.path.join(ROOT, "dist", f"nova-os-{day}-{sha}")
-    rc, msg = dist_assemble(outdir)
+    outdir = os.path.join(ROOT, "dist",
+                          f"nova-os-{tree_version()}-{day}-{sha}")
+    rc, msg = dist_assemble(outdir, tree_version())
     if rc != 0:
         print(f"[fail] {msg}")
         return 1
@@ -877,7 +904,7 @@ def cmd_test():
     tdir = os.path.join(BUILD, "dist-test")
     if os.path.isdir(tdir):
         shutil.rmtree(tdir)
-    rc, msg = dist_assemble(tdir)
+    rc, msg = dist_assemble(tdir, tree_version())
     if rc != 0:
         print(f"[fail] T18 dist assemble: {msg}")
         failed += 1
@@ -905,11 +932,12 @@ def cmd_test():
                     ok = False
             for want in ["kernel.bin", "init.bin", "hi.bin",
                          "uname.bin", "ABI.md", "README.md",
-                         "CHANGELOG.md", "manifest.txt"]:
+                         "CHANGELOG.md", "VERSION", "manifest.txt"]:
                 if not os.path.isfile(os.path.join(tdir, want)):
                     print(f"[fail] T18 dist missing: {want}")
                     ok = False
-            if "abi: v" not in man or "commit:" not in man:
+            if "abi: v" not in man or "commit:" not in man or \
+                    "version:" not in man:
                 print("[fail] T18 manifest header incomplete")
                 ok = False
         except (FileNotFoundError, ValueError) as e:
@@ -1329,7 +1357,7 @@ def main(argv):
             "run-vbox": cmd_run_vbox, "vbox-check": cmd_vbox_check,
             "image": cmd_image, "panic-test": cmd_panic_test,
             "bench-pmm": cmd_bench_pmm, "clean": cmd_clean,
-            "abi": cmd_abi, "dist": cmd_dist}
+            "abi": cmd_abi, "dist": cmd_dist, "version": cmd_version}
     if len(argv) != 2 or argv[1] not in cmds:
         print(f"usage: {sys.argv[0]} {{{'|'.join(cmds)}}}")
         return 2

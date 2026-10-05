@@ -8,8 +8,12 @@
 #include "nova/stdio.h"
 #include "sh.h"
 
+#ifndef NOVA_VERSION
+#define NOVA_VERSION "dev"
+#endif
+
 __attribute__((section(".text.startup"))) void ustart(void) {
-    nova_puts("NOVA OS init (Phase 6)");
+    nova_puts("NOVA OS " NOVA_VERSION " init");
     sh_main();
     nova_puts("shell exited; halting");
     for (;;) {

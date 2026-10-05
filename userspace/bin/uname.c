@@ -10,6 +10,10 @@
 #include "nova/nova.h"
 #include "nova/stdio.h"
 
+#ifndef NOVA_VERSION
+#define NOVA_VERSION "dev"
+#endif
+
 static void uputdec(uint32_t v) {
     char buf[10];
     int n = 0;
@@ -37,6 +41,7 @@ __attribute__((section(".text.startup"))) void ustart(void) {
     uputdec((uint32_t)pid);
     nova_print(" uid=", 5);
     uputdec((uint32_t)uid);
-    nova_putchar('\n');
+    nova_print(" ver=", 5);
+    nova_puts(NOVA_VERSION);
     nova_exit(0);
 }
