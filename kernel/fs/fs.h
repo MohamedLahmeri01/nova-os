@@ -33,6 +33,12 @@ struct fs_node {
     uint8_t *data;           /* files only */
     uint32_t size;
     uint32_t cap;
+    /* Phase 10c ownership (POSIX-lite triplets): creator uid/gid,
+     * 9 permission bits (is_dir stays separate, never in mode).
+     * Foreign filesystems materialize opener-owned (vfat-style). */
+    uint32_t uid;
+    uint32_t gid;
+    uint16_t mode;
 };
 
 struct fs_file {
@@ -86,5 +92,37 @@ void fs_file_free(struct fs_file *f);
 int fs_fd_alloc(struct process *p, struct fs_file *f);
 struct fs_file *fs_fd_get(struct process *p, uint32_t fd);
 int fs_fd_drop(struct process *p, uint32_t fd);
+
+/* Permission bits for fs_can need-mask (owner/group/other share
+ * the pattern; root bypasses everything). */
+#define FS_MAY_READ 4u
+#define FS_MAY_WRITE 2u
+#define FS_MAY_EXEC 1u
+
+/* Current credentials (calling thread's process; 0/0 with no
+ * current thread: boot context is root). */
+uint32_t fs_current_uid(void);
+uint32_t fs_current_gid(void);
+
+/* Access check: 0 or -EACCES (-EINVAL for NULL node or unknown
+ * need bits). Pure over the node (host-testable). */
+int fs_can(const struct fs_node *n, uint32_t uid, uint32_t gid,
+           uint32_t need);
+
+/* Open-time check for a resolved node: read needs R, write modes
+ * need W (RDWR needs both). 0 or -errno (EINVAL/EACCES). Pure
+ * over proc + node (guest unit-tested without dispatch). */
+int fs_open_check(const struct process *p, const struct fs_node *n,
+                  uint32_t flags);
+
+/* Change permission bits (owner-or-root; dirs keep dir-ness, mode
+ * holds perm bits only). Ramfs only: graft paths refuse EROFS
+ * (on-disk permission editing is per-FS future work). */
+int fs_chmod(const char *path, uint16_t mode);
+
+/* Deterministic ownership proof (guest selftest): denials bind,
+ * triplets behave, credential dispatch refuses rises. Prints
+ * PERM-OK. Nonzero on failure (fatal: panic). */
+int perm_selftest(void);
 
 #endif /* NOVA_FS_H */

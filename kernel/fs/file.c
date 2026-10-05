@@ -12,7 +12,68 @@
 #include "mm/heap.h"
 #include "fs/fs.h"
 #include "process/rlimit.h"
+#include "sched/sched.h"
+#include "thread/thread.h"
 #include "syscall/syscall.h"
+
+/* Current credentials for the fs layer (Phase 10c): the calling
+ * thread's process, or root with no current thread (boot context:
+ * seeds and early selftests run privileged). */
+uint32_t fs_current_uid(void) {
+    struct thread *t = sched_current_thread();
+    if (t == 0 || t->proc == 0) {
+        return 0;
+    }
+    return t->proc->uid;
+}
+
+uint32_t fs_current_gid(void) {
+    struct thread *t = sched_current_thread();
+    if (t == 0 || t->proc == 0) {
+        return 0;
+    }
+    return t->proc->gid;
+}
+
+int fs_can(const struct fs_node *n, uint32_t uid, uint32_t gid,
+           uint32_t need) {
+    uint32_t bits;
+    if (n == 0 || (need & ~7u) != 0) {
+        return -NOVA_EINVAL;
+    }
+    if (uid == 0) {
+        return NOVA_ESUCCESS; /* root bypasses everything */
+    }
+    if (uid == n->uid) {
+        bits = ((uint32_t)n->mode >> 6) & 7u;
+    } else if (gid == n->gid) {
+        bits = ((uint32_t)n->mode >> 3) & 7u;
+    } else {
+        bits = (uint32_t)n->mode & 7u;
+    }
+    if ((bits & need) != need) {
+        return -NOVA_EACCES;
+    }
+    return NOVA_ESUCCESS;
+}
+
+int fs_open_check(const struct process *p, const struct fs_node *n,
+                  uint32_t flags) {
+    uint32_t mode;
+    uint32_t need;
+    if (p == 0 || n == 0) {
+        return -NOVA_EINVAL;
+    }
+    mode = flags & FS_O_ACCMODE;
+    if (mode > FS_O_RDWR) {
+        return -NOVA_EINVAL;
+    }
+    need = (mode == FS_O_RDONLY) ? FS_MAY_READ : FS_MAY_WRITE;
+    if (mode == FS_O_RDWR) {
+        need = FS_MAY_READ | FS_MAY_WRITE;
+    }
+    return fs_can(n, p->uid, p->gid, need);
+}
 
 struct fs_file *fs_file_alloc(struct fs_node *n, uint32_t flags) {
     struct fs_file *f;
@@ -269,6 +330,7 @@ int fs_selftest(void) {
          * the fd layer reads (limit open or garbage denies). */
         fake.caps = 0;
         fake.uid = 0;
+        fake.gid = 0;
         fake.rlimit_nofd = NOVA_NFD;
         fake.rlimit_fsize = FS_MAX_FILE;
         fake.rlimit_frames = RLIM_FRAMES_HARD;

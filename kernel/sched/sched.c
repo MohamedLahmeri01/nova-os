@@ -192,6 +192,7 @@ struct thread *sched_adopt_boot(void) {
      * spawn inherits from here unless sandboxed down. */
     g_init_process->caps = CAPS_ALL;
     g_init_process->uid = UID_ROOT;
+    g_init_process->gid = UID_ROOT;
     t->proc = g_init_process;
     process_attach(g_init_process, t);
     thread_count_inc();

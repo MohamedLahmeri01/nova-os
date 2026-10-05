@@ -219,6 +219,14 @@ static int32_t open_attach(struct process *p, struct fs_node *n,
         }
         return -NOVA_ENOSPC;
     }
+    /* Permission gate (Phase 10c): the materialized node is
+     * opener-owned by construction, so this passes vacuously
+     * today; it binds the moment foreign meta arrives. */
+    rc = fs_open_check(p, n, flags);
+    if (rc != 0) {
+        fs_file_free(f);
+        return rc;
+    }
     f->owns_node = 1;
     for (uint32_t i = 0; i <= FS_MAX_PATH; i++) {
         f->store_path[i] = 0;
@@ -257,6 +265,12 @@ static struct fs_node *blank_node(uint8_t *data, uint32_t cap) {
     n->data = data;
     n->size = 0;
     n->cap = cap;
+    /* Opener-owned view (Phase 10c, vfat-style): foreign
+     * filesystems carry no identity, so the opener owns the copy
+     * (open checks below pass vacuously for it, by construction). */
+    n->uid = fs_current_uid();
+    n->gid = fs_current_gid();
+    n->mode = 0644;
     return n;
 }
 
@@ -433,6 +447,12 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
     if (rc == -NOVA_ENOENT && (flags & FS_O_CREAT) != 0) {
         rc = fs_create(kpath, &n);
     }
+    if (rc != 0) {
+        return rc;
+    }
+    /* Permission before type (Phase 10c, fail-closed): denials
+     * reveal nothing, not even dir-ness. */
+    rc = fs_open_check(p, n, flags);
     if (rc != 0) {
         return rc;
     }
@@ -686,6 +706,14 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
     if (rc != 0) {
         return rc;
     }
+    /* Listing needs read on the dir itself (Phase 10c). Graft
+     * listings enumerate foreign namespaces (opener-owned views);
+     * ramfs is the permissioned one. */
+    rc = fs_can(dir, fs_current_uid(), fs_current_gid(),
+                FS_MAY_READ);
+    if (rc != 0) {
+        return rc;
+    }
     rc = fs_readdir(dir, index, name);
     if (rc < 0) {
         return rc;
@@ -867,6 +895,52 @@ static int32_t do_rlimit(uint32_t op, uint32_t which, uint32_t value) {
     return -NOVA_EINVAL;
 }
 
+static int32_t do_cred(uint32_t op, uint32_t id, uint32_t c) {
+    struct thread *cur;
+    struct process *p;
+    (void)c;
+    /* Identity queries + voluntary downgrade (Phase 10c): root may
+     * become anyone; anyone may reassert self (no-op success);
+     * anything else is privilege gain (EPERM). Gid has no setter
+     * in v0.1 (it follows at spawn). */
+    cur = sched_current_thread();
+    if (cur == 0 || cur->proc == 0) {
+        return -NOVA_EINVAL;
+    }
+    p = cur->proc;
+    if (op == CRED_OP_GETUID) {
+        return (int32_t)p->uid;
+    }
+    if (op == CRED_OP_GETGID) {
+        return (int32_t)p->gid;
+    }
+    if (op == CRED_OP_SETUID) {
+        if (p->uid != UID_ROOT && id != p->uid) {
+            return -NOVA_EPERM;
+        }
+        p->uid = id;
+        return (int32_t)id;
+    }
+    return -NOVA_EINVAL;
+}
+
+static int32_t do_chmod(uint32_t path, uint32_t mode, uint32_t c) {
+    char kpath[FS_MAX_PATH + 1u];
+    int32_t plen;
+    (void)c;
+    /* Perm bits only (0777): setuid/setgid/sticky have no meaning
+     * yet, so stray high bits refuse rather than silently drop. */
+    if ((mode & ~0777u) != 0) {
+        return -NOVA_EINVAL;
+    }
+    plen = copy_user_path(path, kpath);
+    if (plen < 0) {
+        return plen;
+    }
+    /* Owner-or-root enforced inside fs_chmod (EACCES/EROFS flow). */
+    return fs_chmod(kpath, (uint16_t)mode);
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -896,6 +970,8 @@ static const struct {
     { SYS_NETINFO, "netinfo", do_netinfo },
     { SYS_CAPS, "caps", do_caps },
     { SYS_RLIMIT, "rlimit", do_rlimit },
+    { SYS_CRED, "cred", do_cred },
+    { SYS_CHMOD, "chmod", do_chmod },
 };
 
 void syscall_handler(struct syscall_frame *f) {
@@ -1223,5 +1299,196 @@ int rlim_selftest(void) {
     sched_enter(saved);
     kfree(tp);
     serial_puts("RLIM-OK\n");
+    return NOVA_ESUCCESS;
+}
+
+/* --- selftest: ownership demonstrably binds (Phase 10c). A scratch
+ * process (nobody) fails to create in the root-owned tree, then as
+ * root seeds /perm/f, chmods it shut, and every access as nobody
+ * refuses while triplets/root behave. Prints PERM-OK. Leaves
+ * /perm + /perm/f behind (no unlink yet; namespaced, enumerated
+ * by nothing later in boot). --- */
+int perm_selftest(void) {
+    struct process *tp;
+    struct thread fake;
+    struct thread *saved;
+    struct syscall_frame f;
+    struct fs_node *n = 0;
+    tp = process_create();
+    if (tp == 0) {
+        serial_puts("PERM-FAIL alloc\n");
+        return -1;
+    }
+    if (tp->gid != UID_NOBODY) {
+        serial_puts("PERM-FAIL gid-default\n");
+        return -1;
+    }
+    fake.sp = 0;
+    fake.id = 0xFFFFFFFCu;
+    fake.state = THREAD_RUNNING;
+    fake.stack_base = 0;
+    fake.slice_used = 0;
+    fake.prio = 0;
+    fake.is_user = 0;
+    fake.next = 0;
+    fake.pnext = 0;
+    fake.proc = tp;
+    fake.user_stack = 0;
+    fake.user_shared = 0;
+    f.kflags = 0;
+    f.edi = 0;
+    f.esi = 0;
+    f.ebp = 0;
+    f.esp_ignored = 0;
+    f.ebx = 0;
+    f.edx = 0;
+    f.ecx = 0;
+    f.eax = 0;
+    f.eip = 0;
+    f.cs = 0;
+    f.eflags = 0;
+    f.esp = 0;
+    f.ss = 0;
+    saved = sched_current_thread();
+    /* Same masked-current discipline as caps/rlim selftests. */
+    __asm__ volatile("cli" ::: "memory");
+    sched_enter(&fake);
+    /* Nobody cannot create in the root-owned tree (/ is 755:
+     * other lacks W). Fail-closed, nothing revealed. */
+    if (fs_mkdir("/perm") != -NOVA_EACCES) {
+        serial_puts("PERM-FAIL mkdir-deny\n");
+        return -1;
+    }
+    if (fs_create("/perm-f", &n) != -NOVA_EACCES) {
+        serial_puts("PERM-FAIL create-deny\n");
+        return -1;
+    }
+    /* Harness privilege: become root, seed the fixture. */
+    tp->uid = UID_ROOT;
+    if (fs_mkdir("/perm") != 0) {
+        serial_puts("PERM-FAIL mkdir-root\n");
+        return -1;
+    }
+    if (fs_lookup("/perm", &n) != 0 || n->uid != UID_ROOT ||
+        n->mode != 0755) {
+        serial_puts("PERM-FAIL mkdir-owner\n");
+        return -1;
+    }
+    if (fs_create("/perm/f", &n) != 0) {
+        serial_puts("PERM-FAIL create-root\n");
+        return -1;
+    }
+    if (fs_chmod("/perm/f", 0600) != 0) {
+        serial_puts("PERM-FAIL chmod-root\n");
+        return -1;
+    }
+    /* Back to nobody: chmod is owner-or-root only. */
+    tp->uid = UID_NOBODY;
+    if (fs_chmod("/perm/f", 0644) != -NOVA_EACCES) {
+        serial_puts("PERM-FAIL chmod-deny\n");
+        return -1;
+    }
+    /* Open gates bind (0600 root file vs nobody). */
+    if (fs_open_check(tp, n, FS_O_RDONLY) != -NOVA_EACCES) {
+        serial_puts("PERM-FAIL open-r\n");
+        return -1;
+    }
+    if (fs_open_check(tp, n, FS_O_WRONLY) != -NOVA_EACCES) {
+        serial_puts("PERM-FAIL open-w\n");
+        return -1;
+    }
+    if (fs_open_check(tp, n, FS_O_RDWR) != -NOVA_EACCES) {
+        serial_puts("PERM-FAIL open-rw\n");
+        return -1;
+    }
+    /* Root passes everything (bypass). */
+    tp->uid = UID_ROOT;
+    if (fs_open_check(tp, n, FS_O_RDONLY) != 0 ||
+        fs_open_check(tp, n, FS_O_RDWR) != 0) {
+        serial_puts("PERM-FAIL open-root\n");
+        return -1;
+    }
+    /* Triplet discipline on 0640 (group = creator gid 65534). */
+    if (fs_chmod("/perm/f", 0640) != 0) {
+        serial_puts("PERM-FAIL chmod-group\n");
+        return -1;
+    }
+    if (fs_can(n, 99, UID_NOBODY, FS_MAY_READ) != 0) {
+        serial_puts("PERM-FAIL group-r\n");
+        return -1;
+    }
+    if (fs_can(n, 99, UID_NOBODY, FS_MAY_WRITE) != -NOVA_EACCES) {
+        serial_puts("PERM-FAIL group-w\n");
+        return -1;
+    }
+    if (fs_can(n, 99, 98, FS_MAY_READ) != -NOVA_EACCES) {
+        serial_puts("PERM-FAIL other-r\n");
+        return -1;
+    }
+    /* Graft chmod refuses EROFS (on-disk editing is future). */
+    if (fs_chmod("/disk/x", 0644) != -NOVA_EROFS) {
+        serial_puts("PERM-FAIL chmod-erofs\n");
+        return -1;
+    }
+    /* Credential dispatch: observe, refused rise, allowed drop. */
+    tp->uid = UID_NOBODY;
+    f.eax = SYS_CRED;
+    f.ebx = CRED_OP_GETUID;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != (int32_t)UID_NOBODY) {
+        serial_puts("PERM-FAIL getuid\n");
+        return -1;
+    }
+    f.eax = SYS_CRED;
+    f.ebx = CRED_OP_GETGID;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != (int32_t)UID_NOBODY) {
+        serial_puts("PERM-FAIL getgid\n");
+        return -1;
+    }
+    f.eax = SYS_CRED;
+    f.ebx = CRED_OP_SETUID;
+    f.ecx = UID_ROOT;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EPERM) {
+        serial_puts("PERM-FAIL setuid-rise\n");
+        return -1;
+    }
+    f.eax = SYS_CRED;
+    f.ebx = CRED_OP_SETUID;
+    f.ecx = 1000u;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EPERM) {
+        serial_puts("PERM-FAIL setuid-side\n");
+        return -1;
+    }
+    f.eax = SYS_CRED;
+    f.ebx = CRED_OP_SETUID;
+    f.ecx = UID_NOBODY;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != (int32_t)UID_NOBODY) {
+        serial_puts("PERM-FAIL setuid-self\n");
+        return -1;
+    }
+    tp->uid = UID_ROOT;
+    f.eax = SYS_CRED;
+    f.ebx = CRED_OP_SETUID;
+    f.ecx = 1000u;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != 1000) {
+        serial_puts("PERM-FAIL setuid-root\n");
+        return -1;
+    }
+    f.eax = SYS_CRED;
+    f.ebx = CRED_OP_GETUID;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != 1000) {
+        serial_puts("PERM-FAIL getuid-after\n");
+        return -1;
+    }
+    __asm__ volatile("sti" ::: "memory");
+    sched_enter(saved);
+    kfree(tp);
+    serial_puts("PERM-OK\n");
     return NOVA_ESUCCESS;
 }

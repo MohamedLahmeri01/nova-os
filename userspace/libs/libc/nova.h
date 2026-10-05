@@ -29,6 +29,8 @@
 #define SYS_NETINFO 19u
 #define SYS_CAPS 20u
 #define SYS_RLIMIT 21u
+#define SYS_CRED 22u
+#define SYS_CHMOD 23u
 
 /* Capability bits + caps ops mirrored from process/caps.h. */
 #define CAP_NET 0x01u
@@ -43,9 +45,15 @@
 #define RLIM_OP_GET 0u
 #define RLIM_OP_SET 1u
 
+/* Cred ops mirrored from process/process.h. */
+#define CRED_OP_GETUID 0u
+#define CRED_OP_GETGID 1u
+#define CRED_OP_SETUID 2u
+
 /* Errno subset mirrored from the kernel ABI (negative on return). */
 #define NOVA_EHOSTUNREACH 113
 #define NOVA_EPERM 1
+#define NOVA_EACCES 13
 
 #define NOVA_O_RDONLY 0u
 #define NOVA_O_WRONLY 1u
@@ -157,6 +165,14 @@ static inline int32_t nova_caps(uint32_t op, uint32_t mask) {
 static inline int32_t nova_rlimit(uint32_t op, uint32_t which,
                                   uint32_t value) {
     return nova_syscall(SYS_RLIMIT, op, which, value);
+}
+
+static inline int32_t nova_cred(uint32_t op, uint32_t id) {
+    return nova_syscall(SYS_CRED, op, id, 0);
+}
+
+static inline int32_t nova_chmod(const char *path, uint32_t mode) {
+    return nova_syscall(SYS_CHMOD, (uint32_t)path, mode, 0);
 }
 
 #endif /* NOVA_LIBC_NOVA_H */

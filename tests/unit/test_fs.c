@@ -59,6 +59,13 @@ void serial_puthex32(uint32_t v) {
     printf("%08x", v);
 }
 
+/* No scheduler on the host: fs_current_* resolve to root, so all
+ * existing privileged expectations hold unchanged. */
+struct thread;
+struct thread *sched_current_thread(void) {
+    return 0;
+}
+
 static uint32_t lcg_state = 0x12345678u;
 
 static uint32_t lcg(void) {
@@ -225,6 +232,63 @@ int main(void) {
             }
         }
         printf("fuzz: 20000 randomized paths checked\n");
+    }
+
+    /* Permission triplets on stack nodes (no fixtures needed):
+     * owner/group/other selection, root bypass, bad inputs. */
+    {
+        struct fs_node nd;
+        struct process p;
+        nd.uid = 1000;
+        nd.gid = 100;
+        nd.mode = 0640;
+        nd.is_dir = 0;
+        check(fs_can(&nd, 0, 0, FS_MAY_READ) == 0, "can-root",
+              0, 0);
+        check(fs_can(&nd, 1000, 100, FS_MAY_READ) == 0 &&
+                  fs_can(&nd, 1000, 100, FS_MAY_WRITE) == 0,
+              "can-owner", 0, 0);
+        check(fs_can(&nd, 7, 100, FS_MAY_READ) == 0,
+              "can-group-r", 0, 0);
+        check(fs_can(&nd, 7, 100, FS_MAY_WRITE) == -NOVA_EACCES,
+              "can-group-w", 0, 0);
+        check(fs_can(&nd, 7, 7, FS_MAY_READ) == -NOVA_EACCES,
+              "can-other-r", 0, 0);
+        check(fs_can(&nd, 7, 7, FS_MAY_WRITE) == -NOVA_EACCES,
+              "can-other-w", 0, 0);
+        check(fs_can(&nd, 7, 7, FS_MAY_EXEC) == -NOVA_EACCES,
+              "can-other-x", 0, 0);
+        check(fs_can(0, 7, 7, FS_MAY_READ) == -NOVA_EINVAL,
+              "can-null", 0, 0);
+        check(fs_can(&nd, 7, 7, 8u) == -NOVA_EINVAL,
+              "can-badneed", 0, 0);
+        nd.mode = 0644;
+        check(fs_can(&nd, 7, 7, FS_MAY_READ) == 0,
+              "can-other-r2", 0, 0);
+        /* Open gates: read needs R, write modes need W (RDWR both). */
+        p.uid = 7;
+        p.gid = 7;
+        nd.uid = 1000;
+        nd.gid = 100;
+        nd.mode = 0600;
+        check(fs_open_check(&p, &nd, FS_O_RDONLY) ==
+                  -NOVA_EACCES,
+              "open-r-deny", 0, 0);
+        check(fs_open_check(&p, &nd, FS_O_WRONLY) ==
+                  -NOVA_EACCES,
+              "open-w-deny", 0, 0);
+        check(fs_open_check(&p, &nd, FS_O_RDWR) == -NOVA_EACCES,
+              "open-rw-deny", 0, 0);
+        p.uid = 1000;
+        check(fs_open_check(&p, &nd, FS_O_RDWR) == 0,
+              "open-rw-owner", 0, 0);
+        p.uid = 0;
+        check(fs_open_check(&p, &nd, FS_O_WRONLY) == 0,
+              "open-w-root", 0, 0);
+        check(fs_open_check(&p, &nd, 3u) == -NOVA_EINVAL,
+              "open-badmode", 0, 0);
+        check(fs_open_check(0, &nd, FS_O_RDONLY) == -NOVA_EINVAL,
+              "open-nullp", 0, 0);
     }
 
     /* Guest selftest runs the same stack in-guest (asserts + FS-OK). */

@@ -32,6 +32,7 @@ struct process *process_create(void) {
      * parent's over these; init is granted at adoption. */
     p->caps = 0;
     p->uid = UID_NOBODY;
+    p->gid = UID_NOBODY;
     /* Open ceilings (Phase 10b): no behavior change until lowered;
      * spawn copies the parent's over these. */
     p->rlimit_nofd = RLIM_NOFD_DEF;

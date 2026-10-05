@@ -153,13 +153,17 @@ No releases yet.
 - Phase 10a capabilities (tested 2026-10-04, `nova test` 15/15):
   per-process caps + uid, CAP_NET/CAP_SPAWN gates, monotonic
   SYS_CAPS, spawn inheritance, shell caps/dropcap, CAPS-OK gate,
-  T15 monotonicity fuzz (ADR-0035).
+  T15 monotonicity fuzz (ADR-0035). Fixed: NULL-safe sched_enter
+  (found via objdump on the faulting eip).
 - Phase 10b resource limits (tested 2026-10-04, `nova test` 16/16):
   per-process fd/file-size/frame ceilings, lower-only SYS_RLIMIT,
   shell rlimit, RLIM-OK gate, T16 contract fuzz (ADR-0036).
   Fixed: stack-process fixture hygiene for new process fields;
-  addrspace_map grown an int return for ceiling refusal. Fixed: NULL-safe sched_enter
-  (found via objdump on the faulting eip).
+  addrspace_map grown an int return for ceiling refusal.
+- Phase 10c permissions (tested 2026-10-04, `nova test` 16/16):
+  node uid/gid/mode, triplets + root bypass, SYS_CRED +
+  SYS_CHMOD, shell id/setuid/chmod, PERM-OK gate, T9 triplet
+  vectors (ADR-0037).
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the

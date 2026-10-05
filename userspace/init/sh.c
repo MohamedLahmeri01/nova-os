@@ -31,9 +31,10 @@ static void sh_putdec(uint32_t v) {
 }
 
 static const char *sh_arg(const char *line);
+static void sh_denied(const char *what);
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod clear exit");
 }
 
 static void sh_putip(uint32_t ip) {
@@ -168,6 +169,87 @@ static void sh_rlimit(const char *line) {
     sh_rlshow();
 }
 
+static void sh_id(void) {
+    int32_t u = nova_cred(CRED_OP_GETUID, 0);
+    int32_t g = nova_cred(CRED_OP_GETGID, 0);
+    if (u < 0 || g < 0) {
+        nova_puts("id failed");
+        return;
+    }
+    nova_print("uid=", 4);
+    sh_putdec((uint32_t)u);
+    nova_print(" gid=", 5);
+    sh_putdec((uint32_t)g);
+    nova_putchar('\n');
+}
+
+static void sh_setuid(const char *line) {
+    const char *p = sh_arg(line);
+    int ok = 0;
+    int val;
+    int32_t r;
+    if (*p == 0) {
+        nova_puts("usage: setuid <uid>");
+        return;
+    }
+    val = nova_strtoi(p, &ok);
+    if (!ok || val < 0) {
+        nova_puts("usage: setuid <uid>");
+        return;
+    }
+    r = nova_cred(CRED_OP_SETUID, (uint32_t)val);
+    if (r < 0) {
+        nova_puts("setuid refused");
+        return;
+    }
+    sh_id();
+}
+
+static void sh_chmod(const char *line) {
+    /* chmod <mode> <path>: mode is three decimal digits read as
+     * octal (600 = owner-rw). Only ramfs modes change (grafts are
+     * EROFS); only the owner or root may change them. */
+    const char *p = sh_arg(line);
+    char digits[4];
+    uint32_t i = 0;
+    uint32_t mode;
+    const char *path;
+    int32_t r;
+    while (*p != 0 && *p != ' ' && i < 3u) {
+        if (*p < '0' || *p > '7') {
+            nova_puts("usage: chmod <mode> <path>");
+            return;
+        }
+        digits[i++] = *p++;
+    }
+    if (i != 3u || (*p != 0 && *p != ' ')) {
+        nova_puts("usage: chmod <mode> <path>");
+        return;
+    }
+    digits[3] = 0;
+    mode = (uint32_t)(digits[0] - '0') * 64u +
+           (uint32_t)(digits[1] - '0') * 8u +
+           (uint32_t)(digits[2] - '0');
+    while (*p == ' ') {
+        p++;
+    }
+    path = p;
+    if (*path == 0) {
+        nova_puts("usage: chmod <mode> <path>");
+        return;
+    }
+    r = nova_chmod(path, mode);
+    if (r == -NOVA_EACCES) {
+        sh_denied("chmod");
+        return;
+    }
+    if (r != 0) {
+        nova_puts("chmod failed");
+        return;
+    }
+    nova_puts("chmod ok");
+}
+
 static void sh_echo(const char *line) {
     const char *p = line + 4;
     while (*p == ' ') {
@@ -213,6 +295,11 @@ static const char *sh_arg(const char *line) {
     return p;
 }
 
+static void sh_denied(const char *what) {
+    nova_print(what, nova_strlen(what));
+    nova_puts(": denied");
+}
+
 static void sh_ls(const char *line) {
     const char *path = sh_arg(line);
     char name[32];
@@ -226,7 +313,11 @@ static void sh_ls(const char *line) {
             break;
         }
         if (rc < 0) {
-            nova_puts("ls failed");
+            if (rc == -NOVA_EACCES) {
+                sh_denied("ls");
+            } else {
+                nova_puts("ls failed");
+            }
             return;
         }
         nova_puts(name);
@@ -247,7 +338,11 @@ static void sh_cat(const char *line) {
     }
     fd = nova_open(path, NOVA_O_RDONLY);
     if (fd < 0) {
-        nova_puts("cat: no such file");
+        if (fd == -NOVA_EACCES) {
+            sh_denied("cat");
+        } else {
+            nova_puts("cat: no such file");
+        }
         return;
     }
     for (;;) {
@@ -262,11 +357,15 @@ static void sh_cat(const char *line) {
 
 static void sh_mkdir(const char *line) {
     const char *path = sh_arg(line);
+    int32_t r;
     if (*path == 0) {
         nova_puts("usage: mkdir <path>");
         return;
     }
-    if (nova_mkdir(path) != 0) {
+    r = nova_mkdir(path);
+    if (r == -NOVA_EACCES) {
+        sh_denied("mkdir");
+    } else if (r != 0) {
         nova_puts("mkdir failed");
     }
 }
@@ -292,7 +391,11 @@ static void sh_put(const char *line) {
     }
     fd = nova_open(path, NOVA_O_WRONLY | NOVA_O_CREAT);
     if (fd < 0) {
-        nova_puts("put: open failed");
+        if (fd == -NOVA_EACCES) {
+            sh_denied("put");
+        } else {
+            nova_puts("put: open failed");
+        }
         return;
     }
     n = nova_strlen(text);
@@ -430,6 +533,14 @@ static void sh_run(const char *line) {
     } else if (nova_strncmp(line, "rlimit", 6) == 0 &&
                (line[6] == 0 || line[6] == ' ')) {
         sh_rlimit(line);
+    } else if (nova_strcmp(line, "id") == 0) {
+        sh_id();
+    } else if (nova_strncmp(line, "setuid", 6) == 0 &&
+               (line[6] == 0 || line[6] == ' ')) {
+        sh_setuid(line);
+    } else if (nova_strncmp(line, "chmod", 5) == 0 &&
+               (line[5] == 0 || line[5] == ' ')) {
+        sh_chmod(line);
     } else if (nova_strcmp(line, "exit") == 0) {
         nova_puts("bye");
         nova_exit(0);

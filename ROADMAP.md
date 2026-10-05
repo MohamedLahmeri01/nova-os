@@ -178,7 +178,9 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 10b resource limits (fd count, file size, mapped frames;
   lower-only SYS_RLIMIT, shell rlimit, RLIM-OK gate + T16),
   16/16 (ADR-0036; CPU quotas deferred: need kill-from-preemption)
-- [ ] 10c UIDs + file ownership/permissions
+- [x] 10c UIDs + file ownership/permissions (node uid/gid/mode,
+  triplets + root bypass, chmod/setuid, PERM-OK gate + T9
+  vectors), 16/16 (ADR-0037)
 - [ ] 10d filesystem jailing
 
 ## Phase 11 — SDK

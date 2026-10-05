@@ -16,6 +16,12 @@ struct fs_file;
  * when free. Fixed size, no sharing yet (no fork/dup). */
 #define NOVA_NFD 16u
 
+/* SYS_CRED ops (Phase 10c): observe uid/gid, or voluntarily set
+ * uid (root-to-any, self-to-self; nothing else). */
+#define CRED_OP_GETUID 0u
+#define CRED_OP_GETGID 1u
+#define CRED_OP_SETUID 2u
+
 struct process {
     uint32_t pid;
     uint32_t cr3; /* reserved: per-process page directory (user mode) */
@@ -28,6 +34,10 @@ struct process {
      * explicitly at adoption. */
     uint32_t caps;
     uint32_t uid;
+    /* Phase 10c group identity: single gid (no membership lists
+     * yet); default nobody, root for init, inherited at spawn. No
+     * setter in v0.1 (only uid switches via SYS_CRED). */
+    uint32_t gid;
     /* Phase 10b ceilings (see process/rlimit.h): fd count, file
      * size, mapped frames. Defaults are the hard ceilings (no
      * behavior change until lowered); spawn copies the parent's. */

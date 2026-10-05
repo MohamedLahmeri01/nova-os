@@ -33,7 +33,9 @@
 #define SYS_NETINFO 19u
 #define SYS_CAPS 20u
 #define SYS_RLIMIT 21u
-#define SYS_MAX 21u
+#define SYS_CRED 22u
+#define SYS_CHMOD 23u
+#define SYS_MAX 23u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0
@@ -42,6 +44,7 @@
 #define NOVA_EIO 5
 #define NOVA_EBADF 9
 #define NOVA_EAGAIN 11
+#define NOVA_EACCES 13
 #define NOVA_EFAULT 14
 #define NOVA_EEXIST 17
 #define NOVA_ENOTDIR 20

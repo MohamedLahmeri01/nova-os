@@ -69,6 +69,11 @@ static struct fs_node *node_new(const char *name, uint32_t len, int dir) {
     n->data = 0;
     n->size = 0;
     n->cap = 0;
+    /* Creator-owned (Phase 10c): dirs 755, files 644. Boot seeds
+     * run with no current thread, so they land root-owned. */
+    n->uid = fs_current_uid();
+    n->gid = fs_current_gid();
+    n->mode = dir ? 0755 : 0644;
     return n;
 }
 
@@ -168,6 +173,12 @@ int fs_create(const char *path, struct fs_node **out) {
     if (rc != 0) {
         return rc;
     }
+    /* Parent must be writable (Phase 10c, fail-closed: checked
+     * before existence, so denials reveal nothing). */
+    if (fs_can(dir, fs_current_uid(), fs_current_gid(),
+               FS_MAY_WRITE) != 0) {
+        return -NOVA_EACCES;
+    }
     if (child_named(dir, last, last_len) != 0) {
         return -NOVA_EEXIST;
     }
@@ -191,6 +202,11 @@ int fs_mkdir(const char *path) {
     if (rc != 0) {
         return rc;
     }
+    /* Same parent-write rule as create (Phase 10c, fail-closed). */
+    if (fs_can(dir, fs_current_uid(), fs_current_gid(),
+               FS_MAY_WRITE) != 0) {
+        return -NOVA_EACCES;
+    }
     if (child_named(dir, last, last_len) != 0) {
         return -NOVA_EEXIST;
     }
@@ -199,6 +215,32 @@ int fs_mkdir(const char *path) {
         return -NOVA_ENOSPC;
     }
     node_link(dir, n);
+    return NOVA_ESUCCESS;
+}
+
+/* Change permission bits (Phase 10c): owner-or-root only; ramfs
+ * namespace only (graft paths refuse EROFS: on-disk permission
+ * editing is per-FS future work). Mode holds perm bits only. */
+int fs_chmod(const char *path, uint16_t mode) {
+    struct fs_node *n = 0;
+    uint32_t uid;
+    int rc;
+    if (path == 0) {
+        return -NOVA_EINVAL;
+    }
+    if (fs_is_disk_path(path) || fs_is_ext_path(path) ||
+        fs_is_nova_path(path)) {
+        return -NOVA_EROFS;
+    }
+    rc = fs_lookup(path, &n);
+    if (rc != 0) {
+        return rc;
+    }
+    uid = fs_current_uid();
+    if (uid != 0 && uid != n->uid) {
+        return -NOVA_EACCES;
+    }
+    n->mode = mode & 0777;
     return NOVA_ESUCCESS;
 }
 
@@ -445,6 +487,9 @@ int fs_init(void) {
     g_root.data = 0;
     g_root.size = 0;
     g_root.cap = 0;
+    g_root.uid = 0;
+    g_root.gid = 0;
+    g_root.mode = 0755;
     if (mkdir_p("/docs") == 0) {
         return -NOVA_ENOSPC;
     }
