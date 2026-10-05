@@ -34,7 +34,7 @@ static const char *sh_arg(const char *line);
 static void sh_denied(const char *what);
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle rm rmdir clear exit");
 }
 
 static void sh_putip(uint32_t ip) {
@@ -265,6 +265,25 @@ static void sh_chroot(const char *line) {
         return;
     }
     nova_puts("chroot ok");
+}
+
+static void sh_rm(const char *line, int dir) {
+    const char *path = sh_arg(line);
+    int32_t r;
+    if (*path == 0) {
+        nova_puts(dir ? "usage: rmdir <dir>" : "usage: rm <path>");
+        return;
+    }
+    r = dir ? nova_rmdir(path) : nova_unlink(path);
+    if (r == -NOVA_EACCES) {
+        sh_denied(dir ? "rmdir" : "rm");
+        return;
+    }
+    if (r != 0) {
+        nova_puts(dir ? "rmdir failed" : "rm failed");
+        return;
+    }
+    nova_puts("ok");
 }
 
 static const char *sh_nextnum(const char *p, int *val) {
@@ -723,6 +742,12 @@ static void sh_run(const char *line) {
     } else if (nova_strncmp(line, "wintitle", 8) == 0 &&
                (line[8] == 0 || line[8] == ' ')) {
         sh_wintitle(line);
+    } else if (nova_strncmp(line, "rmdir", 5) == 0 &&
+               (line[5] == 0 || line[5] == ' ')) {
+        sh_rm(line, 1);
+    } else if (nova_strncmp(line, "rm", 2) == 0 &&
+               (line[2] == 0 || line[2] == ' ')) {
+        sh_rm(line, 0);
     } else if (nova_strcmp(line, "exit") == 0) {
         nova_puts("bye");
         nova_exit(0);

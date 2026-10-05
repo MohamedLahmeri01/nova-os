@@ -75,6 +75,9 @@ static uint32_t spawn_image(const uint8_t *img, uint32_t size) {
             p->rlimit_fsize = cur->proc->rlimit_fsize;
             p->rlimit_frames = cur->proc->rlimit_frames;
             p->jail_root = cur->proc->jail_root;
+            /* The child holds its jail root too (else a parent's
+             * chroot-away could drop the count to zero under it). */
+            fs_node_ref(p->jail_root);
             p->caps = CAPS_ALL;
             p->uid = UID_ROOT;
         }

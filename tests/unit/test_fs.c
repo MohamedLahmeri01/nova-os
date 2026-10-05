@@ -12,6 +12,7 @@
 
 #include "mm/heap.h"
 #include "process/process.h"
+#include "process/rlimit.h"
 #include "fs/fs.h"
 #include "syscall/syscall.h"
 
@@ -319,6 +320,76 @@ int main(void) {
               "j-missing", 0, 0);
         check(fs_lookup_at(0, "/", &hit) == -NOVA_EINVAL,
               "j-nullroot", 0, 0);
+    }
+
+    /* Lifecycle (Phase 13a): unlink + rmdir, incl. open-while-
+     * unlinked survival. Host runs root-privileged (NULL current)
+     * like guest boot context. */
+    {
+        struct fs_node *m = 0;
+        struct process fake;
+        struct fs_file *lf = 0;
+        int lfd = -1;
+        uint32_t got2 = 0;
+        uint8_t byte = 0;
+        uint32_t i;
+        for (i = 0; i < NOVA_NFD; i++) {
+            fake.fds[i] = 0;
+        }
+        fake.pid = 997;
+        fake.caps = 0;
+        fake.uid = 0;
+        fake.gid = 0;
+        fake.jail_root = 0;
+        fake.rlimit_nofd = NOVA_NFD;
+        fake.rlimit_fsize = FS_MAX_FILE;
+        fake.rlimit_frames = RLIM_FRAMES_HARD;
+        check(fs_create("/rm-o", &m) == 0 && m != 0, "rm-create",
+              0, 0);
+        byte = 'z';
+        check(fs_write_node(m, 0, &byte, 1, &got2) == 0 &&
+                  got2 == 1,
+              "rm-write", 0, 0);
+        lf = fs_file_alloc(m, FS_O_RDONLY);
+        check(lf != 0, "rm-alloc", 0, 0);
+        if (lf != 0) {
+            lfd = fs_fd_alloc(&fake, lf);
+            check(lfd >= 0, "rm-open", (unsigned long)lfd, 0);
+        }
+        check(fs_unlink("/rm-o") == 0, "rm-unlink", 0, 0);
+        check(fs_lookup("/rm-o", &m) == -NOVA_ENOENT, "rm-gone",
+              0, 0);
+        if (lfd >= 0) {
+            struct fs_file *g = fs_fd_get(&fake, (uint32_t)lfd);
+            uint8_t rb = 0;
+            check(g != 0, "rm-desc", 0, 0);
+            if (g != 0) {
+                check(fs_read_node(g->node, 0, &rb, 1, &got2) ==
+                              0 &&
+                          got2 == 1 && rb == 'z',
+                      "rm-read-open", rb, got2);
+            }
+            check(fs_fd_drop(&fake, (uint32_t)lfd) == 0,
+                  "rm-drop", 0, 0);
+        }
+        check(fs_create("/rm-o", &m) == 0 && m != 0,
+              "rm-recreate", 0, 0);
+        check(fs_unlink("/rm-o") == 0, "rm-unlink2", 0, 0);
+        check(fs_unlink("/rm-o") == -NOVA_ENOENT, "rm-missing",
+              0, 0);
+        check(fs_unlink("/docs") == -NOVA_EISDIR, "rm-isdir", 0,
+              0);
+        check(fs_mkdir("/rmd") == 0, "rmdir-mkdir", 0, 0);
+        check(fs_create("/rmd/f", &m) == 0, "rmdir-fill", 0, 0);
+        check(fs_rmdir("/rmd") == -NOVA_ENOTEMPTY,
+              "rmdir-nonempty", 0, 0);
+        check(fs_unlink("/rmd/f") == 0, "rmdir-empty-it", 0, 0);
+        check(fs_rmdir("/rmd") == 0, "rmdir-empty", 0, 0);
+        check(fs_lookup("/rmd", &m) == -NOVA_ENOENT,
+              "rmdir-gone", 0, 0);
+        check(fs_rmdir("/hello.txt") == -NOVA_ENOTDIR,
+              "rmdir-file", 0, 0);
+        check(fs_rmdir("/") == -NOVA_EINVAL, "rmdir-root", 0, 0);
     }
 
     /* Guest selftest runs the same stack in-guest (asserts + FS-OK). */

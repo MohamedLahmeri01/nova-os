@@ -215,6 +215,16 @@ Capabilities, sandboxing, resource limits, secure handles.
   dormant on deaf controllers, MOUSE-OK gate + T20),
   20/20 (ADR-0045). Phase 12 complete.
 
+## Phase 13 - System completion (beyond desktop)
+
+- [x] 13a file lifecycle (unlink/rmdir, node refcounts,
+  graft deletes, shell rm/rmdir, lifecycle proofs),
+  20/20 (ADR-0046)
+- [ ] 13b+ candidates: user sockets + DNS, CPU quotas
+  (kill-from-preemption), on-disk chmod, native uid
+  passthrough, IRQ-driven virtio
+
+
 ## Non-goals for 0.x
 
 ARM64/RISC-V ports (isolation only), full POSIX, SMP scheduler

@@ -74,6 +74,9 @@ static struct fs_node *node_new(const char *name, uint32_t len, int dir) {
     n->uid = fs_current_uid();
     n->gid = fs_current_gid();
     n->mode = dir ? 0755 : 0644;
+    /* Unnamed until linked; unreferenced until opened/jailed. */
+    n->unlinked = 0;
+    n->refs = 0;
     return n;
 }
 
@@ -266,6 +269,113 @@ int fs_chmod(const char *path, uint16_t mode) {
         return -NOVA_EACCES;
     }
     n->mode = mode & 0777;
+    return NOVA_ESUCCESS;
+}
+
+void fs_node_ref(struct fs_node *n) {
+    if (n != 0) {
+        n->refs++;
+    }
+}
+
+void fs_node_unref(struct fs_node *n) {
+    if (n == 0 || n->refs <= 0) {
+        return;
+    }
+    n->refs--;
+    /* Detached names die with their last holder (the tree never
+     * sees them again; linked names are freed only by unlink). */
+    if (n->refs == 0 && n->unlinked != 0) {
+        if (n->data != 0) {
+            kfree(n->data);
+        }
+        kfree(n);
+    }
+}
+
+/* Cut a child out of its parent's list (node stays allocated:
+ * the caller frees or hands to a holder). */
+static void node_detach(struct fs_node *n) {
+    struct fs_node **link;
+    if (n == 0 || n->parent == 0) {
+        return;
+    }
+    link = &n->parent->child;
+    while (*link != 0 && *link != n) {
+        link = &(*link)->sibling;
+    }
+    if (*link == n) {
+        *link = n->sibling;
+    }
+    n->parent = 0;
+    n->sibling = 0;
+}
+
+int fs_unlink(const char *path) {
+    struct fs_node *dir;
+    struct fs_node *n;
+    const char *last;
+    uint32_t last_len;
+    int rc = resolve_parent(path, &dir, &last, &last_len);
+    if (rc != 0) {
+        return rc;
+    }
+    /* Same parent-write rule as create (fail-closed ordering). */
+    if (fs_can(dir, fs_current_uid(), fs_current_gid(),
+               FS_MAY_WRITE) != 0) {
+        return -NOVA_EACCES;
+    }
+    n = child_named(dir, last, last_len);
+    if (n == 0) {
+        return -NOVA_ENOENT;
+    }
+    if (n->is_dir) {
+        return -NOVA_EISDIR;
+    }
+    node_detach(n);
+    n->unlinked = 1;
+    /* Open descriptions keep working (refs); the last closer (or
+     * this call, when nobody holds it) frees. */
+    if (n->refs <= 0) {
+        if (n->data != 0) {
+            kfree(n->data);
+        }
+        kfree(n);
+    }
+    return NOVA_ESUCCESS;
+}
+
+int fs_rmdir(const char *path) {
+    struct fs_node *dir;
+    struct fs_node *n;
+    const char *last;
+    uint32_t last_len;
+    int rc = resolve_parent(path, &dir, &last, &last_len);
+    if (rc != 0) {
+        return rc;
+    }
+    if (fs_can(dir, fs_current_uid(), fs_current_gid(),
+               FS_MAY_WRITE) != 0) {
+        return -NOVA_EACCES;
+    }
+    n = child_named(dir, last, last_len);
+    if (n == 0) {
+        return -NOVA_ENOENT;
+    }
+    if (!n->is_dir) {
+        return -NOVA_ENOTDIR;
+    }
+    if (n->parent == 0) {
+        return -NOVA_EBUSY; /* root (or detached): not removable */
+    }
+    if (n->child != 0) {
+        return -NOVA_ENOTEMPTY;
+    }
+    if (n->refs > 0) {
+        return -NOVA_EBUSY; /* jailed into (or otherwise held) */
+    }
+    node_detach(n);
+    kfree(n);
     return NOVA_ESUCCESS;
 }
 
@@ -515,6 +625,8 @@ int fs_init(void) {
     g_root.uid = 0;
     g_root.gid = 0;
     g_root.mode = 0755;
+    g_root.unlinked = 0;
+    g_root.refs = 1; /* immortal: never unlinked, never freed */
     if (mkdir_p("/docs") == 0) {
         return -NOVA_ENOSPC;
     }

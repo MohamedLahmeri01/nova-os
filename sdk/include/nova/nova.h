@@ -39,6 +39,8 @@
 #define SYS_WINSTAT 27u
 #define SYS_WINTITLE 28u
 #define SYS_WINCLOSE 29u
+#define SYS_UNLINK 30u
+#define SYS_RMDIR 31u
 
 /* Capability bits + caps ops mirrored from process/caps.h. */
 #define CAP_NET 0x01u
@@ -185,6 +187,14 @@ static inline int32_t nova_chmod(const char *path, uint32_t mode) {
 
 static inline int32_t nova_chroot(const char *path) {
     return nova_syscall(SYS_CHROOT, (uint32_t)path, 0, 0);
+}
+
+static inline int32_t nova_unlink(const char *path) {
+    return nova_syscall(SYS_UNLINK, (uint32_t)path, 0, 0);
+}
+
+static inline int32_t nova_rmdir(const char *path) {
+    return nova_syscall(SYS_RMDIR, (uint32_t)path, 0, 0);
 }
 
 static inline int32_t nova_winfocus(void) {

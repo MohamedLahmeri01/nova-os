@@ -41,7 +41,9 @@
 #define SYS_WINSTAT 27u
 #define SYS_WINTITLE 28u
 #define SYS_WINCLOSE 29u
-#define SYS_MAX 29u
+#define SYS_UNLINK 30u
+#define SYS_RMDIR 31u
+#define SYS_MAX 31u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0
@@ -52,6 +54,7 @@
 #define NOVA_EAGAIN 11
 #define NOVA_EACCES 13
 #define NOVA_EFAULT 14
+#define NOVA_EBUSY 16
 #define NOVA_EEXIST 17
 #define NOVA_ENOTDIR 20
 #define NOVA_EISDIR 21
@@ -62,6 +65,7 @@
 #define NOVA_EROFS 30
 #define NOVA_ENAMETOOLONG 36
 #define NOVA_ENOSYS 38
+#define NOVA_ENOTEMPTY 39
 #define NOVA_ENODEV 19
 #define NOVA_ETIMEDOUT 110
 #define NOVA_EHOSTUNREACH 113

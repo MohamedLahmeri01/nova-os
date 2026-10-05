@@ -39,6 +39,12 @@ struct fs_node {
     uint32_t uid;
     uint32_t gid;
     uint16_t mode;
+    /* Phase 13a lifetime: open descriptions hold refs (alloc/free
+     * pair); unlink detaches the name and frees at refs==0 (open-
+     * but-deleted files keep working, POSIX-style). Jail roots
+     * hold a ref: rmdir of a jailed-in dir refuses EBUSY. */
+    int unlinked;
+    int refs;
 };
 
 struct fs_file {
@@ -128,6 +134,17 @@ int fs_open_check(const struct process *p, const struct fs_node *n,
  * holds perm bits only). Ramfs only: graft paths refuse EROFS
  * (on-disk permission editing is per-FS future work). */
 int fs_chmod(const char *path, uint16_t mode);
+/* Reference counting (nodes outlive their names while open). */
+void fs_node_ref(struct fs_node *n);
+void fs_node_unref(struct fs_node *n);
+/* Delete a name (Phase 13a): files only (dirs refuse EISDIR);
+ * parent-W enforced fail-closed like create; detached names free
+ * at refs==0. Ramfs only here (graft deletes dispatch in the
+ * syscall layer: fat_/nova_delete, ext refuses EROFS). */
+int fs_unlink(const char *path);
+/* Remove an empty directory (EBUSY for /, jailed-in, or held
+ * nodes; ENOTEMPTY otherwise; ramfs only, like chmod). */
+int fs_rmdir(const char *path);
 
 /* Deterministic ownership proof (guest selftest): denials bind,
  * triplets behave, credential dispatch refuses rises. Prints

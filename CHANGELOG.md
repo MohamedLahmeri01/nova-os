@@ -195,6 +195,10 @@ No releases yet.
   PS/2 parser + cursor + click-to-focus, dormant design
   for deaf controllers, MOUSE-OK gate, T20 wiring test
   (ADR-0045).
+- Phase 13a lifecycle (tested 2026-10-05, `nova test` 20/20):
+  unlink/rmdir syscalls, node refcounts, graft deletes,
+  shell rm/rmdir, lifecycle proofs (ADR-0046).
+
 
 
 

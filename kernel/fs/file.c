@@ -98,6 +98,9 @@ struct fs_file *fs_file_alloc(struct fs_node *n, uint32_t flags) {
     f->readable = (mode == FS_O_RDONLY || mode == FS_O_RDWR);
     f->writable = (mode == FS_O_WRONLY || mode == FS_O_RDWR);
     f->owns_node = 0;
+    /* The description holds the node (Phase 13a): unlinked names
+     * outlive their directory entry until close. */
+    fs_node_ref(n);
     return f;
 }
 
@@ -108,6 +111,8 @@ void fs_file_free(struct fs_file *f) {
                 kfree(f->node->data);
             }
             kfree(f->node);
+        } else if (f->node != 0) {
+            fs_node_unref(f->node);
         }
         kfree(f);
     }
@@ -375,6 +380,70 @@ int fs_selftest(void) {
                 fs_fd_drop(&fake, (uint32_t)fds[i]);
             }
         }
+    }
+    /* Lifecycle: unlink + rmdir (Phase 13a). Runs as root (no
+     * current thread this early); denial paths live in the perm
+     * selftest (swapped nobody) and jail selftest (EBUSY). */
+    {
+        struct process life;
+        struct fs_file *lf = 0;
+        int lfd = -1;
+        uint32_t i;
+        for (i = 0; i < NOVA_NFD; i++) {
+            life.fds[i] = 0;
+        }
+        life.pid = 998;
+        life.cr3 = 0;
+        life.threads = 0;
+        life.next = 0;
+        life.caps = 0;
+        life.uid = 0;
+        life.gid = 0;
+        life.jail_root = 0;
+        life.rlimit_nofd = NOVA_NFD;
+        life.rlimit_fsize = FS_MAX_FILE;
+        life.rlimit_frames = RLIM_FRAMES_HARD;
+        tcheck(fs_create("/rm-w", &n) == 0 && n != 0, "rm-create");
+        buf[0] = 'x';
+        tcheck(fs_write_node(n, 0, buf, 1, &got) == 0 && got == 1,
+               "rm-write");
+        lf = fs_file_alloc(n, FS_O_RDONLY);
+        tcheck(lf != 0, "rm-alloc");
+        if (lf != 0) {
+            lfd = fs_fd_alloc(&life, lf);
+            tcheck(lfd >= 0, "rm-open");
+        }
+        /* Unlink while open: name gone, description alive. */
+        tcheck(fs_unlink("/rm-w") == 0, "rm-unlink");
+        tcheck(fs_lookup("/rm-w", &n) == -NOVA_ENOENT, "rm-gone");
+        if (lfd >= 0) {
+            struct fs_file *g = fs_fd_get(&life, (uint32_t)lfd);
+            tcheck(g != 0, "rm-desc");
+            if (g != 0) {
+                buf[0] = 0;
+                tcheck(fs_read_node(g->node, 0, buf, 1, &got) == 0 &&
+                           got == 1 && buf[0] == 'x',
+                       "rm-read-open");
+            }
+            tcheck(fs_fd_drop(&life, (uint32_t)lfd) == 0,
+                   "rm-drop");
+        }
+        /* Name reusable the moment it is gone. */
+        tcheck(fs_create("/rm-w", &n) == 0 && n != 0,
+               "rm-recreate");
+        tcheck(fs_unlink("/rm-w") == 0, "rm-unlink2");
+        tcheck(fs_unlink("/rm-w") == -NOVA_ENOENT, "rm-missing");
+        tcheck(fs_unlink("/test") == -NOVA_EISDIR, "rm-isdir");
+        tcheck(fs_rmdir("/hello.txt") == -NOVA_ENOTDIR,
+               "rmdir-file");
+        tcheck(fs_rmdir("/") == -NOVA_EINVAL, "rmdir-root");
+        tcheck(fs_rmdir("/test") == -NOVA_ENOTEMPTY,
+               "rmdir-nonempty");
+        tcheck(fs_mkdir("/rm-d") == 0, "rmdir-mkdir");
+        tcheck(fs_rmdir("/rm-d") == 0, "rmdir-empty");
+        tcheck(fs_lookup("/rm-d", &n) == -NOVA_ENOENT,
+               "rmdir-gone");
+        tcheck(fs_rmdir("/rm-d") == -NOVA_ENOENT, "rmdir-missing");
     }
     if (g_fail) {
         return -1;

@@ -959,7 +959,66 @@ static int32_t do_chmod(uint32_t path, uint32_t mode, uint32_t c) {
     return fs_chmod(kpath, (uint16_t)mode);
 }
 
-static int32_t do_chroot(uint32_t path, uint32_t b, uint32_t c) {    char kpath[FS_MAX_PATH + 1u];
+static int32_t do_unlink(uint32_t path, uint32_t b, uint32_t c) {
+    char kpath[FS_MAX_PATH + 1u];
+    int32_t plen;
+    (void)b;
+    (void)c;
+    /* Delete a name (Phase 13a): ramfs unlinks (refcounted, open
+     * descriptions survive); FAT/NOVA-FS delete through their
+     * drivers; EXT4 refuses (read-only). Parent-W enforced in
+     * the ramfs path, fail-closed like create. */
+    plen = copy_user_path(path, kpath);
+    if (plen < 0) {
+        return plen;
+    }
+    if (fs_is_disk_path(kpath)) {
+        return fat_delete(kpath);
+    }
+    if (fs_is_ext_path(kpath)) {
+        return -NOVA_EROFS;
+    }
+    if (fs_is_nova_path(kpath)) {
+        return nova_delete(kpath);
+    }
+    return fs_unlink(kpath);
+}
+
+static int32_t do_rmdir(uint32_t path, uint32_t b, uint32_t c) {
+    char kpath[FS_MAX_PATH + 1u];
+    int32_t plen;
+    (void)b;
+    (void)c;
+    /* Remove an empty dir (Phase 13a): ramfs only (no disk driver
+     * removes directories yet). EBUSY for held roots, ENOTEMPTY
+     * otherwise. Jailless callers see grafts as EROFS here. */
+    plen = copy_user_path(path, kpath);
+    if (plen < 0) {
+        return plen;
+    }
+    if (fs_is_disk_path(kpath) || fs_is_ext_path(kpath) ||
+        fs_is_nova_path(kpath)) {
+        return -NOVA_EROFS;
+    }
+    return fs_rmdir(kpath);
+}
+
+/* Jail assignment with lifetime (Phase 13a): the new root is
+ * held first (self-assign is safe), the old hold dropped after.
+ * Shared by do_chroot and the jail selftest (identical rules). */
+static void proc_set_jail(struct process *p, struct fs_node *n) {
+    if (p == 0) {
+        return;
+    }
+    fs_node_ref(n);
+    if (p->jail_root != 0) {
+        fs_node_unref(p->jail_root);
+    }
+    p->jail_root = n;
+}
+
+static int32_t do_chroot(uint32_t path, uint32_t b, uint32_t c) {
+    char kpath[FS_MAX_PATH + 1u];
     struct process *p;
     struct fs_node *n = 0;
     int32_t plen;
@@ -984,7 +1043,7 @@ static int32_t do_chroot(uint32_t path, uint32_t b, uint32_t c) {    char kpath[
     if (!n->is_dir) {
         return -NOVA_ENOTDIR;
     }
-    p->jail_root = n;
+    proc_set_jail(p, n);
     return NOVA_ESUCCESS;
 }
 
@@ -1093,6 +1152,8 @@ static const struct {
     { SYS_CRED, "cred", do_cred },
     { SYS_CHMOD, "chmod", do_chmod },
     { SYS_CHROOT, "chroot", do_chroot },
+    { SYS_UNLINK, "unlink", do_unlink },
+    { SYS_RMDIR, "rmdir", do_rmdir },
     { SYS_FOCUS, "winfocus", do_winfocus },
     { SYS_WINOPEN, "winopen", do_winopen },
     { SYS_WINSTAT, "winstat", do_winstat },
@@ -1527,6 +1588,15 @@ int perm_selftest(void) {
         serial_puts("PERM-FAIL open-rw\n");
         return -1;
     }
+    /* Lifecycle denials bind too (parent unwritable for nobody). */
+    if (fs_unlink("/perm/f") != -NOVA_EACCES) {
+        serial_puts("PERM-FAIL unlink-deny\n");
+        return -1;
+    }
+    if (fs_rmdir("/perm") != -NOVA_EACCES) {
+        serial_puts("PERM-FAIL rmdir-deny\n");
+        return -1;
+    }
     /* Root passes everything (bypass). */
     tp->uid = UID_ROOT;
     if (fs_open_check(tp, n, FS_O_RDONLY) != 0 ||
@@ -1700,7 +1770,7 @@ int jail_selftest(void) {
     }
     /* Confine the process (the chroot effect, arranged directly:
      * SYS_CHROOT dispatch needs a user path, unreachable here). */
-    tp->jail_root = jail;
+    proc_set_jail(tp, jail);
     if (fs_lookup("/sub/f", &n) != 0) {
         serial_puts("JAIL-FAIL in-open\n");
         return -1;
@@ -1727,7 +1797,7 @@ int jail_selftest(void) {
     }
     /* Nested: deeper floor, smaller world (".." clamps, siblings
      * vanish). */
-    tp->jail_root = sub;
+    proc_set_jail(tp, sub);
     if (fs_lookup("/f", &n) != 0) {
         serial_puts("JAIL-FAIL nest-open\n");
         return -1;
@@ -1740,8 +1810,47 @@ int jail_selftest(void) {
         serial_puts("JAIL-FAIL nest-scope\n");
         return -1;
     }
+    /* A jailed-in dir cannot be removed from outside (held
+     * root, EBUSY). Needs two actors: tp stays inside while a
+     * second scratch process acts globally (a jail root is
+     * unnameable from inside: every spelling is rejected before
+     * reaching it, so confinement needs no EBUSY of its own). */
+    {
+        struct process *tp2 = process_create();
+        struct thread fake2;
+        if (tp2 == 0) {
+            serial_puts("JAIL-FAIL rmdir-actor\n");
+            return -1;
+        }
+        tp2->uid = UID_ROOT;
+        fake2.sp = 0;
+        fake2.id = 0xFFFFFFFAu;
+        fake2.state = THREAD_RUNNING;
+        fake2.stack_base = 0;
+        fake2.slice_used = 0;
+        fake2.prio = 0;
+        fake2.is_user = 0;
+        fake2.next = 0;
+        fake2.pnext = 0;
+        fake2.proc = tp2;
+        fake2.user_stack = 0;
+        fake2.user_shared = 0;
+        /* Empty it first, addressed jail-relatively ("/f": the
+         * global spelling is unresolvable from inside). */
+        if (fs_unlink("/f") != 0) {
+            serial_puts("JAIL-FAIL unlink-in-jail\n");
+            return -1;
+        }
+        sched_enter(&fake2);
+        if (fs_rmdir("/jail/sub") != -NOVA_EBUSY) {
+            serial_puts("JAIL-FAIL rmdir-busy\n");
+            return -1;
+        }
+        sched_enter(&fake);
+        kfree(tp2);
+    }
     /* Harness-only restore (no syscall unjails, by design). */
-    tp->jail_root = 0;
+    proc_set_jail(tp, 0);
     if (fs_lookup("/hello.txt", &n) != 0) {
         serial_puts("JAIL-FAIL restore\n");
         return -1;
