@@ -16,6 +16,8 @@
 #include "sched/sched.h"
 #include "process/process.h"
 #include "process/caps.h"
+#include "process/rlimit.h"
+#include "mm/addrspace.h"
 
 #if defined(__i386__)
 #include "../arch/x86/cpu.h"
@@ -212,6 +214,12 @@ void sched_tick(void) {
     if (cur == 0) {
         return;
     }
+    /* CPU accounting (Phase 13b): whoever runs burns their
+     * process's ticks (kernel threads included; only user
+     * threads are ever killed for it). */
+    if (cur->proc != 0) {
+        cur->proc->ticks_used++;
+    }
     if (++cur->slice_used >= SCHED_SLICE_TICKS) {
         cur->slice_used = 0;
         sched_need_resched = 1;
@@ -229,6 +237,23 @@ void sched_do_switch(void) {
     cur = g_current;
     if (cur == 0) {
         return;
+    }
+    /* CPU quota (Phase 13b): an over-limit user thread exits here
+     * instead of switching back. Same footing as do_exit (own
+     * stack current, user frames freed the same way, noreturn
+     * switch away); the addrspace + code frames leak like every
+     * user exit today (no process reaping yet). Kernel threads
+     * are exempt (trusted); default-unlimited processes never
+     * trip (ticks_used only grows). */
+    if (cur->is_user && cur->proc != 0 &&
+        cur->proc->ticks_used >= cur->proc->rlimit_ticks) {
+        if (cur->user_stack != 0) {
+            pmm_free_contig(cur->user_stack, 2);
+        }
+        if (cur->user_shared != 0) {
+            pmm_free_frame(cur->user_shared);
+        }
+        thread_exit(24); /* SIGXCPU by analogy (code unread) */
     }
     next = sched_pick(cur);
     if (next == 0) {
@@ -377,4 +402,75 @@ static void sched_prio_test(void) {
         nova_panic("sched-prio-count");
     }
     serial_puts("SCHED prio=1\n");
+}
+
+/* --- CPU quota proof: a spinning user thread dies on schedule ---
+ * Spinner runs at prio 1 (above the prio-0 boot thread, so it
+ * preempts immediately and the boot thread observes from stall);
+ * limit 50 ticks. Death observed via thread_count (the handoff
+ * decrements before reaping); ticks_used proves accounting ran;
+ * the upper bound proves promptness (slice is 10 ticks). */
+#define SPIN_CODE 0x80000000u
+#define SPIN_STACK_TOP 0x80400000u
+
+static const uint8_t spin_blob[2] = { 0xEB, 0xFE }; /* jmp $ */
+
+int sched_ticklimit_selftest(void) {
+    extern volatile uint32_t g_ticks;
+    struct process *p;
+    struct addrspace *as;
+    uint32_t code, stack;
+    uint32_t base_count;
+    uint32_t t0;
+    p = process_create();
+    as = addrspace_create();
+    if (p == 0 || as == 0) {
+        serial_puts("TICK-FAIL alloc\n");
+        return -1;
+    }
+    p->cr3 = as->pd;
+    p->rlimit_ticks = 50; /* harness privilege: direct set */
+    code = pmm_alloc_frame();
+    stack = pmm_alloc_contig(2);
+    if (code == 0 || stack == 0) {
+        serial_puts("TICK-FAIL mem\n");
+        return -1;
+    }
+    ((uint8_t *)code)[0] = spin_blob[0];
+    ((uint8_t *)code)[1] = spin_blob[1];
+    if (addrspace_map(as, SPIN_CODE, code, 1) != 0 ||
+        addrspace_map(as, SPIN_STACK_TOP - 8192u, stack, 1) != 0 ||
+        addrspace_map(as, SPIN_STACK_TOP - 4096u, stack + 4096u,
+                      1) != 0) {
+        serial_puts("TICK-FAIL map\n");
+        return -1;
+    }
+    base_count = thread_count();
+    t0 = g_ticks;
+    if (thread_create_user(p, SPIN_CODE, SPIN_STACK_TOP - 8u,
+                           stack, 0, 1u) == 0) {
+        serial_puts("TICK-FAIL spawn\n");
+        return -1;
+    }
+    for (;;) {
+        if (thread_count() < base_count + 1u) {
+            break;
+        }
+        if (g_ticks - t0 > 1000u) {
+            serial_puts("TICK-FAIL stuck\n");
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    /* Ran its quota, died promptly (slice 10 + wide margin). */
+    if (p->ticks_used < 50u || p->ticks_used > 200u) {
+        serial_puts("TICK-FAIL count\n");
+        return -1;
+    }
+    pmm_free_frame(code);
+    pmm_free_contig(stack, 2);
+    addrspace_destroy(as);
+    kfree(p);
+    serial_puts("TICK-OK\n");
+    return 0;
 }

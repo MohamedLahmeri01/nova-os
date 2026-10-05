@@ -896,6 +896,9 @@ static int32_t do_rlimit(uint32_t op, uint32_t which, uint32_t value) {
     } else if (which == RLIM_FRAMES) {
         field = &p->rlimit_frames;
         hard = RLIM_FRAMES_HARD;
+    } else if (which == RLIM_TICKS) {
+        field = &p->rlimit_ticks;
+        hard = RLIM_TICKS_HARD;
     } else {
         return -NOVA_EINVAL;
     }
@@ -1341,7 +1344,8 @@ int rlim_selftest(void) {
     }
     if (tp->rlimit_nofd != RLIM_NOFD_DEF ||
         tp->rlimit_fsize != RLIM_FSIZE_DEF ||
-        tp->rlimit_frames != RLIM_FRAMES_DEF) {
+        tp->rlimit_frames != RLIM_FRAMES_DEF ||
+        tp->rlimit_ticks != RLIM_TICKS_DEF || tp->ticks_used != 0) {
         serial_puts("RLIM-FAIL defaults\n");
         return -1;
     }

@@ -122,12 +122,15 @@ static void sh_rlshow(void) {
     v = nova_rlimit(RLIM_OP_GET, RLIM_FRAMES, 0);
     nova_print(" frames=", 8);
     sh_putdec((uint32_t)v);
+    v = nova_rlimit(RLIM_OP_GET, RLIM_TICKS, 0);
+    nova_print(" ticks=", 7);
+    sh_putdec((uint32_t)v);
     nova_putchar('\n');
 }
 
 static void sh_rlimit(const char *line) {
-    /* rlimit | rlimit <nofd|fsize|frames> <value>: observe or
-     * lower (raising refuses: limits only tighten). */
+    /* rlimit | rlimit <nofd|fsize|frames|ticks> <value>: observe
+     * or lower (raising refuses: limits only tighten). */
     const char *p = sh_arg(line);
     char name[8];
     uint32_t i = 0;
@@ -152,13 +155,15 @@ static void sh_rlimit(const char *line) {
         which = RLIM_FSIZE;
     } else if (nova_strcmp(name, "frames") == 0) {
         which = RLIM_FRAMES;
+    } else if (nova_strcmp(name, "ticks") == 0) {
+        which = RLIM_TICKS;
     } else {
-        nova_puts("usage: rlimit [nofd|fsize|frames value]");
+        nova_puts("usage: rlimit [nofd|fsize|frames|ticks value]");
         return;
     }
     val = nova_strtoi(p, &ok);
     if (!ok || val < 0) {
-        nova_puts("usage: rlimit [nofd|fsize|frames value]");
+        nova_puts("usage: rlimit [nofd|fsize|frames|ticks value]");
         return;
     }
     r = nova_rlimit(RLIM_OP_SET, which, (uint32_t)val);

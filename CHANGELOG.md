@@ -198,6 +198,10 @@ No releases yet.
 - Phase 13a lifecycle (tested 2026-10-05, `nova test` 20/20):
   unlink/rmdir syscalls, node refcounts, graft deletes,
   shell rm/rmdir, lifecycle proofs (ADR-0046).
+- Phase 13b CPU quotas (tested 2026-10-05, `nova test` 20/20):
+  tick accounting, preemption kill, RLIMIT_TICKS + shell,
+  TICK-OK gate (ADR-0047).
+
 
 
 

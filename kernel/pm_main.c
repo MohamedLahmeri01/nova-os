@@ -74,6 +74,7 @@ static uint32_t spawn_image(const uint8_t *img, uint32_t size) {
             p->rlimit_nofd = cur->proc->rlimit_nofd;
             p->rlimit_fsize = cur->proc->rlimit_fsize;
             p->rlimit_frames = cur->proc->rlimit_frames;
+            p->rlimit_ticks = cur->proc->rlimit_ticks;
             p->jail_root = cur->proc->jail_root;
             /* The child holds its jail root too (else a parent's
              * chroot-away could drop the count to zero under it). */
@@ -394,6 +395,9 @@ void nova_pm_main(const nova_boot_info_t *info) {
         if (usched_rc != 0) {
             nova_panic("usched-selftest-fail");
         }
+    }
+    if (sched_ticklimit_selftest() != 0) {
+        nova_panic("ticklimit-selftest-fail");
     }
     smp_boot();
     /* Demo scene (Phase 12b/12d): every selftest is done and the

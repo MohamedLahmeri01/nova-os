@@ -52,6 +52,7 @@
 #define RLIM_NOFD 0u
 #define RLIM_FSIZE 1u
 #define RLIM_FRAMES 2u
+#define RLIM_TICKS 3u
 #define RLIM_OP_GET 0u
 #define RLIM_OP_SET 1u
 

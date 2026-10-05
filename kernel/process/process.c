@@ -39,6 +39,8 @@ struct process *process_create(void) {
     p->rlimit_nofd = RLIM_NOFD_DEF;
     p->rlimit_fsize = RLIM_FSIZE_DEF;
     p->rlimit_frames = RLIM_FRAMES_DEF;
+    p->ticks_used = 0;
+    p->rlimit_ticks = RLIM_TICKS_DEF;
     return p;
 }
 

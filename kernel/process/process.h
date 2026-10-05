@@ -51,6 +51,11 @@ struct process {
     uint32_t rlimit_nofd;
     uint32_t rlimit_fsize;
     uint32_t rlimit_frames;
+    /* Phase 13b CPU accounting: ticks consumed while running
+     * (any thread of this process). kill at rlimit_ticks (below)
+     * in sched_do_switch; UINT32_MAX default = unbounded. */
+    uint32_t ticks_used;
+    uint32_t rlimit_ticks;
 };
 
 extern struct process *g_init_process;

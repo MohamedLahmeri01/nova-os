@@ -19,6 +19,7 @@
 #define RLIM_NOFD 0u
 #define RLIM_FSIZE 1u
 #define RLIM_FRAMES 2u
+#define RLIM_TICKS 3u
 
 #define RLIM_OP_GET 0u
 #define RLIM_OP_SET 1u
@@ -26,10 +27,12 @@
 #define RLIM_NOFD_HARD NOVA_NFD
 #define RLIM_FSIZE_HARD FS_MAX_FILE
 #define RLIM_FRAMES_HARD 524288u /* 512 PDs x 1024: whole user half */
+#define RLIM_TICKS_HARD 0xFFFFFFFFu /* no ceiling: unbounded default */
 
 #define RLIM_NOFD_DEF NOVA_NFD
 #define RLIM_FSIZE_DEF FS_MAX_FILE
 #define RLIM_FRAMES_DEF RLIM_FRAMES_HARD
+#define RLIM_TICKS_DEF RLIM_TICKS_HARD
 
 /* Lower-only set rule: out = val. EINVAL for NULL out or val above
  * the hard ceiling (caller bug); EPERM for raising (privilege). */

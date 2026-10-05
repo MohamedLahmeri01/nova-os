@@ -32,5 +32,8 @@ void sched_do_switch(void);
 void sched_yield(void);
 void sched_switch_to(struct thread *cur, struct thread *next);
 int sched_selftest(void);
+/* CPU quota proof: a spinning user thread dies on schedule.
+ * Prints TICK-OK. Nonzero on failure (fatal: panic). */
+int sched_ticklimit_selftest(void);
 
 #endif /* NOVA_SCHED_H */
