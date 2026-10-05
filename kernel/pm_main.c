@@ -28,6 +28,7 @@
 #include "gui/comp.h"
 #include "gui/font.h"
 #include "input/mouse.h"
+#include "net/sock.h"
 #include "drivers/virtio_net.h"
 #include "thread/thread.h"
 #include "process/process.h"
@@ -374,6 +375,9 @@ void nova_pm_main(const nova_boot_info_t *info) {
     }
     if (win_selftest() != 0) {
         nova_panic("win-selftest-fail");
+    }
+    if (sock_selftest() != 0) {
+        nova_panic("sock-selftest-fail");
     }
     {
         int sched_rc = sched_selftest();

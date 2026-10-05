@@ -228,7 +228,10 @@ Capabilities, sandboxing, resource limits, secure handles.
   20/20 (ADR-0048)
 - [x] 13d on-disk chmod (journaled NOVA-FS mode writes,
   fs_chmod routing, round-trip proofs), 20/20 (ADR-0049)
-- [ ] 13e+ candidates: user sockets + DNS, IRQ-driven virtio
+- [x] 14a UDP sockets (loopback-first datagrams, multiplexed
+  SYS_SOCK, shell uloop, SOCK-OK gate + T21),
+  21/21 (ADR-0050)
+- [ ] 14b+ candidates: DNS resolver, IRQ-driven virtio
 
 
 ## Non-goals for 0.x

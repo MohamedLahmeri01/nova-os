@@ -15,6 +15,7 @@
 #include "process/rlimit.h"
 #include "gui/comp.h"
 #include "drivers/fb.h"
+#include "net/sock.h"
 #include "nova/types.h"
 #include "mm/addrspace.h"
 #include "mm/pmm.h"
@@ -1040,6 +1041,87 @@ static int32_t do_rmdir(uint32_t path, uint32_t b, uint32_t c) {
     return fs_rmdir(kpath);
 }
 
+/* UDP sockets multiplex (Phase 14a): OPEN/CLOSE are bookkeeping;
+ * SEND/RECV touch the network and need CAP_NET (gate-first, like
+ * ping). Payloads cross via validated structs (SEND) or a static
+ * bounce (RECV, 512B stack cap respected). */
+static int32_t do_sock(uint32_t op, uint32_t a, uint32_t b) {
+    if (op == SOCK_OP_OPEN) {
+        if (need_cap(CAP_NET) != 0) {
+            return -NOVA_EPERM;
+        }
+        if (a > 0xFFFFu) {
+            return -NOVA_EINVAL;
+        }
+        return sock_open((uint16_t)a);
+    }
+    if (op == SOCK_OP_CLOSE) {
+        return sock_close(a);
+    }
+    if (op == SOCK_OP_SEND) {
+        struct nova_sock_send k;
+        const struct nova_sock_send *u;
+        static uint8_t sbounce[1480];
+        if (need_cap(CAP_NET) != 0) {
+            return -NOVA_EPERM;
+        }
+        if (validate_usermem(b, sizeof(k), 0) != 0) {
+            return -NOVA_EFAULT;
+        }
+        u = (const struct nova_sock_send *)b;
+        k.dst = u->dst;
+        k.dport = u->dport;
+        k.buf = u->buf;
+        k.len = u->len;
+        /* Bounce the payload in (never hand user memory to the
+         * stack: length checked first, so the copy is bounded). */
+        if (k.len > SOCK_MTU_PAYLOAD) {
+            return -NOVA_EINVAL;
+        }
+        if (k.len != 0 &&
+            validate_usermem(k.buf, k.len, 0) != 0) {
+            return -NOVA_EFAULT;
+        }
+        for (uint32_t i = 0; i < k.len; i++) {
+            sbounce[i] = *(volatile uint8_t *)(k.buf + i);
+        }
+        return sock_send(a, k.dst, k.dport, sbounce, k.len);
+    }
+    if (op == SOCK_OP_RECV) {
+        struct nova_sock_recv k;
+        const struct nova_sock_recv *u;
+        static uint8_t bounce[1536];
+        uint32_t got = 0;
+        int rc;
+        if (need_cap(CAP_NET) != 0) {
+            return -NOVA_EPERM;
+        }
+        if (validate_usermem(b, sizeof(k), 0) != 0) {
+            return -NOVA_EFAULT;
+        }
+        u = (const struct nova_sock_recv *)b;
+        k.buf = u->buf;
+        k.max = u->max;
+        k.timeout = u->timeout;
+        if (k.max > sizeof(bounce)) {
+            return -NOVA_EINVAL;
+        }
+        if (k.max != 0 &&
+            validate_usermem(k.buf, k.max, 1) != 0) {
+            return -NOVA_EFAULT;
+        }
+        rc = sock_recv(a, bounce, k.max, k.timeout, &got);
+        if (rc < 0) {
+            return rc;
+        }
+        for (uint32_t i = 0; i < got; i++) {
+            *(volatile uint8_t *)(k.buf + i) = bounce[i];
+        }
+        return (int32_t)got;
+    }
+    return -NOVA_EINVAL;
+}
+
 /* Jail assignment with lifetime (Phase 13a): the new root is
  * held first (self-assign is safe), the old hold dropped after.
  * Shared by do_chroot and the jail selftest (identical rules). */
@@ -1191,6 +1273,7 @@ static const struct {
     { SYS_CHROOT, "chroot", do_chroot },
     { SYS_UNLINK, "unlink", do_unlink },
     { SYS_RMDIR, "rmdir", do_rmdir },
+    { SYS_SOCK, "sock", do_sock },
     { SYS_FOCUS, "winfocus", do_winfocus },
     { SYS_WINOPEN, "winopen", do_winopen },
     { SYS_WINSTAT, "winstat", do_winstat },

@@ -297,7 +297,8 @@ def build_phase1(fault=False):
                                   ("kernel/fs/fat32.c", "fat32.o", []),
                                   ("kernel/fs/ext4.c", "ext4.o", []),
                                   ("kernel/fs/nova.c", "novafs.o", []),
-                                  ("kernel/net/net.c", "net.o", []),
+                                   ("kernel/net/net.c", "net.o", []),
+                                   ("kernel/net/sock.c", "sock.o", []),
                                   (PMM_BACKEND_C, PMM_BACKEND_O, [])]:
         s = os.path.join(ROOT, src)
         if not os.path.isfile(s):
@@ -325,7 +326,8 @@ def build_phase1(fault=False):
                "caps.o", "rlimit.o",
                "kbd.o", "mouse.o", "init_blob.o", "hi_blob.o", "uname_blob.o", "ramfs.o", "file.o",
               "fat32.o", "ext4.o", "novafs.o", "ata.o", "pci.o",
-               "vga.o", "fb.o", "font.o", "comp.o", "virtio.o", "net.o", PMM_BACKEND_O],
+               "vga.o", "fb.o", "font.o", "comp.o", "virtio.o", "net.o",
+               "sock.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -990,6 +992,26 @@ def cmd_test():
             print("[pass] T20 host mouse test"); passed += 1
         else:
             print("[fail] T20 host mouse test"); failed += 1
+    # T21: host socket test (sock.c loopback + fuzz + selftest)
+    print("[info] T21 compiling + running host socket test...")
+    sock_exe = os.path.join(BUILD, "test_sock.exe")
+    cmd = ["gcc", "-O2", "-Wall", "-Wextra",
+           "-I", os.path.join(ROOT, "kernel"),
+           "-I", os.path.join(ROOT, "sdk", "include"),
+           os.path.join(ROOT, "tests", "unit", "test_sock.c"),
+           os.path.join(ROOT, "kernel", "net", "sock.c"),
+           "-o", sock_exe]
+    r = run(cmd, timeout=120)
+    if r.returncode != 0:
+        print(f"[fail] T21 socket test compile:\n{(r.stderr or '')[:1500]}")
+        failed += 1
+    else:
+        r = run([sock_exe], timeout=120)
+        print((r.stdout or "") + (r.stderr or ""))
+        if r.returncode == 0:
+            print("[pass] T21 host socket test"); passed += 1
+        else:
+            print("[fail] T21 host socket test"); failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 
@@ -1211,7 +1233,7 @@ def cmd_run_vbox():
                                        b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
                                        b"CAPS-OK", b"RLIM-OK", b"PERM-OK",
                                        b"JAIL-OK", b"SDK-OK", b"WIN-OK",
-                                       b"TICK-OK", b"IDT-OK",
+                                       b"TICK-OK", b"SOCK-OK", b"IDT-OK",
                                        b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
@@ -1271,7 +1293,7 @@ PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"VIRTIO-OK", b"DMA-OK", b"FS-OK", b"FAT-OK", b"EXT-OK",
                   b"NOVA-OK", b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
                   b"CAPS-OK", b"RLIM-OK", b"PERM-OK", b"JAIL-OK",
-                  b"WIN-OK", b"TICK-OK", b"IDT-OK",
+                  b"WIN-OK", b"TICK-OK", b"SOCK-OK", b"IDT-OK",
                  b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]

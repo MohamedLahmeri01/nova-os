@@ -41,6 +41,13 @@
 #define SYS_WINCLOSE 29u
 #define SYS_UNLINK 30u
 #define SYS_RMDIR 31u
+#define SYS_SOCK 32u
+
+/* Socket ops mirrored from kernel/net/sock.h. */
+#define SOCK_OP_OPEN 0u
+#define SOCK_OP_CLOSE 1u
+#define SOCK_OP_SEND 2u
+#define SOCK_OP_RECV 3u
 
 /* Capability bits + caps ops mirrored from process/caps.h. */
 #define CAP_NET 0x01u
@@ -217,6 +224,10 @@ static inline int32_t nova_wintitle(uint32_t id, const char *text) {
 
 static inline int32_t nova_winclose(uint32_t id) {
     return nova_syscall(SYS_WINCLOSE, id, 0, 0);
+}
+
+static inline int32_t nova_sock(uint32_t op, uint32_t a, uint32_t b) {
+    return nova_syscall(SYS_SOCK, op, a, b);
 }
 
 #endif /* NOVA_LIBC_NOVA_H */

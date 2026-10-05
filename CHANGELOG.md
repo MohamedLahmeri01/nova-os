@@ -212,6 +212,10 @@ see docs/RELEASE.md for scope and limitations.
 - Phase 13d on-disk chmod (tested 2026-10-05, `nova test` 20/20):
   journaled NOVA-FS mode writes, fs_chmod routing, round-trip
   proofs (ADR-0049).
+- Phase 14a sockets (tested 2026-10-06, `nova test` 21/21):
+  loopback-first UDP sockets, multiplexed SYS_SOCK, shell
+  uloop, SOCK-OK gate, T21 discipline fuzz (ADR-0050).
+
 
 
 

@@ -43,7 +43,8 @@
 #define SYS_WINCLOSE 29u
 #define SYS_UNLINK 30u
 #define SYS_RMDIR 31u
-#define SYS_MAX 31u
+#define SYS_SOCK 32u
+#define SYS_MAX 32u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0
@@ -69,6 +70,7 @@
 #define NOVA_ENODEV 19
 #define NOVA_ETIMEDOUT 110
 #define NOVA_EHOSTUNREACH 113
+#define NOVA_EADDRINUSE 98
 
 #define SYSCALL_MAX_PRINT 1024u
 #define SYSCALL_MAX_RANGE 4096u

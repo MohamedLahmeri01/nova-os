@@ -26,4 +26,21 @@ struct nova_winopen {
     uint8_t _pad[3];
 };
 
+/* Socket send (SYS_SOCK/SEND): destination + payload. */
+struct nova_sock_send {
+    uint32_t dst;
+    uint16_t dport;
+    uint8_t _pad[2];
+    uint32_t buf;
+    uint32_t len;
+};
+
+/* Socket recv (SYS_SOCK/RECV): buffer + budget + timeout; returns
+ * the payload length (>= 0) or negative -errno. */
+struct nova_sock_recv {
+    uint32_t buf;
+    uint32_t max;
+    uint32_t timeout;
+};
+
 #endif /* NOVA_TYPES_H */

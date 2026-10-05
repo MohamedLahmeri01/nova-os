@@ -32,9 +32,11 @@ static void sh_putdec(uint32_t v) {
 
 static const char *sh_arg(const char *line);
 static void sh_denied(const char *what);
+static const char *sh_nextnum(const char *p, int *val);
+static void sh_putstrn(const char *s, uint32_t max);
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle rm rmdir clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle rm rmdir uloop clear exit");
 }
 
 static void sh_putip(uint32_t ip) {
@@ -289,6 +291,60 @@ static void sh_rm(const char *line, int dir) {
         return;
     }
     nova_puts("ok");
+}
+
+static void sh_uloop(const char *line) {
+    /* uloop <port> <text>: bind, loop text through 127.0.0.1 to
+     * self, print what comes back. One command proves send +
+     * receive without a second terminal. */
+    const char *p = sh_arg(line);
+    int port = 0;
+    int32_t id;
+    int32_t r;
+    struct nova_sock_send sargs;
+    struct nova_sock_recv rargs;
+    static char rxb[512];
+    p = sh_nextnum(p, &port);
+    if (p == 0 || port <= 0 || port > 65535) {
+        nova_puts("usage: uloop <port> <text>");
+        return;
+    }
+    while (*p == ' ') {
+        p++;
+    }
+    if (*p == 0) {
+        nova_puts("usage: uloop <port> <text>");
+        return;
+    }
+    id = nova_sock(SOCK_OP_OPEN, (uint32_t)port, 0);
+    if (id < 0) {
+        nova_puts("uloop failed");
+        return;
+    }
+    sargs.dst = 0x7F000001u;
+    sargs.dport = (uint16_t)port;
+    sargs._pad[0] = 0;
+    sargs._pad[1] = 0;
+    sargs.buf = (uint32_t)p;
+    sargs.len = nova_strlen(p);
+    r = nova_sock(SOCK_OP_SEND, (uint32_t)id, (uint32_t)&sargs);
+    if (r != 0) {
+        nova_sock(SOCK_OP_CLOSE, (uint32_t)id, 0);
+        nova_puts("uloop failed");
+        return;
+    }
+    rargs.buf = (uint32_t)rxb;
+    rargs.max = sizeof(rxb);
+    rargs.timeout = 200;
+    r = nova_sock(SOCK_OP_RECV, (uint32_t)id, (uint32_t)&rargs);
+    nova_sock(SOCK_OP_CLOSE, (uint32_t)id, 0);
+    if (r < 0) {
+        nova_puts("uloop failed");
+        return;
+    }
+    nova_print("got ", 4);
+    sh_putstrn(rxb, (uint32_t)r);
+    nova_putchar('\n');
 }
 
 static const char *sh_nextnum(const char *p, int *val) {
@@ -750,6 +806,9 @@ static void sh_run(const char *line) {
     } else if (nova_strncmp(line, "rmdir", 5) == 0 &&
                (line[5] == 0 || line[5] == ' ')) {
         sh_rm(line, 1);
+    } else if (nova_strncmp(line, "uloop", 5) == 0 &&
+               (line[5] == 0 || line[5] == ' ')) {
+        sh_uloop(line);
     } else if (nova_strncmp(line, "rm", 2) == 0 &&
                (line[2] == 0 || line[2] == ' ')) {
         sh_rm(line, 0);
