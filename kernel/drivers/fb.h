@@ -41,6 +41,11 @@ uint8_t fb_get(uint32_t x, uint32_t y);
 /* Filled rectangle, corner (x,y), size (w,h), clipped. */
 void fb_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
              uint8_t color);
+/* One 8x8 glyph (BIOS font; out-of-range chars render '?'). */
+void fb_char(uint32_t x, uint32_t y, char c, uint8_t color);
+/* NUL-terminated string, 8px cells, transparent bg, capped at 64
+ * chars (untrusted lengths stop here). */
+void fb_text(uint32_t x, uint32_t y, const char *s, uint8_t color);
 /* Boot splash (border + bars + blocks; the screenshot proof). */
 void fb_splash(void);
 /* Deterministic selftest (clear/readback/rect/clip/palette).

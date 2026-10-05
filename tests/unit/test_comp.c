@@ -12,6 +12,7 @@
 
 #include "drivers/fb.h"
 #include "gui/comp.h"
+#include "gui/font.h"
 #include "syscall/syscall.h"
 
 static int g_failed;
@@ -94,6 +95,31 @@ void fb_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
 void fb_splash(void) {
 }
 
+/* Text stubs mirror the driver blitter (reviewed same); the real
+ * driver executes in-guest (FB-OK). Synthetic font below makes
+ * every pixel exact. */
+void fb_char(uint32_t x, uint32_t y, char c, uint8_t color) {
+    const uint8_t *g = font_row((uint8_t)c);
+    uint32_t r, k;
+    for (r = 0; r < 8u; r++) {
+        for (k = 0; k < 8u; k++) {
+            if (((g[r] >> (7u - k)) & 1u) != 0) {
+                fb_pixel(x + k, y + r, color);
+            }
+        }
+    }
+}
+
+void fb_text(uint32_t x, uint32_t y, const char *s, uint8_t color) {
+    uint32_t i;
+    if (s == 0) {
+        return;
+    }
+    for (i = 0; i < 64u && s[i] != 0; i++) {
+        fb_char(x + i * 8u, y, s[i], color);
+    }
+}
+
 int main(void) {
     int a, b;
 
@@ -123,6 +149,35 @@ int main(void) {
     check(fb_get(10, 10) == FB_DARKGRAY, "bg-through",
           fb_get(10, 10), 0);
     check(comp_close(1) == 0, "close2", 0, 0);
+
+    /* Text through a synthetic font ('X' diagonals only): title
+     * placement + clipping exact, out-of-range chars map to '?'. */
+    {
+        static uint8_t xfont[128][8];
+        uint32_t r, k;
+        for (r = 0; r < 128u; r++) {
+            for (k = 0; k < 8u; k++) {
+                xfont[r][k] = 0;
+            }
+        }
+        for (r = 0; r < 8u; r++) {
+            xfont['X'][r] = (uint8_t)((0x81u >> r) | (0x81u << r));
+            xfont['?'][r] = 0xFFu;
+        }
+        font_load(&xfont[0][0]);
+        check(font_is_fallback() == 0, "font-load", 0, 0);
+        fb_clear(FB_BLACK);
+        fb_text(0, 0, "X", FB_WHITE);
+        check(fb_get(0, 0) == FB_WHITE, "x-tl", fb_get(0, 0), 0);
+        check(fb_get(7, 7) == FB_WHITE, "x-br", fb_get(7, 7), 0);
+        check(fb_get(3, 3) == FB_WHITE, "x-mid", fb_get(3, 3), 0);
+        check(fb_get(1, 0) == FB_BLACK, "x-off", fb_get(1, 0), 0);
+        fb_text(8, 0, "\x01", FB_WHITE);
+        check(fb_get(8, 0) == FB_WHITE, "x-quest", fb_get(8, 0),
+              0);
+        check(comp_title(0, "toolongtitle123456") == -NOVA_EINVAL,
+              "title-shut", 0, 0);
+    }
 
     /* Guest selftest runs the same stack in-guest (COMP-OK). */
     check(comp_selftest() == 0, "selftest", 0, 0);

@@ -26,6 +26,7 @@
 #include "drivers/pci.h"
 #include "drivers/fb.h"
 #include "gui/comp.h"
+#include "gui/font.h"
 #include "drivers/virtio_net.h"
 #include "thread/thread.h"
 #include "process/process.h"
@@ -289,10 +290,12 @@ void nova_pm_main(const nova_boot_info_t *info) {
         nova_panic("pci-selftest-fail");
     }
     /* Framebuffer (Phase 12a): mode 13h is already live (stage1);
-     * prove pixels + palette, then leave the splash up. The VGA
+     * font first (Phase 12c: text tests need glyphs), then prove
+     * pixels + palette + text, then leave the splash up. The VGA
      * text driver is retired from the boot path (its aperture is
      * planar in graphics mode, so cell readback cannot pass);
      * serial stays the console, its text mirror inert. */
+    font_init();
     if (fb_selftest() != 0) {
         nova_panic("fb-selftest-fail");
     }

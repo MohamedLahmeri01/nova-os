@@ -27,6 +27,9 @@ int comp_focus(uint32_t id);
 /* Cycle focus over live windows (none if empty). Returns the new
  * focus id, or -1. */
 int comp_focus_next(void);
+/* Set the title (Phase 12c: up to 15 chars, black on the title
+ * bar). EINVAL on unused id. */
+int comp_title(uint32_t id, const char *s);
 /* Current focus id, or -1. */
 int comp_focused(void);
 /* Repaint everything (bg + windows back-to-front). */

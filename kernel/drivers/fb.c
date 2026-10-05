@@ -8,6 +8,7 @@
 
 #include "serial.h"
 #include "drivers/fb.h"
+#include "gui/font.h"
 #include "syscall/syscall.h"
 
 #if defined(__i386__)
@@ -87,8 +88,7 @@ uint8_t fb_get(uint32_t x, uint32_t y) {
 }
 
 void fb_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
-             uint8_t color) {
-    uint32_t xe = x + w;
+             uint8_t color) {    uint32_t xe = x + w;
     uint32_t ye = y + h;
     if (xe < x) {
         xe = 0xFFFFFFFFu; /* wrapped: clamp to edge below */
@@ -106,6 +106,27 @@ void fb_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
         for (uint32_t xx = x; xx < xe; xx++) {
             FB_BASE[yy * FB_W + xx] = color;
         }
+    }
+}
+
+void fb_char(uint32_t x, uint32_t y, char c, uint8_t color) {
+    const uint8_t *g = font_row((uint8_t)c);
+    for (uint32_t r = 0; r < 8u; r++) {
+        uint8_t bits = g[r];
+        for (uint32_t k = 0; k < 8u; k++) {
+            if (((bits >> (7u - k)) & 1u) != 0) {
+                fb_pixel(x + k, y + r, color);
+            }
+        }
+    }
+}
+
+void fb_text(uint32_t x, uint32_t y, const char *s, uint8_t color) {
+    if (s == 0) {
+        return;
+    }
+    for (uint32_t i = 0; i < 64u && s[i] != 0; i++) {
+        fb_char(x + i * 8u, y, s[i], color);
     }
 }
 

@@ -17,6 +17,7 @@ struct comp_win {
     int used;
     uint32_t x, y, w, h;
     uint8_t color;
+    char title[16];
 };
 
 static struct comp_win g_wins[COMP_MAXWIN];
@@ -39,6 +40,7 @@ int comp_open(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
             g_wins[i].w = w;
             g_wins[i].h = h;
             g_wins[i].color = color;
+            g_wins[i].title[0] = 0;
             if (g_focus < 0) {
                 g_focus = (int)i;
             }
@@ -70,6 +72,19 @@ int comp_focus(uint32_t id) {
         return -NOVA_EINVAL;
     }
     g_focus = (int)id;
+    return NOVA_ESUCCESS;
+}
+
+int comp_title(uint32_t id, const char *s) {
+    uint32_t i = 0;
+    if (!valid_id(id) || s == 0) {
+        return -NOVA_EINVAL;
+    }
+    while (i + 1u < sizeof(g_wins[id].title) && s[i] != 0) {
+        g_wins[id].title[i] = s[i];
+        i++;
+    }
+    g_wins[id].title[i] = 0;
     return NOVA_ESUCCESS;
 }
 
@@ -107,6 +122,9 @@ static void paint_one(uint32_t id) {
     fb_rect(x, y, w, h, g_wins[id].color);
     if (h > COMP_TITLE_H) {
         fb_rect(x, y, w, COMP_TITLE_H, bc);
+        if (g_wins[id].title[0] != 0) {
+            fb_text(x + 4u, y + 2u, g_wins[id].title, FB_BLACK);
+        }
     }
     /* Border outlines (clipped by fb_rect). */
     fb_rect(x, y, w, bw, bc);
@@ -136,27 +154,45 @@ static void demo_mark(int id) {
     serial_putc('\n');
 }
 
+/* Console body (redrawn after every present: presents repaint). */
+static void demo_console_text(void) {
+    fb_text(16, 28, "NOVA OS 12c", FB_WHITE);
+    fb_text(16, 38, "FB-OK", FB_WHITE);
+    fb_text(16, 48, "COMP-OK", FB_WHITE);
+}
+
 void comp_demo(void) {
     int a, b, c;
-    /* Three overlapping windows (back-to-front by id). */
-    a = comp_open(24, 30, 160, 110, FB_BLUE);
-    b = comp_open(90, 60, 160, 110, FB_RED);
-    c = comp_open(156, 24, 130, 120, FB_GREEN);
+    /* Console + two alerts (back-to-front by id). Titles prove
+     * text on screen; the console body proves multi-line text. */
+    a = comp_open(8, 8, 190, 184, FB_BLUE);
+    b = comp_open(170, 20, 140, 70, FB_RED);
+    c = comp_open(150, 110, 150, 80, FB_GREEN);
     if (a != 0 || b != 1 || c != 2) {
         return; /* selftest covers errors; demo never panics */
     }
+    comp_title(0, "console");
+    comp_title(1, "alert");
+    comp_title(2, "green");
     comp_focus(0);
     demo_mark(0);
     comp_present();
+    demo_console_text();
     demo_wait(50);
     comp_focus_next();
     demo_mark(comp_focused());
     comp_present();
+    demo_console_text();
     demo_wait(50);
     comp_focus_next();
     demo_mark(comp_focused());
     comp_present();
+    demo_console_text();
     demo_wait(50);
+    comp_focus(0);
+    demo_mark(comp_focused());
+    comp_present();
+    demo_console_text();
 }
 
 int comp_selftest(void) {
@@ -202,6 +238,34 @@ int comp_selftest(void) {
         comp_focus_next() != 0) {
         serial_puts("COMP-FAIL cycle\n");
         return -1;
+    }
+    /* Titles: bad ids and NULL refuse; "X" inks its bar cell
+     * (any black pixel in the title zone proves text on screen
+     * under BIOS glyphs, fallback boxes, and the host synthetic
+     * font alike). */
+    if (comp_title(COMP_MAXWIN, "A") != -NOVA_EINVAL ||
+        comp_title(7, 0) != -NOVA_EINVAL) {
+        serial_puts("COMP-FAIL title-bad\n");
+        return -1;
+    }
+    if (comp_title(7, "X") != 0) {
+        serial_puts("COMP-FAIL title\n");
+        return -1;
+    }
+    comp_present();
+    {
+        uint32_t ink = 0;
+        for (uint32_t yy = 72; yy < 80u; yy++) {
+            for (uint32_t xx = 74; xx < 82u; xx++) {
+                if (fb_get(xx, yy) == FB_BLACK) {
+                    ink++;
+                }
+            }
+        }
+        if (ink == 0) {
+            serial_puts("COMP-FAIL title-ink\n");
+            return -1;
+        }
     }
     /* Layering: top id wins the overlap point (exact color
      * proves z order: (15,30) sits in window 1's fill, below its

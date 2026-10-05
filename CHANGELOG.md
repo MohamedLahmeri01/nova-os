@@ -185,6 +185,10 @@ No releases yet.
   window pool + z-order layers, focus highlight + cycle,
   demo scene with markers, COMP-OK gate, T19 pixel test
   (ADR-0042).
+- Phase 12c text + titles (tested 2026-10-05, `nova test` 19/19):
+  BIOS font with fallback, fb_text, window titles, console
+  demo, title-ink proofs, T19 synthetic pixels (ADR-0043).
+
 
 
 

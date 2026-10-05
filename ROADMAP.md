@@ -204,8 +204,11 @@ Capabilities, sandboxing, resource limits, secure handles.
   highlight focus + cycle, full-repaint present, demo scene
   with COMP-FOCUS markers, COMP-OK gate + T19 stub-VRAM
   test), 19/19 (ADR-0042)
-- [ ] 12c+ window system, toolkit, desktop shell (font first,
-  then widgets; mouse driver before any pointer)
+- [x] 12c text + titles (BIOS 8x8 font with validation +
+  fallback, fb_text, window titles, console demo, title-ink
+  proofs + T19 synthetic-font pixels), 19/19 (ADR-0043)
+- [ ] 12d window system completion + desktop shell (keyboard
+  focus first; mouse driver before any pointer)
 
 ## Non-goals for 0.x
 

@@ -279,6 +279,7 @@ def build_phase1(fault=False):
                                   ("kernel/drivers/pci.c", "pci.o", []),
                                    ("kernel/drivers/vga.c", "vga.o", []),
                                    ("kernel/drivers/fb.c", "fb.o", []),
+                                   ("kernel/gui/font.c", "font.o", []),
                                    ("kernel/gui/comp.c", "comp.o", []),
                                   ("kernel/drivers/virtio_net.c", "virtio.o", []),
                                   ("kernel/fs/ramfs.c", "ramfs.o", []),
@@ -315,7 +316,7 @@ def build_phase1(fault=False):
                "caps.o", "rlimit.o",
                "kbd.o", "init_blob.o", "hi_blob.o", "uname_blob.o", "ramfs.o", "file.o",
               "fat32.o", "ext4.o", "novafs.o", "ata.o", "pci.o",
-               "vga.o", "fb.o", "comp.o", "virtio.o", "net.o", PMM_BACKEND_O],
+               "vga.o", "fb.o", "font.o", "comp.o", "virtio.o", "net.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -924,6 +925,7 @@ def cmd_test():
            "-I", os.path.join(ROOT, "kernel"),
            os.path.join(ROOT, "tests", "unit", "test_comp.c"),
            os.path.join(ROOT, "kernel", "gui", "comp.c"),
+           os.path.join(ROOT, "kernel", "gui", "font.c"),
            "-o", comp_exe]
     r = run(cmd, timeout=120)
     if r.returncode != 0:
