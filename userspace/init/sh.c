@@ -36,7 +36,7 @@ static const char *sh_nextnum(const char *p, int *val);
 static void sh_putstrn(const char *s, uint32_t max);
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle rm rmdir uloop clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle rm rmdir uloop nslookup clear exit");
 }
 
 static void sh_putip(uint32_t ip) {
@@ -344,6 +344,25 @@ static void sh_uloop(const char *line) {
     }
     nova_print("got ", 4);
     sh_putstrn(rxb, (uint32_t)r);
+    nova_putchar('\n');
+}
+
+static void sh_nslookup(const char *line) {
+    const char *name = sh_arg(line);
+    uint32_t ip = 0;
+    int32_t r;
+    if (*name == 0) {
+        nova_puts("usage: nslookup <name>");
+        return;
+    }
+    r = nova_dns(name, &ip);
+    if (r != 0) {
+        nova_puts("nslookup failed");
+        return;
+    }
+    sh_putstrn(name, 64);
+    nova_print(" has ", 5);
+    sh_putip(ip);
     nova_putchar('\n');
 }
 
@@ -809,6 +828,9 @@ static void sh_run(const char *line) {
     } else if (nova_strncmp(line, "uloop", 5) == 0 &&
                (line[5] == 0 || line[5] == ' ')) {
         sh_uloop(line);
+    } else if (nova_strncmp(line, "nslookup", 8) == 0 &&
+               (line[8] == 0 || line[8] == ' ')) {
+        sh_nslookup(line);
     } else if (nova_strncmp(line, "rm", 2) == 0 &&
                (line[2] == 0 || line[2] == ' ')) {
         sh_rm(line, 0);

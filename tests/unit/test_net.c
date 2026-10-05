@@ -391,6 +391,89 @@ int main(void) {
     /* No NIC on the host: acquisition refuses cleanly. */
     check(dhcp_acquire() == -NOVA_ENODEV, "dhcp-nonic", 0, 0);
 
+    /* DNS codec (Phase 14b): pinned query + reply matrix. Host
+     * runs the pure codec only (no wire without a NIC). */
+    {
+        static const uint8_t expect[29] = {
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x07, 'e', 'x', 'a',
+            'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
+            0x00, 0x01, 0x00, 0x01
+        };
+        uint8_t q[64];
+        uint8_t r[128];
+        uint32_t i;
+        int ql = dns_build(q, sizeof(q), 0x1234, "example.com");
+        uint32_t rl;
+        uint32_t ip = 0;
+        static const uint8_t ans[16] = {
+            0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x3C, 0x00, 0x04,
+            93, 184, 216, 34
+        };
+        check(ql == 29, "dns-len", (unsigned long)ql, 0);
+        for (i = 0; ql == 29 && i < 29u; i++) {
+            if (q[i] != expect[i]) {
+                check(0, "dns-bytes", i, q[i]);
+                break;
+            }
+        }
+        check(dns_build(q, 10, 0x1234, "example.com") ==
+                  -NOVA_EINVAL,
+              "dns-small", 0, 0);
+        check(dns_build(q, sizeof(q), 0x1234, "") == -NOVA_EINVAL,
+              "dns-empty", 0, 0);
+        check(dns_build(q, sizeof(q), 0x1234, "bad_name") ==
+                  -NOVA_EINVAL,
+              "dns-chars", 0, 0);
+        /* Crash-guard: a broken encoder must FAIL checks below,
+         * not walk off the stack (mirrors guest early-return). */
+        if (ql != 29) {
+            ql = 0;
+        }
+        /* Reply skeleton around the built question. */
+        r[0] = 0x12;
+        r[1] = 0x34;
+        r[2] = 0x81;
+        r[3] = 0x80;
+        r[4] = 0;
+        r[5] = 1;
+        r[6] = 0;
+        r[7] = 1;
+        r[8] = 0;
+        r[9] = 0;
+        r[10] = 0;
+        r[11] = 0;
+        for (i = 0; i + 12u < (uint32_t)ql; i++) {
+            r[12u + i] = q[12u + i];
+        }
+        rl = (uint32_t)ql;
+        for (i = 0; i < 16u; i++) {
+            r[rl + i] = ans[i];
+        }
+        rl += 16u;
+        check(dns_parse(r, rl, 0x1234, &ip) == 0 &&
+                  ip == 0x5DB8D822u,
+              "dns-ok", ip, 0);
+        r[0] ^= 1u;
+        check(dns_parse(r, rl, 0x1234, &ip) == -NOVA_EINVAL,
+              "dns-id", 0, 0);
+        r[0] ^= 1u;
+        r[3] = 0x83u;
+        check(dns_parse(r, rl, 0x1234, &ip) == -NOVA_ENOENT,
+              "dns-nx", 0, 0);
+        r[3] = 0x80u;
+        if (dns_parse(r, rl - 5u, 0x1234, &ip) != -NOVA_EINVAL) {
+            check(0, "dns-trunc", 0, 0);
+        }
+        r[ql] = 0xC0;
+        r[ql + 1u] = 0x0C;
+        r[ql + 2u] = 0x00;
+        r[ql + 3u] = 0x05;
+        check(dns_parse(r, rl, 0x1234, &ip) == -NOVA_ENOENT,
+              "dns-cname", 0, 0);
+    }
+
     /* Guest selftest runs the same stack in-guest (NET-OK). */
     check(net_selftest() == 0, "selftest", 0, 0);
 

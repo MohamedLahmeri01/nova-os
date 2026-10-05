@@ -231,7 +231,10 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 14a UDP sockets (loopback-first datagrams, multiplexed
   SYS_SOCK, shell uloop, SOCK-OK gate + T21),
   21/21 (ADR-0050)
-- [ ] 14b+ candidates: DNS resolver, IRQ-driven virtio
+- [x] 14b DNS resolver (RFC 1035 A subset, codec-gated
+  vectors, opportunistic live query, SYS_DNS + shell
+  nslookup), 21/21 (ADR-0051)
+- [ ] 14c+ candidates: IRQ-driven virtio
 
 
 ## Non-goals for 0.x

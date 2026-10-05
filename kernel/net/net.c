@@ -81,6 +81,10 @@ static uint32_t rd32(const uint8_t *p) {
            (uint32_t)p[2] << 8 | p[3];
 }
 
+static uint16_t rd16(const uint8_t *p) {
+    return (uint16_t)((uint32_t)p[0] << 8 | p[1]);
+}
+
 int net_ip_build(uint8_t *out, uint32_t src, uint32_t dst, uint8_t proto,
                  uint16_t payload_len) {
     uint32_t total;
@@ -1185,6 +1189,249 @@ int dhcp_acquire(void) {
     return -NOVA_ETIMEDOUT;
 }
 
+/* ---------- DNS client (Phase 14b, RFC 1035 A subset) ----------
+ * Query: RD set, one question (QTYPE A, QCLASS IN). Reply: ID +
+ * QR match, RCODE discipline (3/NameError -> ENOENT, else EIO),
+ * every length bounds-checked, name compression chased with a
+ * jump cap (rogue servers loop pointers: actor 4). First A
+ * record wins; CNAME-only answers refuse (no chain following
+ * in v0.1). Names: labels 1..63 of alnum/hyphen, dots between,
+ * total <= 253, no leading/trailing dot. */
+
+static int dns_label_ok(const char *s, uint32_t n) {
+    uint32_t i;
+    if (n == 0 || n > 63u) {
+        return -NOVA_EINVAL;
+    }
+    for (i = 0; i < n; i++) {
+        char c = s[i];
+        int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                 (c >= '0' && c <= '9') || c == '-';
+        if (!ok) {
+            return -NOVA_EINVAL;
+        }
+    }
+    if (s[0] == '-' || s[n - 1u] == '-') {
+        return -NOVA_EINVAL;
+    }
+    return NOVA_ESUCCESS;
+}
+
+int dns_build(uint8_t *out, uint32_t max, uint16_t id,
+              const char *name) {
+    uint32_t pos = 12u;
+    uint32_t total = 0;
+    if (out == 0 || name == 0) {
+        return -NOVA_EINVAL;
+    }
+    /* Validate + measure the dotted form first. */
+    {
+        const char *p = name;
+        if (*p == 0 || *p == '.') {
+            return -NOVA_EINVAL;
+        }
+        for (;;) {
+            const char *dot = p;
+            uint32_t n = 0;
+            while (*dot != 0 && *dot != '.') {
+                dot++;
+                n++;
+            }
+            if (dns_label_ok(p, n) != 0) {
+                return -NOVA_EINVAL;
+            }
+            total += 1u + n;
+            if (*dot == 0) {
+                break;
+            }
+            p = dot + 1u;
+            if (*p == 0) {
+                return -NOVA_EINVAL; /* trailing dot */
+            }
+        }
+        total += 1u; /* root terminator */
+        if (12u + total + 4u > max || 12u + total + 4u < total) {
+            return -NOVA_EINVAL;
+        }
+    }
+    wr16(out, id);
+    wr16(out + 2, 0x0100u); /* RD set */
+    wr16(out + 4, 1);       /* one question */
+    wr16(out + 6, 0);
+    wr16(out + 8, 0);
+    wr16(out + 10, 0);
+    {
+        const char *p = name;
+        for (;;) {
+            const char *dot = p;
+            uint32_t n = 0;
+            uint32_t i;
+            while (*dot != 0 && *dot != '.') {
+                dot++;
+                n++;
+            }
+            out[pos++] = (uint8_t)n;
+            for (i = 0; i < n; i++) {
+                out[pos++] = (uint8_t)p[i];
+            }
+            if (*dot == 0) {
+                break;
+            }
+            p = dot + 1u;
+        }
+        out[pos++] = 0;
+    }
+    wr16(out + pos, 1); /* QTYPE A */
+    wr16(out + pos + 2u, 1); /* QCLASS IN */
+    return (int)(pos + 4u);
+}
+
+/* Skip a possibly-compressed name at off (bounds + jump cap).
+ * Returns the offset just past it, or -errno. */
+static int dns_skip_name(const uint8_t *pkt, uint32_t len,
+                         uint32_t off) {
+    uint32_t jumps = 0;
+    uint32_t end = off;
+    int jumped = 0;
+    for (;;) {
+        uint8_t c;
+        if (off >= len) {
+            return -NOVA_EINVAL;
+        }
+        c = pkt[off];
+        if ((c & 0xC0u) == 0xC0u) {
+            uint32_t ptr;
+            if (off + 1u >= len) {
+                return -NOVA_EINVAL;
+            }
+            ptr = ((uint32_t)(c & 0x3Fu) << 8) | pkt[off + 1u];
+            if (ptr >= len) {
+                return -NOVA_EINVAL;
+            }
+            if (!jumped) {
+                end = off + 2u;
+            }
+            jumped = 1;
+            off = ptr;
+            if (++jumps > 8u) {
+                return -NOVA_EINVAL;
+            }
+            continue;
+        }
+        if (c == 0) {
+            return (int)(jumped ? end : off + 1u);
+        }
+        if (c > 63u || off + 1u + (uint32_t)c > len) {
+            return -NOVA_EINVAL;
+        }
+        if (!jumped) {
+            end = off + 1u + (uint32_t)c;
+        }
+        off += 1u + (uint32_t)c;
+    }
+}
+
+int dns_parse(const uint8_t *pkt, uint32_t len, uint16_t id,
+              uint32_t *ip_out) {
+    uint16_t flags;
+    uint16_t qd, an;
+    uint32_t off;
+    int r;
+    if (pkt == 0 || ip_out == 0 || len < 12u) {
+        return -NOVA_EINVAL;
+    }
+    if (rd16(pkt) != id) {
+        return -NOVA_EINVAL;
+    }
+    flags = rd16(pkt + 2);
+    if ((flags & 0x8000u) == 0 || (flags & 0x7800u) != 0) {
+        return -NOVA_EINVAL; /* not a reply / bad opcode */
+    }
+    if ((flags & 0x000Fu) == 3u) {
+        return -NOVA_ENOENT; /* NameError */
+    }
+    if ((flags & 0x000Fu) != 0) {
+        return -NOVA_EIO;
+    }
+    qd = rd16(pkt + 4);
+    an = rd16(pkt + 6);
+    if (qd < 1u || an < 1u) {
+        return -NOVA_EINVAL;
+    }
+    /* Skip the question(s): name + QTYPE + QCLASS each. */
+    off = 12u;
+    for (uint32_t q = 0; q < qd; q++) {
+        r = dns_skip_name(pkt, len, off);
+        if (r < 0 || (uint32_t)r + 4u > len) {
+            return -NOVA_EINVAL;
+        }
+        off = (uint32_t)r + 4u;
+    }
+    /* First A/IN record wins; anything else (incl. CNAME) skips. */
+    for (uint32_t a = 0; a < an; a++) {
+        uint16_t type, class, rdlen;
+        r = dns_skip_name(pkt, len, off);
+        if (r < 0 || (uint32_t)r + 10u > len) {
+            return -NOVA_EINVAL;
+        }
+        off = (uint32_t)r;
+        type = rd16(pkt + off);
+        class = rd16(pkt + off + 2u);
+        rdlen = rd16(pkt + off + 8u);
+        if (off + 10u + (uint32_t)rdlen > len) {
+            return -NOVA_EINVAL;
+        }
+        if (type == 1 && class == 1 && rdlen == 4) {
+            *ip_out = rd32(pkt + off + 10u);
+            return NOVA_ESUCCESS;
+        }
+        off += 10u + (uint32_t)rdlen;
+    }
+    return -NOVA_ENOENT; /* no direct answer present */
+}
+
+int dns_resolve(const char *name, uint32_t *ip_out) {
+    static uint8_t q[512];
+    static uint8_t u[1500];
+    const uint8_t *mymac;
+    uint16_t id;
+    uint16_t sport;
+    int qlen;
+    int round;
+    if (name == 0 || ip_out == 0 || !virtio_net_ready()) {
+        return -NOVA_EINVAL;
+    }
+    mymac = virtio_net_mac();
+    id = (uint16_t)((g_ticks & 0xFFFFu) ^ ((uint32_t)mymac[4] << 8 |
+                                           mymac[5]));
+    sport = (uint16_t)(40000u + (g_ticks & 0xFFFu));
+    qlen = dns_build(q, sizeof(q), id, name);
+    if (qlen < 0) {
+        return qlen;
+    }
+    /* 3 rounds: send, then drain up to 2 replies each (ID match
+     * decides; anything else is noise we walk past). */
+    for (round = 0; round < 3; round++) {
+        if (net_udp_send(net_self_ip(), NET_ADDR_DNS, sport, 53,
+                         q, (uint32_t)qlen) != 0) {
+            return -NOVA_EIO;
+        }
+        for (int t = 0; t < 2; t++) {
+            uint32_t got = 0;
+            int rc = net_udp_recv(u, sizeof(u), 53, sport, 0, 100,
+                                  &got);
+            if (rc != 0) {
+                break;
+            }
+            /* Ports already filtered by recv; ID decides here. */
+            if (dns_parse(u, got, id, ip_out) == 0) {
+                return NOVA_ESUCCESS;
+            }
+        }
+    }
+    return -NOVA_ETIMEDOUT;
+}
+
 int net_init(void) {
     g_loop_len = 0;
     g_loop_has = 0;
@@ -1367,7 +1614,6 @@ int net_selftest(void) {
     /* DHCP validator: crafted OFFER + mutants (rogue servers
      * are data: every field earns its trust). */
     {
-        static uint8_t offer[300];
         static const uint8_t tmac[6] = { 0x08, 0x00, 0x27,
                                          0x3C, 0xA1, 0xA1 };
         uint8_t mt = 0;
@@ -1376,6 +1622,7 @@ int net_selftest(void) {
         uint32_t p;
         uint8_t b1[1];
         uint8_t b4[4];
+        static uint8_t offer[300];
         for (i = 0; i < sizeof(offer); i++) {
             offer[i] = 0;
         }
@@ -1508,6 +1755,130 @@ int net_selftest(void) {
             }
         }
     }
+    /* DNS codec (pure: runs everywhere, NIC or not). Query pin:
+     * "example.com" id 0x1234 encodes to 29 exact bytes. */
+    {
+        static const uint8_t expect[29] = {
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x07, 'e', 'x', 'a',
+            'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
+            0x00, 0x01, 0x00, 0x01
+        };
+        uint8_t q[64];
+        uint32_t i;
+        int ql = dns_build(q, sizeof(q), 0x1234, "example.com");
+        if (ql != 29) {
+            serial_puts("NET-FAIL dns-len\n");
+            return -1;
+        }
+        for (i = 0; i < 29u; i++) {
+            if (q[i] != expect[i]) {
+                serial_puts("NET-FAIL dns-bytes\n");
+                return -1;
+            }
+        }
+        if (dns_build(q, 10, 0x1234, "example.com") !=
+                -NOVA_EINVAL ||
+            dns_build(q, sizeof(q), 0x1234, "") != -NOVA_EINVAL ||
+            dns_build(q, sizeof(q), 0x1234, ".lead") !=
+                -NOVA_EINVAL ||
+            dns_build(q, sizeof(q), 0x1234, "trail.") !=
+                -NOVA_EINVAL ||
+            dns_build(q, sizeof(q), 0x1234, "bad_name") !=
+                -NOVA_EINVAL ||
+            dns_build(0, sizeof(q), 0x1234, "example.com") !=
+                -NOVA_EINVAL) {
+            serial_puts("NET-FAIL dns-badname\n");
+            return -1;
+        }
+    }
+    /* DNS reply matrix: a good answer, then every rogue shape. */
+    {
+        uint8_t q[64];
+        uint8_t r[128];
+        uint32_t ql;
+        uint32_t rl;
+        uint32_t ip = 0;
+        uint32_t i;
+        int qli = dns_build(q, sizeof(q), 0x1234, "example.com");
+        if (qli != 29) {
+            serial_puts("NET-FAIL dns-qlen\n");
+            return -1;
+        }
+        ql = (uint32_t)qli;
+        wr16(r, 0x1234);
+        wr16(r + 2, 0x8180u);
+        wr16(r + 4, 1);
+        wr16(r + 6, 1);
+        wr16(r + 8, 0);
+        wr16(r + 10, 0);
+        for (i = 0; i + 12u < ql; i++) {
+            r[12u + i] = q[12u + i];
+        }
+        rl = ql;
+        {
+            static const uint8_t ans[16] = {
+                0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01,
+                0x00, 0x00, 0x00, 0x3C, 0x00, 0x04,
+                93, 184, 216, 34
+            };
+            for (i = 0; i < 16u; i++) {
+                r[rl + i] = ans[i];
+            }
+            rl += 16u;
+        }
+        if (dns_parse(r, rl, 0x1234, &ip) != 0 ||
+            ip != 0x5DB8D822u) {
+            serial_puts("NET-FAIL dns-ok\n");
+            return -1;
+        }
+        r[0] ^= 0x01u; /* ID mismatch */
+        if (dns_parse(r, rl, 0x1234, &ip) != -NOVA_EINVAL) {
+            serial_puts("NET-FAIL dns-id\n");
+            return -1;
+        }
+        r[0] ^= 0x01u;
+        r[3] = 0x83u; /* NXDOMAIN */
+        if (dns_parse(r, rl, 0x1234, &ip) != -NOVA_ENOENT) {
+            serial_puts("NET-FAIL dns-nx\n");
+            return -1;
+        }
+        r[3] = 0x82u; /* SERVFAIL */
+        if (dns_parse(r, rl, 0x1234, &ip) != -NOVA_EIO) {
+            serial_puts("NET-FAIL dns-srvfail\n");
+            return -1;
+        }
+        r[3] = 0x80u;
+        r[2] = 0x00u; /* QR clear: not a reply */
+        if (dns_parse(r, rl, 0x1234, &ip) != -NOVA_EINVAL) {
+            serial_puts("NET-FAIL dns-qr\n");
+            return -1;
+        }
+        r[2] = 0x81u;
+        if (dns_parse(r, rl - 5u, 0x1234, &ip) != -NOVA_EINVAL) {
+            serial_puts("NET-FAIL dns-trunc\n");
+            return -1;
+        }
+        /* CNAME-only: no direct answer present. */
+        r[ql] = 0xC0;
+        r[ql + 1u] = 0x0C;
+        r[ql + 2u] = 0x00;
+        r[ql + 3u] = 0x05;
+        if (dns_parse(r, rl, 0x1234, &ip) != -NOVA_ENOENT) {
+            serial_puts("NET-FAIL dns-cname\n");
+            return -1;
+        }
+        /* Pointer loop: answer name points at itself. */
+        {
+            uint32_t ao = ql;
+            r[ao] = 0xC0;
+            r[ao + 1u] = (uint8_t)ao;
+            if (dns_parse(r, rl, 0x1234, &ip) != -NOVA_EINVAL) {
+                serial_puts("NET-FAIL dns-loop\n");
+                return -1;
+            }
+        }
+    }
     /* Wire proof (guest only: needs the NIC). DHCP first (dynamic
      * config), then ARP the gateway and ping it: real frames on a
      * real wire. */
@@ -1543,6 +1914,18 @@ int net_selftest(void) {
             }
         }
         serial_putc('\n');
+        /* Opportunistic live DNS (informational only: upstream
+         * reachability is environmental, never a gate). */
+        {
+            uint32_t ip = 0;
+            if (dns_resolve("example.com", &ip) == 0) {
+                serial_puts("DNS-LIVE ip=");
+                print_ip(ip);
+                serial_putc('\n');
+            } else {
+                serial_puts("DNS-NOLIVE\n");
+            }
+        }
     }
     serial_puts("NET-OK\n");
     return NOVA_ESUCCESS;

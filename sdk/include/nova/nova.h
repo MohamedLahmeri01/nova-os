@@ -42,6 +42,7 @@
 #define SYS_UNLINK 30u
 #define SYS_RMDIR 31u
 #define SYS_SOCK 32u
+#define SYS_DNS 33u
 
 /* Socket ops mirrored from kernel/net/sock.h. */
 #define SOCK_OP_OPEN 0u
@@ -228,6 +229,11 @@ static inline int32_t nova_winclose(uint32_t id) {
 
 static inline int32_t nova_sock(uint32_t op, uint32_t a, uint32_t b) {
     return nova_syscall(SYS_SOCK, op, a, b);
+}
+
+static inline int32_t nova_dns(const char *name, uint32_t *ip_out) {
+    return nova_syscall(SYS_DNS, (uint32_t)name, (uint32_t)ip_out,
+                        0);
 }
 
 #endif /* NOVA_LIBC_NOVA_H */

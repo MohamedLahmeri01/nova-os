@@ -1122,6 +1122,29 @@ static int32_t do_sock(uint32_t op, uint32_t a, uint32_t b) {
     return -NOVA_EINVAL;
 }
 
+static int32_t do_dns(uint32_t name, uint32_t ip_out, uint32_t c) {
+    char kname[FS_MAX_PATH + 1u];
+    uint32_t ip = 0;
+    int32_t plen;
+    int rc;
+    (void)c;
+    /* Resolve via the NAT proxy (Phase 14b): name grammar checked
+     * inside dns_resolve; ETIMEDOUT on silence. */
+    plen = copy_user_path(name, kname);
+    if (plen < 0) {
+        return plen;
+    }
+    if (validate_usermem(ip_out, 4, 1) != 0) {
+        return -NOVA_EFAULT;
+    }
+    rc = dns_resolve(kname, &ip);
+    if (rc != 0) {
+        return rc;
+    }
+    *(volatile uint32_t *)ip_out = ip;
+    return NOVA_ESUCCESS;
+}
+
 /* Jail assignment with lifetime (Phase 13a): the new root is
  * held first (self-assign is safe), the old hold dropped after.
  * Shared by do_chroot and the jail selftest (identical rules). */
@@ -1274,6 +1297,7 @@ static const struct {
     { SYS_UNLINK, "unlink", do_unlink },
     { SYS_RMDIR, "rmdir", do_rmdir },
     { SYS_SOCK, "sock", do_sock },
+    { SYS_DNS, "dns", do_dns },
     { SYS_FOCUS, "winfocus", do_winfocus },
     { SYS_WINOPEN, "winopen", do_winopen },
     { SYS_WINSTAT, "winstat", do_winstat },

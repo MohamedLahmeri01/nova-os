@@ -44,7 +44,8 @@
 #define SYS_UNLINK 30u
 #define SYS_RMDIR 31u
 #define SYS_SOCK 32u
-#define SYS_MAX 32u
+#define SYS_DNS 33u
+#define SYS_MAX 33u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0

@@ -69,6 +69,20 @@ int net_udp_recv(uint8_t *out, uint32_t max, uint16_t sport,
                  uint16_t dport, uint32_t dst_ok, uint32_t timeout,
                  uint32_t *len_out);
 
+/* DNS client (Phase 14b, RFC 1035 A-record subset): query build
+ * (RD set, single question), strict reply parse (ID + QR +
+ * RCODE + bounds on every field, compression pointers chased
+ * with a jump cap, first A record wins; CNAME chains refuse:
+ * direct answers only). Resolver talks to the NAT DNS proxy
+ * (10.0.2.3) with bounded retries. All wire input untrusted. */
+#define NET_ADDR_DNS 0x0A000203u /* VBox NAT DNS proxy */
+#define DNS_MAX_NAME 253u
+int dns_build(uint8_t *out, uint32_t max, uint16_t id,
+              const char *name);
+int dns_parse(const uint8_t *pkt, uint32_t len, uint16_t id,
+              uint32_t *ip_out);
+int dns_resolve(const char *name, uint32_t *ip_out);
+
 /* DHCP client (Phase 9c, RFC 2131 subset): DISCOVER -> OFFER ->
  * REQUEST -> ACK/NAK over broadcast UDP, bounded retries, then the
  * runtime config applies (self/gw/mask + gateway re-ARP). Rogue or

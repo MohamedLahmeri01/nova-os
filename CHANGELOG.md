@@ -215,6 +215,10 @@ see docs/RELEASE.md for scope and limitations.
 - Phase 14a sockets (tested 2026-10-06, `nova test` 21/21):
   loopback-first UDP sockets, multiplexed SYS_SOCK, shell
   uloop, SOCK-OK gate, T21 discipline fuzz (ADR-0050).
+- Phase 14b DNS (tested 2026-10-06, `nova test` 21/21):
+  A-record resolver, codec vectors, opportunistic live
+  query, SYS_DNS, shell nslookup (ADR-0051).
+
 
 
 
