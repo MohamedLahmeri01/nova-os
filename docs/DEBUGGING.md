@@ -95,3 +95,4 @@ wiring/dispatch/timing, not the algorithm -- bisect there.
 | EEXIST where EACCES expected (or vice versa) | Fail-closed ordering: perm before existence? | 0037 |
 | Missing marker in fault image only | Spawned-thread marker in panic gates? | 0039 |
 | Suite red after syscall addition | `docs/ABI.md` regenerated (`nova abi`)? | 0039 |
+| Print shows values the code just overwrote | Combined call-in-`check()`? Split call, then assert: gcc hoists print loads above mutating calls (ADR-0045 proved it in disassembly) | 0045 |

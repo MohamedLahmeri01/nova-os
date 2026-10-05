@@ -274,7 +274,8 @@ def build_phase1(fault=False):
                                    ("kernel/process/process.c", "process.o", []),
                                    ("kernel/process/caps.c", "caps.o", []),
                                    ("kernel/process/rlimit.c", "rlimit.o", []),
-                                  ("kernel/input/kbd.c", "kbd.o", []),
+                                   ("kernel/input/kbd.c", "kbd.o", []),
+                                   ("kernel/input/mouse.c", "mouse.o", []),
                                   ("kernel/drivers/ata.c", "ata.o", []),
                                   ("kernel/drivers/pci.c", "pci.o", []),
                                    ("kernel/drivers/vga.c", "vga.o", []),
@@ -313,7 +314,7 @@ def build_phase1(fault=False):
               "validate.o", "ctx.o", "user_asm.o", "user.o", "gdt.o",
                "smp.o", "ap_tramp.o", "thread.o", "sched.o", "process.o",
                "caps.o", "rlimit.o",
-               "kbd.o", "init_blob.o", "hi_blob.o", "uname_blob.o", "ramfs.o", "file.o",
+               "kbd.o", "mouse.o", "init_blob.o", "hi_blob.o", "uname_blob.o", "ramfs.o", "file.o",
               "fat32.o", "ext4.o", "novafs.o", "ata.o", "pci.o",
                "vga.o", "fb.o", "font.o", "comp.o", "virtio.o", "net.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
@@ -938,6 +939,26 @@ def cmd_test():
             print("[pass] T19 host compositor test"); passed += 1
         else:
             print("[fail] T19 host compositor test"); failed += 1
+    # T20: host mouse test (mouse.c parser + feed + click wiring)
+    print("[info] T20 compiling + running host mouse test...")
+    mouse_exe = os.path.join(BUILD, "test_mouse.exe")
+    cmd = ["gcc", "-O2", "-Wall", "-Wextra",
+           "-I", os.path.join(ROOT, "kernel"),
+           "-I", os.path.join(ROOT, "sdk", "include"),
+           os.path.join(ROOT, "tests", "unit", "test_mouse.c"),
+           os.path.join(ROOT, "kernel", "input", "mouse.c"),
+           "-o", mouse_exe]
+    r = run(cmd, timeout=120)
+    if r.returncode != 0:
+        print(f"[fail] T20 mouse test compile:\n{(r.stderr or '')[:1500]}")
+        failed += 1
+    else:
+        r = run([mouse_exe], timeout=120)
+        print((r.stdout or "") + (r.stderr or ""))
+        if r.returncode == 0:
+            print("[pass] T20 host mouse test"); passed += 1
+        else:
+            print("[fail] T20 host mouse test"); failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 
@@ -1152,7 +1173,8 @@ def cmd_run_vbox():
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
                                        b"HEAP-OK", b"ATA-OK", b"PCI-OK",
-                                       b"FB-OK", b"COMP-OK", b"VIRTIO-OK",
+                                       b"FB-OK", b"COMP-OK", b"MOUSE-OK",
+                                       b"VIRTIO-OK",
                                        b"DMA-OK", b"FS-OK",
                                        b"FAT-OK", b"EXT-OK", b"NOVA-OK",
                                        b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
@@ -1214,6 +1236,7 @@ def cmd_image():
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
                  b"HEAP-OK", b"ATA-OK", b"PCI-OK", b"FB-OK", b"COMP-OK",
+                 b"MOUSE-OK",
                  b"VIRTIO-OK", b"DMA-OK", b"FS-OK", b"FAT-OK", b"EXT-OK",
                   b"NOVA-OK", b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
                   b"CAPS-OK", b"RLIM-OK", b"PERM-OK", b"JAIL-OK",

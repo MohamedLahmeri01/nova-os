@@ -14,6 +14,7 @@
 #include "sched/sched.h"
 #include "gdt.h"
 #include "input/kbd.h"
+#include "input/mouse.h"
 #include "time.h"
 
 #if defined(__i386__)
@@ -74,7 +75,9 @@ static void pic_remap(void) {
     arch_outb(PIC_M_DATA, 0x01);
     arch_outb(PIC_S_DATA, 0x01);
     /* Unmask IRQ0 (timer) + IRQ1 (keyboard) only: 0xFC. (0xFD would
-     * mask the timer; 0xFE was timer-only before the keyboard.) */
+     * mask the timer; 0xFE was timer-only before the keyboard.)
+     * Slave stays fully masked here (0xFF): the mouse driver
+     * unmasks IRQ12 itself after its reset proves the device. */
     arch_outb(PIC_M_DATA, 0xFCu);
     arch_outb(PIC_S_DATA, 0xFFu);
     /* IMCR: force PIC mode so the 8259 INT reaches the CPU directly. */
@@ -142,6 +145,8 @@ void irq_handler(trap_frame_t *f) {
         sched_tick();
     } else if (f->vec == 33) {
         kbd_irq();
+    } else if (f->vec == 44) {
+        mouse_irq();
     }
     if (f->vec >= 40) {
         arch_outb(PIC_S_CMD, PIC_EOI);

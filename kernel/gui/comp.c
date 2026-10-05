@@ -10,6 +10,7 @@
 #include "serial.h"
 #include "drivers/fb.h"
 #include "gui/comp.h"
+#include "input/mouse.h"
 #include "syscall/syscall.h"
 #include "time/time.h"
 
@@ -133,7 +134,23 @@ static void paint_one(uint32_t id) {
     fb_rect(x + w - bw, y, bw, h, bc);
 }
 
+int comp_hit(uint32_t x, uint32_t y) {
+    for (uint32_t k = 0; k < COMP_MAXWIN; k++) {
+        uint32_t i = COMP_MAXWIN - 1u - k; /* topmost first */
+        if (!g_wins[i].used) {
+            continue;
+        }
+        if (x >= g_wins[i].x && y >= g_wins[i].y &&
+            x < g_wins[i].x + g_wins[i].w &&
+            y < g_wins[i].y + g_wins[i].h) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
 void comp_present(void) {
+    uint32_t mx = 0, my = 0;
     fb_clear(FB_DARKGRAY);
     for (uint32_t i = 0; i < COMP_MAXWIN; i++) {
         if (g_wins[i].used) {
@@ -148,10 +165,16 @@ void comp_present(void) {
         g_wins[g_focus].title[0] != 0) {
         fb_text(70, 2, g_wins[g_focus].title, FB_WHITE);
     }
+    /* Cursor last of all (nothing covers the pointer), and only
+     * when hardware proved itself (else no IRQ ever moves it). */
+    if (mouse_present() != 0) {
+        mouse_getpos(&mx, &my);
+        fb_rect(mx, my, 5, 5, FB_BLACK);
+        fb_rect(mx + 1u, my + 1u, 3, 3, FB_WHITE);
+    }
 }
 
-int comp_stat(struct nova_winstat *out, uint32_t max) {
-    uint32_t n = 0;
+int comp_stat(struct nova_winstat *out, uint32_t max) {    uint32_t n = 0;
     for (uint32_t i = 0; i < COMP_MAXWIN; i++) {
         if (!g_wins[i].used) {
             continue;

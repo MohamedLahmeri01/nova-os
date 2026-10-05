@@ -27,6 +27,7 @@
 #include "drivers/fb.h"
 #include "gui/comp.h"
 #include "gui/font.h"
+#include "input/mouse.h"
 #include "drivers/virtio_net.h"
 #include "thread/thread.h"
 #include "process/process.h"
@@ -305,6 +306,15 @@ void nova_pm_main(const nova_boot_info_t *info) {
      * deterministically empty here and for win_selftest). */
     if (comp_selftest() != 0) {
         nova_panic("comp-selftest-fail");
+    }
+    /* Mouse (Phase 12e): 8042 + reset proof, then parser/click
+     * proof on crafted bytes (real motion needs a hand on the
+     * host; the IRQ path shares the tested feed function). */
+    if (mouse_init() != 0) {
+        nova_panic("mouse-init-fail");
+    }
+    if (mouse_selftest() != 0) {
+        nova_panic("mouse-selftest-fail");
     }
     if (virtio_net_init() != 0) {
         nova_panic("virtio-init-fail");

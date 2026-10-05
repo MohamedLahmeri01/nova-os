@@ -210,7 +210,10 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 12d window system + desktop bar (FOCUS/WINOPEN/STAT/
   TITLE/CLOSE syscalls, shared types.h, menu bar, shell
   focus/wins/winopen/winclose/wintitle, WIN-OK gate),
-  19/19 (ADR-0044). Phase 12 complete.
+  19/19 (ADR-0044)
+- [x] 12e PS/2 mouse (parser + cursor + click-to-focus,
+  dormant on deaf controllers, MOUSE-OK gate + T20),
+  20/20 (ADR-0045). Phase 12 complete.
 
 ## Non-goals for 0.x
 

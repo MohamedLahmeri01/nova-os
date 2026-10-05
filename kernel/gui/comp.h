@@ -38,6 +38,9 @@ int comp_title(uint32_t id, const char *s);
 /* Snapshot live windows into out (up to max; returns the live
  * count even past max, so (NULL, 0) probes the count). */
 int comp_stat(struct nova_winstat *out, uint32_t max);
+/* Topmost live window containing (x,y), or -1 (the click target;
+ * menu bar clicks hit nothing: chrome is not a window). */
+int comp_hit(uint32_t x, uint32_t y);
 /* Deterministic dispatch proof (guest selftest over crafted
  * frames + direct calls): empty focus, bad memory, bad ids,
  * count probe, positive focus/stat/close. Prints WIN-OK.

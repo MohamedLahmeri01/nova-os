@@ -50,6 +50,21 @@ void serial_puthex32(uint32_t v) {
 
 volatile uint32_t g_ticks = 1000u;
 
+/* Cursor stub (Phase 12e): parked where no assertion looks
+ * (all test points sit left/above it); always "present". */
+void mouse_getpos(uint32_t *x, uint32_t *y) {
+    if (x != 0) {
+        *x = 310;
+    }
+    if (y != 0) {
+        *y = 190;
+    }
+}
+
+int mouse_present(void) {
+    return 1;
+}
+
 /* Stub VRAM: faithful byte array (clipping included). */
 static uint8_t g_vram[FB_W * FB_H];
 

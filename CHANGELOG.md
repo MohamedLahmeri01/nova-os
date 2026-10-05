@@ -191,6 +191,11 @@ No releases yet.
 - Phase 12d window system (tested 2026-10-05, `nova test` 19/19):
   5 window syscalls + shared types.h, menu bar, shell window
   commands, WIN-OK gate (ADR-0044). Phase 12 complete.
+- Phase 12e mouse (tested 2026-10-05, `nova test` 20/20):
+  PS/2 parser + cursor + click-to-focus, dormant design
+  for deaf controllers, MOUSE-OK gate, T20 wiring test
+  (ADR-0045).
+
 
 
 
