@@ -191,7 +191,10 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 11a headers + sample (sdk/include + user.ld, program
   manifest, /bin/uname reference, generated docs/ABI.md +
   T17 freshness, SDK-OK gate), 17/17 (ADR-0039)
-- [ ] 11b debugging guide + `nova dist` packaging stub
+- [x] 11b debugging guide + `nova dist` packaging
+  (docs/DEBUGGING.md pattern catalog, versioned dist dirs
+  with sha256 manifest, T18 self-verification), 18/18
+  (ADR-0040). Phase 11 complete.
 
 ## Phase 12 — Desktop (explicitly last)
 

@@ -433,6 +433,87 @@ def cmd_abi():
     return 0
 
 
+def dist_assemble(outdir):
+    """Package the current build outputs + docs into outdir.
+
+    Lays out binaries, ABI reference, changelog, SDK readme, and
+    a manifest (date, commit, ABI version, per-file bytes+sha256).
+    Returns (rc, msg): msg is outdir on success. Never rebuilds:
+    missing build outputs fail loudly (run nova build first).
+    """
+    import hashlib
+    import datetime
+    bins = ["kernel.bin", "init.bin", "hi.bin", "uname.bin"]
+    docs = [os.path.join("docs", "ABI.md"),
+            os.path.join("sdk", "README.md"),
+            "CHANGELOG.md"]
+    for n in bins:
+        if not os.path.isfile(os.path.join(BUILD, n)):
+            return 1, f"missing build/{n} (run nova build first)"
+    for n in docs:
+        if not os.path.isfile(os.path.join(ROOT, n)):
+            return 1, f"missing {n}"
+    r = run(["git", "rev-parse", "--short", "HEAD"], timeout=30)
+    sha = (r.stdout or "").strip() if r.returncode == 0 else "unknown"
+    day = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y%m%d")
+    abi = "?"
+    try:
+        with open(os.path.join(ROOT, "kernel", "syscall",
+                               "syscall.h")) as f:
+            for line in f.read().splitlines():
+                if line.startswith("#define NOVA_ABI_VERSION"):
+                    abi = line.split()[-1].rstrip("u")
+    except FileNotFoundError:
+        return 1, "missing kernel/syscall/syscall.h"
+    os.makedirs(outdir, exist_ok=True)
+    rows = []
+    for n in bins:
+        with open(os.path.join(BUILD, n), "rb") as f:
+            data = f.read()
+        with open(os.path.join(outdir, n), "wb") as f:
+            f.write(data)
+        rows.append((n, len(data),
+                     hashlib.sha256(data).hexdigest()))
+    for n in docs:
+        with open(os.path.join(ROOT, n), "rb") as f:
+            data = f.read()
+        base = os.path.basename(n)
+        with open(os.path.join(outdir, base), "wb") as f:
+            f.write(data)
+        rows.append((base, len(data),
+                     hashlib.sha256(data).hexdigest()))
+    lines = ["NOVA OS distribution",
+             f"date: {day} (UTC)",
+             f"commit: {sha}",
+             f"abi: v{abi}",
+             "",
+             "file  bytes  sha256"]
+    for n, size, digest in rows:
+        lines.append(f"{n}  {size}  {digest}")
+    lines.append("")
+    with open(os.path.join(outdir, "manifest.txt"), "w") as f:
+        f.write("\n".join(lines))
+    return 0, outdir
+
+
+def cmd_dist():
+    """Assemble dist/nova-os-<date>-<commit>/ from build outputs."""
+    print("== nova dist ==")
+    r = run(["git", "rev-parse", "--short", "HEAD"], timeout=30)
+    sha = (r.stdout or "").strip() if r.returncode == 0 else "unknown"
+    import datetime
+    day = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y%m%d")
+    outdir = os.path.join(ROOT, "dist", f"nova-os-{day}-{sha}")
+    rc, msg = dist_assemble(outdir)
+    if rc != 0:
+        print(f"[fail] {msg}")
+        return 1
+    print(f"[ok] distribution at {msg}")
+    return 0
+
+
 def cmd_test():
     """Host tests T1-T4 plus VBox-gated boot test T5 (with SKIP semantics)."""
     print("== nova test ==")
@@ -782,6 +863,57 @@ def cmd_test():
         except FileNotFoundError:
             print("[fail] T17 docs/ABI.md missing "
                   "(run python tools/nova.py abi)")
+            failed += 1
+    # T18: distribution assembles + manifest verifies (tree removed after)
+    print("[info] T18 assembling + verifying distribution...")
+    import hashlib
+    import shutil
+    tdir = os.path.join(BUILD, "dist-test")
+    if os.path.isdir(tdir):
+        shutil.rmtree(tdir)
+    rc, msg = dist_assemble(tdir)
+    if rc != 0:
+        print(f"[fail] T18 dist assemble: {msg}")
+        failed += 1
+    else:
+        ok = True
+        try:
+            with open(os.path.join(tdir, "manifest.txt")) as f:
+                man = f.read()
+            in_table = False
+            for line in man.splitlines():
+                parts = line.split()
+                if len(parts) == 3 and parts[0] == "file" and \
+                        parts[1] == "bytes":
+                    in_table = True
+                    continue
+                if not in_table or len(parts) != 3 or \
+                        not parts[1].isdigit():
+                    continue
+                name, size, digest = parts
+                with open(os.path.join(tdir, name), "rb") as f:
+                    data = f.read()
+                if len(data) != int(size) or \
+                        hashlib.sha256(data).hexdigest() != digest:
+                    print(f"[fail] T18 manifest mismatch: {name}")
+                    ok = False
+            for want in ["kernel.bin", "init.bin", "hi.bin",
+                         "uname.bin", "ABI.md", "README.md",
+                         "CHANGELOG.md", "manifest.txt"]:
+                if not os.path.isfile(os.path.join(tdir, want)):
+                    print(f"[fail] T18 dist missing: {want}")
+                    ok = False
+            if "abi: v" not in man or "commit:" not in man:
+                print("[fail] T18 manifest header incomplete")
+                ok = False
+        except (FileNotFoundError, ValueError) as e:
+            print(f"[fail] T18 dist verify: {e}")
+            ok = False
+        shutil.rmtree(tdir, ignore_errors=True)
+        if ok:
+            print("[pass] T18 distribution verifies")
+            passed += 1
+        else:
             failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
@@ -1146,7 +1278,7 @@ def main(argv):
             "run-vbox": cmd_run_vbox, "vbox-check": cmd_vbox_check,
             "image": cmd_image, "panic-test": cmd_panic_test,
             "bench-pmm": cmd_bench_pmm, "clean": cmd_clean,
-            "abi": cmd_abi}
+            "abi": cmd_abi, "dist": cmd_dist}
     if len(argv) != 2 or argv[1] not in cmds:
         print(f"usage: {sys.argv[0]} {{{'|'.join(cmds)}}}")
         return 2

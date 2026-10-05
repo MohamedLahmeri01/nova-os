@@ -1,5 +1,6 @@
 # Build outputs
 build/
+dist/
 images/*.iso
 images/*.vdi
 images/*.vmdk

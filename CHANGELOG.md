@@ -173,6 +173,11 @@ No releases yet.
   sdk/include + user.ld, program manifest, /bin/uname
   sample, generated docs/ABI.md + T17 freshness, SDK-OK gate
   (ADR-0039).
+- Phase 11b debugging + dist (tested 2026-10-05, `nova test` 18/18):
+  docs/DEBUGGING.md recipe ladder + pattern catalog, `nova dist`
+  versioned packaging with sha256 manifest, T18 verification
+  (ADR-0040). Phase 11 complete.
+
 
 
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
