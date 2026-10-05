@@ -65,11 +65,11 @@ static uint32_t spawn_image(const uint8_t *img, uint32_t size) {
         if (cur != 0 && cur->proc != 0) {
             p->caps = cur->proc->caps;
             p->uid = cur->proc->uid;
+            p->gid = cur->proc->gid;
             p->rlimit_nofd = cur->proc->rlimit_nofd;
             p->rlimit_fsize = cur->proc->rlimit_fsize;
             p->rlimit_frames = cur->proc->rlimit_frames;
-            p->gid = cur->proc->gid;
-        } else {
+            p->jail_root = cur->proc->jail_root;
             p->caps = CAPS_ALL;
             p->uid = UID_ROOT;
         }
@@ -322,6 +322,9 @@ void nova_pm_main(const nova_boot_info_t *info) {
     }
     if (perm_selftest() != 0) {
         nova_panic("perm-selftest-fail");
+    }
+    if (jail_selftest() != 0) {
+        nova_panic("jail-selftest-fail");
     }
     {
         int sched_rc = sched_selftest();

@@ -164,6 +164,12 @@ No releases yet.
   node uid/gid/mode, triplets + root bypass, SYS_CRED +
   SYS_CHMOD, shell id/setuid/chmod, PERM-OK gate, T9 triplet
   vectors (ADR-0037).
+- Phase 10d jailing (tested 2026-10-04, `nova test` 16/16):
+  per-process jail roots, confined lookup with floor clamp,
+  graft invisibility, narrowing-only SYS_CHROOT, spawn
+  inheritance, shell chroot, JAIL-OK gate, T9 walk vectors
+  (ADR-0038). Phase 10 complete.
+
 - Phase 7f NOVA-FS design (2026-10-03, doc-only): `docs/NOVA-FS.md`
   v0.1 (extent layout, ordered metadata journal, refusal rules,
   staged 7f-1..3 plan) adopted in ADR-0024; lesson table from the

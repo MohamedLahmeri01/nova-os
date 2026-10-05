@@ -115,17 +115,22 @@ static struct fs_node *child_named(struct fs_node *dir, const char *name,
     return 0;
 }
 
-int fs_lookup(const char *path, struct fs_node **out) {
+/* Confined walk (Phase 10d): start is where "/" resolves, floor
+ * is where ".." stops. Unjailed callers pass the global root for
+ * both (identical to the old walk: g_root's parent is NULL). */
+static int lookup_at(struct fs_node *start, struct fs_node *floor,
+                     const char *path, struct fs_node **out) {
     const char *p;
     struct fs_node *cur;
     uint32_t depth = 0;
-    if (path == 0 || out == 0 || path[0] != '/') {
+    if (start == 0 || floor == 0 || path == 0 || out == 0 ||
+        path[0] != '/') {
         return -NOVA_EINVAL;
     }
     if (fs_strlen(path, FS_MAX_PATH + 1u) > FS_MAX_PATH) {
         return -NOVA_ENAMETOOLONG;
     }
-    cur = &g_root;
+    cur = start;
     p = path;
     for (;;) {
         const char *s;
@@ -146,7 +151,7 @@ int fs_lookup(const char *path, struct fs_node **out) {
             continue;
         }
         if (len == 2 && s[0] == '.' && s[1] == '.') {
-            if (cur->parent != 0) {
+            if (cur->parent != 0 && cur != floor) {
                 cur = cur->parent;
             }
             continue;
@@ -159,6 +164,22 @@ int fs_lookup(const char *path, struct fs_node **out) {
             return -NOVA_ENOENT;
         }
     }
+}
+
+int fs_lookup(const char *path, struct fs_node **out) {
+    struct fs_node *jail = fs_current_jail();
+    struct fs_node *root = (jail != 0) ? jail : &g_root;
+    return lookup_at(root, root, path, out);
+}
+
+/* Explicit-root walk (test seam + future mount points): "/" is
+ * root, ".." clamps there. Same rules as fs_lookup otherwise. */
+int fs_lookup_at(struct fs_node *root, const char *path,
+                 struct fs_node **out) {
+    if (root == 0) {
+        return -NOVA_EINVAL;
+    }
+    return lookup_at(root, root, path, out);
 }
 
 static int resolve_parent(const char *path, struct fs_node **dir_out,
@@ -228,8 +249,12 @@ int fs_chmod(const char *path, uint16_t mode) {
     if (path == 0) {
         return -NOVA_EINVAL;
     }
-    if (fs_is_disk_path(path) || fs_is_ext_path(path) ||
-        fs_is_nova_path(path)) {
+    /* Graft namespaces refuse here (EROFS) -- but only for global
+     * callers. Jailed callers never reach foreign ground: their
+     * lookup below fails ENOENT first, keeping grafts invisible. */
+    if (fs_current_jail() == 0 &&
+        (fs_is_disk_path(path) || fs_is_ext_path(path) ||
+         fs_is_nova_path(path))) {
         return -NOVA_EROFS;
     }
     rc = fs_lookup(path, &n);

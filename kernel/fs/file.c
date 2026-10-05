@@ -35,6 +35,14 @@ uint32_t fs_current_gid(void) {
     return t->proc->gid;
 }
 
+struct fs_node *fs_current_jail(void) {
+    struct thread *t = sched_current_thread();
+    if (t == 0 || t->proc == 0) {
+        return 0;
+    }
+    return t->proc->jail_root;
+}
+
 int fs_can(const struct fs_node *n, uint32_t uid, uint32_t gid,
            uint32_t need) {
     uint32_t bits;
@@ -331,6 +339,7 @@ int fs_selftest(void) {
         fake.caps = 0;
         fake.uid = 0;
         fake.gid = 0;
+        fake.jail_root = 0;
         fake.rlimit_nofd = NOVA_NFD;
         fake.rlimit_fsize = FS_MAX_FILE;
         fake.rlimit_frames = RLIM_FRAMES_HARD;

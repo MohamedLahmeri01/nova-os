@@ -33,6 +33,7 @@ struct process *process_create(void) {
     p->caps = 0;
     p->uid = UID_NOBODY;
     p->gid = UID_NOBODY;
+    p->jail_root = 0; /* global view until chrooted inward */
     /* Open ceilings (Phase 10b): no behavior change until lowered;
      * spawn copies the parent's over these. */
     p->rlimit_nofd = RLIM_NOFD_DEF;

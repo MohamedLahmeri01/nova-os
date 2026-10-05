@@ -181,7 +181,10 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 10c UIDs + file ownership/permissions (node uid/gid/mode,
   triplets + root bypass, chmod/setuid, PERM-OK gate + T9
   vectors), 16/16 (ADR-0037)
-- [ ] 10d filesystem jailing
+- [x] 10d filesystem jailing (per-process roots, confined
+  lookup with ".." floor, graft invisibility, narrowing-only
+  SYS_CHROOT + spawn inheritance, shell chroot, JAIL-OK gate
+  + T9 walk vectors), 16/16 (ADR-0038)
 
 ## Phase 11 — SDK
 

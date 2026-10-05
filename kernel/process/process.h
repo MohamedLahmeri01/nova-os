@@ -12,6 +12,8 @@ struct thread;
 
 struct fs_file;
 
+struct fs_node;
+
 /* Open-file table per process (Phase 7): fds 0..NOVA_NFD-1, NULL
  * when free. Fixed size, no sharing yet (no fork/dup). */
 #define NOVA_NFD 16u
@@ -38,6 +40,11 @@ struct process {
      * yet); default nobody, root for init, inherited at spawn. No
      * setter in v0.1 (only uid switches via SYS_CRED). */
     uint32_t gid;
+    /* Phase 10d jail root: NULL views the whole namespace;
+     * otherwise absolute paths resolve under this node (floor for
+     * "..", grafts invisible). Self-restriction: set once inward
+     * via SYS_CHROOT, inherited at spawn, never cleared. */
+    struct fs_node *jail_root;
     /* Phase 10b ceilings (see process/rlimit.h): fd count, file
      * size, mapped frames. Defaults are the hard ceilings (no
      * behavior change until lowered); spawn copies the parent's. */

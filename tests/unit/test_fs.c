@@ -291,6 +291,36 @@ int main(void) {
               "open-nullp", 0, 0);
     }
 
+    /* Explicit-root walks (jail primitive, Phase 10d): scoping,
+     * ".." floor clamp, graft-name invisibility under a subtree. */
+    {
+        struct fs_node *jr = 0;
+        struct fs_node *hit = 0;
+        check(fs_mkdir("/jail") == 0, "j-mkdir", 0, 0);
+        check(fs_mkdir("/jail/sub") == 0, "j-mkdir-sub", 0, 0);
+        check(fs_create("/jail/sub/f", &hit) == 0, "j-create",
+              0, 0);
+        check(fs_lookup("/jail", &jr) == 0 && jr != 0, "j-root",
+              0, 0);
+        check(fs_lookup_at(jr, "/sub/f", &hit) == 0, "j-open",
+              0, 0);
+        check(fs_lookup_at(jr, "/", &hit) == 0 && hit == jr,
+              "j-self", 0, 0);
+        check(fs_lookup_at(jr, "/../hello.txt", &hit) ==
+                  -NOVA_ENOENT,
+              "j-escape", 0, 0);
+        check(fs_lookup_at(jr, "/sub/../../hello.txt", &hit) ==
+                  -NOVA_ENOENT,
+              "j-escape2", 0, 0);
+        check(fs_lookup_at(jr, "/disk/HELLO.TXT", &hit) ==
+                  -NOVA_ENOENT,
+              "j-graft", 0, 0);
+        check(fs_lookup_at(jr, "/nope", &hit) == -NOVA_ENOENT,
+              "j-missing", 0, 0);
+        check(fs_lookup_at(0, "/", &hit) == -NOVA_EINVAL,
+              "j-nullroot", 0, 0);
+    }
+
     /* Guest selftest runs the same stack in-guest (asserts + FS-OK). */
     check(fs_selftest() == 0, "selftest", 0, 0);
 

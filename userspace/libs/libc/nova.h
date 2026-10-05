@@ -31,6 +31,7 @@
 #define SYS_RLIMIT 21u
 #define SYS_CRED 22u
 #define SYS_CHMOD 23u
+#define SYS_CHROOT 24u
 
 /* Capability bits + caps ops mirrored from process/caps.h. */
 #define CAP_NET 0x01u
@@ -173,6 +174,10 @@ static inline int32_t nova_cred(uint32_t op, uint32_t id) {
 
 static inline int32_t nova_chmod(const char *path, uint32_t mode) {
     return nova_syscall(SYS_CHMOD, (uint32_t)path, mode, 0);
+}
+
+static inline int32_t nova_chroot(const char *path) {
+    return nova_syscall(SYS_CHROOT, (uint32_t)path, 0, 0);
 }
 
 #endif /* NOVA_LIBC_NOVA_H */

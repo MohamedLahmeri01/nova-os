@@ -35,7 +35,8 @@
 #define SYS_RLIMIT 21u
 #define SYS_CRED 22u
 #define SYS_CHMOD 23u
-#define SYS_MAX 23u
+#define SYS_CHROOT 24u
+#define SYS_MAX 24u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0

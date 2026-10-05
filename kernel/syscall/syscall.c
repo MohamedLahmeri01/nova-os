@@ -293,10 +293,14 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
     if (p == 0) {
         return -NOVA_EINVAL;
     }
+    /* Graft namespaces are global ground (Phase 10d): jailed
+     * callers skip every graft branch below and land in the ramfs
+     * tail, where the confined lookup finds no "disk"/"ext"/"nova"
+     * (ENOENT: invisible, not refused). */
     /* /disk graft (Phase 7c/d): FAT files materialize into a detached
      * node owned by the description. Writes go through to the disk
      * (write-through via the stored path); reads use the node copy. */
-    if (fs_is_disk_path(kpath)) {
+    if (p->jail_root == 0 && fs_is_disk_path(kpath)) {
         uint8_t *data;
         uint32_t size = 0;
         uint32_t got = 0;
@@ -347,7 +351,7 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
         return open_attach(p, n, data, size, flags, kpath);
     }
     /* EXT4 graft (Phase 7e): read-only materialize, no stored path. */
-    if (fs_is_ext_path(kpath)) {
+    if (p->jail_root == 0 && fs_is_ext_path(kpath)) {
         uint8_t *data;
         uint32_t size = 0;
         uint32_t got = 0;
@@ -394,7 +398,7 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
     }
     /* NOVA-FS graft (Phase 7f-2): writable materialize with stored
      * path (write-through like FAT). CREAT makes empty files. */
-    if (fs_is_nova_path(kpath)) {
+    if (p->jail_root == 0 && fs_is_nova_path(kpath)) {
         uint8_t *data;
         uint32_t size = 0;
         uint32_t got = 0;
@@ -667,6 +671,7 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
     char kpath[FS_MAX_PATH + 1u];
     char name[FS_MAX_NAME];
     struct fs_node *dir = 0;
+    struct process *p;
     int32_t plen;
     int rc;
     plen = copy_user_path(path, kpath);
@@ -676,9 +681,14 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
     if (validate_usermem(namebuf, FS_MAX_NAME, 1) != 0) {
         return -NOVA_EFAULT;
     }
+    p = sysc_proc();
+    if (p == 0) {
+        return -NOVA_EINVAL;
+    }
     /* /disk graft: FAT listing. /ext graft: EXT4 listing.
-     * /nova graft: NOVA-FS listing. */
-    if (fs_is_disk_path(kpath)) {
+     * /nova graft: NOVA-FS listing. Jailed callers skip grafts
+     * (Phase 10d): the ramfs tail below finds no graft dirs. */
+    if (p->jail_root == 0 && fs_is_disk_path(kpath)) {
         char kname[FS_MAX_NAME];
         int r = fat_list_dir(kpath, index, kname);
         if (r < 0) {
@@ -686,7 +696,7 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
         }
         return copy_name_out(namebuf, kname, r);
     }
-    if (fs_is_ext_path(kpath)) {
+    if (p->jail_root == 0 && fs_is_ext_path(kpath)) {
         char kname[FS_MAX_NAME];
         int r = ext_list_dir(kpath, index, kname);
         if (r < 0) {
@@ -694,7 +704,7 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
         }
         return copy_name_out(namebuf, kname, r);
     }
-    if (fs_is_nova_path(kpath)) {
+    if (p->jail_root == 0 && fs_is_nova_path(kpath)) {
         char kname[FS_MAX_NAME];
         int r = nova_list_dir(kpath, index, kname);
         if (r < 0) {
@@ -723,6 +733,7 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
 
 static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
     char kpath[FS_MAX_PATH + 1u];
+    struct process *p;
     int32_t plen;
     (void)b;
     (void)c;
@@ -730,13 +741,17 @@ static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
     if (plen < 0) {
         return plen;
     }
-    if (fs_is_disk_path(kpath)) {
+    p = sysc_proc();
+    if (p == 0) {
+        return -NOVA_EINVAL;
+    }
+    if (p->jail_root == 0 && fs_is_disk_path(kpath)) {
         return fat_mkdir(kpath);
     }
-    if (fs_is_ext_path(kpath)) {
+    if (p->jail_root == 0 && fs_is_ext_path(kpath)) {
         return -NOVA_EROFS;
     }
-    if (fs_is_nova_path(kpath)) {
+    if (p->jail_root == 0 && fs_is_nova_path(kpath)) {
         return nova_mkdir(kpath);
     }
     return fs_mkdir(kpath);
@@ -941,6 +956,36 @@ static int32_t do_chmod(uint32_t path, uint32_t mode, uint32_t c) {
     return fs_chmod(kpath, (uint16_t)mode);
 }
 
+static int32_t do_chroot(uint32_t path, uint32_t b, uint32_t c) {
+    char kpath[FS_MAX_PATH + 1u];
+    struct process *p;
+    struct fs_node *n = 0;
+    int32_t plen;
+    int rc;
+    (void)b;
+    (void)c;
+    /* Self-restriction (Phase 10d): anyone may narrow their own
+     * view (never widen: the target resolves inside the current
+     * namespace, so nested jails only shrink). Directories only. */
+    plen = copy_user_path(path, kpath);
+    if (plen < 0) {
+        return plen;
+    }
+    p = sysc_proc();
+    if (p == 0) {
+        return -NOVA_EINVAL;
+    }
+    rc = fs_lookup(kpath, &n);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!n->is_dir) {
+        return -NOVA_ENOTDIR;
+    }
+    p->jail_root = n;
+    return NOVA_ESUCCESS;
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -972,6 +1017,7 @@ static const struct {
     { SYS_RLIMIT, "rlimit", do_rlimit },
     { SYS_CRED, "cred", do_cred },
     { SYS_CHMOD, "chmod", do_chmod },
+    { SYS_CHROOT, "chroot", do_chroot },
 };
 
 void syscall_handler(struct syscall_frame *f) {
@@ -1490,5 +1536,139 @@ int perm_selftest(void) {
     sched_enter(saved);
     kfree(tp);
     serial_puts("PERM-OK\n");
+    return NOVA_ESUCCESS;
+}
+
+/* --- selftest: the jail demonstrably confines (Phase 10d). A
+ * scratch process is rooted into a fresh /jail subtree: global
+ * names vanish (ENOENT, not refused), ".." clamps at the floor,
+ * nested jails shrink further, and only harness privilege (never
+ * a syscall) restores the global view. Prints JAIL-OK. Leaves
+ * /jail behind (no unlink yet; namespaced like /perm). --- */
+int jail_selftest(void) {
+    struct process *tp;
+    struct thread fake;
+    struct thread *saved;
+    struct syscall_frame f;
+    struct fs_node *n = 0;
+    struct fs_node *jail = 0;
+    struct fs_node *sub = 0;
+    tp = process_create();
+    if (tp == 0) {
+        serial_puts("JAIL-FAIL alloc\n");
+        return -1;
+    }
+    if (tp->jail_root != 0) {
+        serial_puts("JAIL-FAIL jail-default\n");
+        return -1;
+    }
+    fake.sp = 0;
+    fake.id = 0xFFFFFFFBu;
+    fake.state = THREAD_RUNNING;
+    fake.stack_base = 0;
+    fake.slice_used = 0;
+    fake.prio = 0;
+    fake.is_user = 0;
+    fake.next = 0;
+    fake.pnext = 0;
+    fake.proc = tp;
+    fake.user_stack = 0;
+    fake.user_shared = 0;
+    f.kflags = 0;
+    f.edi = 0;
+    f.esi = 0;
+    f.ebp = 0;
+    f.esp_ignored = 0;
+    f.ebx = 0;
+    f.edx = 0;
+    f.ecx = 0;
+    f.eax = 0;
+    f.eip = 0;
+    f.cs = 0;
+    f.eflags = 0;
+    f.esp = 0;
+    f.ss = 0;
+    /* Harness privilege for the fixture (seeds are root-owned). */
+    tp->uid = UID_ROOT;
+    saved = sched_current_thread();
+    /* Same masked-current discipline as the other sandbox proofs. */
+    __asm__ volatile("cli" ::: "memory");
+    sched_enter(&fake);
+    if (fs_mkdir("/jail") != 0 || fs_mkdir("/jail/sub") != 0 ||
+        fs_create("/jail/sub/f", &n) != 0) {
+        serial_puts("JAIL-FAIL seed\n");
+        return -1;
+    }
+    if (fs_lookup("/jail", &jail) != 0 || jail == 0 ||
+        fs_lookup("/jail/sub", &sub) != 0 || sub == 0) {
+        serial_puts("JAIL-FAIL fixture\n");
+        return -1;
+    }
+    /* Explicit-root seam (no current needed): scoping + floor. */
+    if (fs_lookup_at(jail, "/sub/f", &n) != 0) {
+        serial_puts("JAIL-FAIL at-open\n");
+        return -1;
+    }
+    if (fs_lookup_at(jail, "/../hello.txt", &n) != -NOVA_ENOENT) {
+        serial_puts("JAIL-FAIL at-escape\n");
+        return -1;
+    }
+    if (fs_lookup_at(jail, "/disk/HELLO.TXT", &n) !=
+        -NOVA_ENOENT) {
+        serial_puts("JAIL-FAIL at-graft\n");
+        return -1;
+    }
+    /* Confine the process (the chroot effect, arranged directly:
+     * SYS_CHROOT dispatch needs a user path, unreachable here). */
+    tp->jail_root = jail;
+    if (fs_lookup("/sub/f", &n) != 0) {
+        serial_puts("JAIL-FAIL in-open\n");
+        return -1;
+    }
+    if (fs_lookup("/", &n) != 0 || n != jail) {
+        serial_puts("JAIL-FAIL in-root\n");
+        return -1;
+    }
+    if (fs_lookup("/../hello.txt", &n) != -NOVA_ENOENT) {
+        serial_puts("JAIL-FAIL in-escape\n");
+        return -1;
+    }
+    if (fs_lookup("/hello.txt", &n) != -NOVA_ENOENT) {
+        serial_puts("JAIL-FAIL in-global\n");
+        return -1;
+    }
+    if (fs_lookup("/disk/HELLO.TXT", &n) != -NOVA_ENOENT) {
+        serial_puts("JAIL-FAIL in-graft\n");
+        return -1;
+    }
+    if (fs_lookup("/bin/hi", &n) != -NOVA_ENOENT) {
+        serial_puts("JAIL-FAIL in-spawn\n");
+        return -1;
+    }
+    /* Nested: deeper floor, smaller world (".." clamps, siblings
+     * vanish). */
+    tp->jail_root = sub;
+    if (fs_lookup("/f", &n) != 0) {
+        serial_puts("JAIL-FAIL nest-open\n");
+        return -1;
+    }
+    if (fs_lookup("/..", &n) != 0 || n != sub) {
+        serial_puts("JAIL-FAIL nest-floor\n");
+        return -1;
+    }
+    if (fs_lookup("/sub", &n) != -NOVA_ENOENT) {
+        serial_puts("JAIL-FAIL nest-scope\n");
+        return -1;
+    }
+    /* Harness-only restore (no syscall unjails, by design). */
+    tp->jail_root = 0;
+    if (fs_lookup("/hello.txt", &n) != 0) {
+        serial_puts("JAIL-FAIL restore\n");
+        return -1;
+    }
+    __asm__ volatile("sti" ::: "memory");
+    sched_enter(saved);
+    kfree(tp);
+    serial_puts("JAIL-OK\n");
     return NOVA_ESUCCESS;
 }

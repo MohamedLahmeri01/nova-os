@@ -71,8 +71,14 @@ int fs_init(void);
  * Prints FS-OK. Nonzero on failure (fatal: panic). */
 int fs_selftest(void);
 
-/* Node lookup: absolute path -> node (0 on success). */
+/* Node lookup: absolute path -> node (0 on success). Jailed
+ * callers resolve under their jail root (".." clamps there,
+ * grafts invisible: they live outside every jail). */
 int fs_lookup(const char *path, struct fs_node **out);
+/* Explicit-root walk (test seam + future mounts): root is "/"
+ * and the ".." floor. Same rules as fs_lookup otherwise. */
+int fs_lookup_at(struct fs_node *root, const char *path,
+                 struct fs_node **out);
 /* Create an empty regular file (parent must exist and be a dir). */
 int fs_create(const char *path, struct fs_node **out);
 /* Create an empty directory (same parent rules as fs_create). */
@@ -103,6 +109,9 @@ int fs_fd_drop(struct process *p, uint32_t fd);
  * current thread: boot context is root). */
 uint32_t fs_current_uid(void);
 uint32_t fs_current_gid(void);
+/* Current jail root (NULL = global namespace). Reads the calling
+ * thread's process like the uid helpers. */
+struct fs_node *fs_current_jail(void);
 
 /* Access check: 0 or -EACCES (-EINVAL for NULL node or unknown
  * need bits). Pure over the node (host-testable). */
@@ -124,5 +133,9 @@ int fs_chmod(const char *path, uint16_t mode);
  * triplets behave, credential dispatch refuses rises. Prints
  * PERM-OK. Nonzero on failure (fatal: panic). */
 int perm_selftest(void);
+/* Deterministic confinement proof (guest selftest): jails hide
+ * the globe, ".." clamps, nesting shrinks. Prints JAIL-OK.
+ * Nonzero on failure (fatal: panic). */
+int jail_selftest(void);
 
 #endif /* NOVA_FS_H */

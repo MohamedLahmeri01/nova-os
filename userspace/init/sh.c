@@ -34,7 +34,7 @@ static const char *sh_arg(const char *line);
 static void sh_denied(const char *what);
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot clear exit");
 }
 
 static void sh_putip(uint32_t ip) {
@@ -248,6 +248,23 @@ static void sh_chmod(const char *line) {
         return;
     }
     nova_puts("chmod ok");
+}
+
+static void sh_chroot(const char *line) {
+    /* chroot <dir>: narrow this session's view inward (never
+     * outward: the target resolves inside the current view). */
+    const char *path = sh_arg(line);
+    int32_t r;
+    if (*path == 0) {
+        nova_puts("usage: chroot <dir>");
+        return;
+    }
+    r = nova_chroot(path);
+    if (r != 0) {
+        nova_puts("chroot failed");
+        return;
+    }
+    nova_puts("chroot ok");
 }
 
 static void sh_echo(const char *line) {
@@ -541,6 +558,9 @@ static void sh_run(const char *line) {
     } else if (nova_strncmp(line, "chmod", 5) == 0 &&
                (line[5] == 0 || line[5] == ' ')) {
         sh_chmod(line);
+    } else if (nova_strncmp(line, "chroot", 6) == 0 &&
+               (line[6] == 0 || line[6] == ' ')) {
+        sh_chroot(line);
     } else if (nova_strcmp(line, "exit") == 0) {
         nova_puts("bye");
         nova_exit(0);
