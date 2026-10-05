@@ -12,6 +12,11 @@
  * enable A20 (BIOS then port 0x92, verified), enter 32-bit protected mode
  * (flat GDT), jump to 0x10000.
  *
+ * Graphics (Phase 12a): VGA mode 13h (320x200x256, byte VRAM at
+ * 0xA0000) is selected right before protected mode (5 bytes; AX is
+ * dead there). Text mode never returns: the serial log is the
+ * console from here on, the screen belongs to the framebuffer.
+ *
  * Memory use: 0x500 boot_info, 0x600+ scratch, 0x5F0 E820 count temp,
  * 0x5000 regions, stack 0x7000, pm stack 0x90000, kernel 0x10000.
  * Errors print one letter via BIOS teletype, then halt. D=disk, A=A20.
@@ -173,6 +178,11 @@ e820_have:
     stosl
     stosl
     stosl
+
+    /* Graphics mode (Phase 12a): INT 10h mode 13h. All real-mode
+     * work is done (disk, A20, E820, boot_info); AX may die. */
+    movw $0x0013, %ax
+    int $0x10
 
     /* Protected mode, flat 4GB segments. */
     cli

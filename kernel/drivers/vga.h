@@ -1,7 +1,11 @@
 /* NOVA OS VGA text driver interface (Phase 8d, console).
+ * SUPERSEDED for display by the Phase 12a framebuffer (mode 13h
+ * makes the text aperture planar, so cell readback cannot pass);
+ * vga_putc remains as serial's inert text mirror. No selftest in
+ * the boot path.
  * 80x25 color text at 0xB8000 (always addressable: real-mode low
  * memory, identity-mapped later). Attribute 0x07 (gray on black).
- * Handles \\r \\n \\b + printable; other bytes print as-is (no
+ * Handles \r \n \b + printable; other bytes print as-is (no
  * escape sequences in v0.1). Cursor via CRT 0x3D4/0x3D5.
  */
 #ifndef NOVA_VGA_H

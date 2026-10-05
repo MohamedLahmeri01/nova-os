@@ -24,7 +24,7 @@
 #include "net/net.h"
 #include "drivers/ata.h"
 #include "drivers/pci.h"
-#include "drivers/vga.h"
+#include "drivers/fb.h"
 #include "drivers/virtio_net.h"
 #include "thread/thread.h"
 #include "process/process.h"
@@ -287,10 +287,15 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (pci_selftest() != 0) {
         nova_panic("pci-selftest-fail");
     }
-    vga_init();
-    if (vga_selftest() != 0) {
-        nova_panic("vga-selftest-fail");
+    /* Framebuffer (Phase 12a): mode 13h is already live (stage1);
+     * prove pixels + palette, then leave the splash up. The VGA
+     * text driver is retired from the boot path (its aperture is
+     * planar in graphics mode, so cell readback cannot pass);
+     * serial stays the console, its text mirror inert. */
+    if (fb_selftest() != 0) {
+        nova_panic("fb-selftest-fail");
     }
+    fb_splash();
     if (virtio_net_init() != 0) {
         nova_panic("virtio-init-fail");
     }

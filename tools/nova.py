@@ -277,7 +277,8 @@ def build_phase1(fault=False):
                                   ("kernel/input/kbd.c", "kbd.o", []),
                                   ("kernel/drivers/ata.c", "ata.o", []),
                                   ("kernel/drivers/pci.c", "pci.o", []),
-                                  ("kernel/drivers/vga.c", "vga.o", []),
+                                   ("kernel/drivers/vga.c", "vga.o", []),
+                                   ("kernel/drivers/fb.c", "fb.o", []),
                                   ("kernel/drivers/virtio_net.c", "virtio.o", []),
                                   ("kernel/fs/ramfs.c", "ramfs.o", []),
                                   ("kernel/fs/file.c", "file.o", []),
@@ -313,7 +314,7 @@ def build_phase1(fault=False):
                "caps.o", "rlimit.o",
                "kbd.o", "init_blob.o", "hi_blob.o", "uname_blob.o", "ramfs.o", "file.o",
               "fat32.o", "ext4.o", "novafs.o", "ata.o", "pci.o",
-              "vga.o", "virtio.o", "net.o", PMM_BACKEND_O],
+               "vga.o", "fb.o", "virtio.o", "net.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -1129,7 +1130,8 @@ def cmd_run_vbox():
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
                                        b"HEAP-OK", b"ATA-OK", b"PCI-OK",
-                                       b"VGA-OK", b"VIRTIO-OK", b"DMA-OK", b"FS-OK",
+                                       b"FB-OK", b"VIRTIO-OK",
+                                       b"DMA-OK", b"FS-OK",
                                        b"FAT-OK", b"EXT-OK", b"NOVA-OK",
                                        b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
                                        b"CAPS-OK", b"RLIM-OK", b"PERM-OK",
@@ -1188,8 +1190,8 @@ def cmd_image():
 
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
-                 b"HEAP-OK", b"ATA-OK", b"PCI-OK", b"VGA-OK", b"VIRTIO-OK",
-                 b"DMA-OK", b"FS-OK", b"FAT-OK", b"EXT-OK",
+                 b"HEAP-OK", b"ATA-OK", b"PCI-OK", b"FB-OK",
+                 b"VIRTIO-OK", b"DMA-OK", b"FS-OK", b"FAT-OK", b"EXT-OK",
                   b"NOVA-OK", b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
                   b"CAPS-OK", b"RLIM-OK", b"PERM-OK", b"JAIL-OK",
                   b"IDT-OK",

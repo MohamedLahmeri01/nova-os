@@ -198,7 +198,11 @@ Capabilities, sandboxing, resource limits, secure handles.
 
 ## Phase 12 — Desktop (explicitly last)
 
-Framebuffer → compositor → window system → toolkit → desktop.
+- [x] 12a framebuffer (mode 13h via stage1, fb driver +
+  palette, splash, FB-OK gate + screenshot), 18/18 (ADR-0041)
+- [ ] 12b compositor (layers + keyboard focus + demo scene)
+- [ ] 12c+ window system, toolkit, desktop shell (mouse driver
+  first; beyond minimal desktop)
 
 ## Non-goals for 0.x
 

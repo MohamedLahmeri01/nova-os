@@ -177,6 +177,11 @@ No releases yet.
   docs/DEBUGGING.md recipe ladder + pattern catalog, `nova dist`
   versioned packaging with sha256 manifest, T18 verification
   (ADR-0040). Phase 11 complete.
+- Phase 12a framebuffer (tested 2026-10-05, `nova test` 18/18):
+  VGA mode 13h from stage1, fb driver + DAC palette, splash,
+  FB-OK gate, screenshot proof; VGA text retired from boot
+  (ADR-0041).
+
 
 
 
