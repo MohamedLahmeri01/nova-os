@@ -23,6 +23,10 @@ typedef int (*nova_write_sector_t)(uint32_t lba, const uint8_t *src);
 int nova_init(nova_read_sector_t rs, nova_write_sector_t ws);
 /* File size + kind without reading data. */
 int nova_stat(const char *path, uint32_t *size_out, int *is_dir_out);
+/* Identity readout (Phase 13c): uid/gid + perm bits (0777) from
+ * the inode. 0 or -errno (EINVAL/ENOENT/EIO). */
+int nova_inode_info(const char *path, uint32_t *uid_out,
+                    uint32_t *gid_out, uint16_t *mode_out);
 /* Whole file into dst (cap max bytes; -ENOSPC when larger). */
 int nova_read_file(const char *path, uint8_t *dst, uint32_t max,
                    uint32_t *len_out);

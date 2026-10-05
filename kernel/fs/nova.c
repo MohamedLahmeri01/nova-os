@@ -836,6 +836,45 @@ int nova_read_file(const char *path, uint8_t *dst, uint32_t max,
     return NOVA_ESUCCESS;
 }
 
+/* Identity readout (Phase 13c): uid/gid + perm bits from the
+ * inode (mode masked to 0777: node.mode holds perms only). */
+int nova_inode_info(const char *path, uint32_t *uid_out,
+                    uint32_t *gid_out, uint16_t *mode_out) {
+    uint32_t dino;
+    const char *last;
+    uint32_t len;
+    uint32_t ei = 0;
+    uint8_t ft = 0;
+    uint32_t size = 0;
+    uint8_t fi[NOVA_INODE_SIZE];
+    int rc;
+    path = strip_nova(path);
+    if (path == 0) {
+        return -NOVA_EINVAL;
+    }
+    rc = split_parent(path, &dino, &last, &len);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = dir_find(dino, last, len, &ei, &ft, &size);
+    if (rc != 0) {
+        return rc;
+    }
+    if (inode_read(ei, fi) != 0) {
+        return -NOVA_EIO;
+    }
+    if (uid_out != 0) {
+        *uid_out = rd16(fi + 2);
+    }
+    if (gid_out != 0) {
+        *gid_out = rd16(fi + 24);
+    }
+    if (mode_out != 0) {
+        *mode_out = (uint16_t)(rd16(fi) & 0777u);
+    }
+    return NOVA_ESUCCESS;
+}
+
 int nova_list_dir(const char *path, uint32_t index, char *name_out) {
     uint32_t dino;
     uint8_t di[NOVA_INODE_SIZE];
@@ -968,17 +1007,23 @@ static void itable_patch(uint8_t *tab, uint32_t ino, const uint8_t *in) {
     wr32(e + 112, crc32c(e, 112));
 }
 
-/* Build a fresh inode image (mode/size/links + single start extent
- * or empty). Checksum filled by itable_patch at stage time... note:
- * callers must crc before pairing (itable_patch does it). */
-static void inode_build(uint8_t *in, uint16_t mode, uint32_t size,
-                        uint16_t links, uint32_t first_blk) {
+/* Build a fresh inode image (mode/uid/gid/size/links + single
+ * start extent or empty). Checksum filled by itable_patch at stage
+ * time... note: callers must crc before pairing (itable_patch does
+ * it). Gid lives at [24:2] (Phase 13c; old images read 0=root). */
+static void inode_build(uint8_t *in, uint16_t mode, uint16_t uid,
+                        uint16_t gid, uint32_t size, uint16_t links,
+                        uint32_t first_blk) {
     for (uint32_t i = 0; i < NOVA_INODE_SIZE; i++) {
         in[i] = 0;
     }
     in[0] = (uint8_t)(mode & 0xFFu);
     in[1] = (uint8_t)(mode >> 8);
+    in[2] = (uint8_t)(uid & 0xFFu);
+    in[3] = (uint8_t)(uid >> 8);
     wr32(in + 4, size);
+    in[24] = (uint8_t)(gid & 0xFFu);
+    in[25] = (uint8_t)(gid >> 8);
     in[26] = (uint8_t)(links & 0xFFu);
     in[27] = (uint8_t)(links >> 8);
     wr32(in + 28, (size + 511u) / 512u);
@@ -1148,7 +1193,8 @@ int nova_create_file(const char *path) {
         if (read_block(itab, g_pool[2]) != 0) {
             return -NOVA_EIO;
         }
-        inode_build(newino, 0x81A4u, 0, 1, 0);
+        inode_build(newino, 0x81A4u, (uint16_t)fs_current_uid(),
+                    (uint16_t)fs_current_gid(), 0, 1, 0);
         itable_patch(g_pool[2], nino + 1u, newino);
         /* Dir entry (regular file; split keeps the scan valid). */
         if (dir_put_slot(g_pool[0], slot, slot_rl, nino + 1u,
@@ -1611,7 +1657,8 @@ int nova_mkdir(const char *path) {
     if (read_block(itab, g_pool[3]) != 0) {
         return -NOVA_EIO;
     }
-    inode_build(newino, 0x41EDu, NOVA_BLOCKS, 2, nblk);
+    inode_build(newino, 0x41EDu, (uint16_t)fs_current_uid(),
+                (uint16_t)fs_current_gid(), NOVA_BLOCKS, 2, nblk);
     itable_patch(g_pool[3], nino + 1u, newino);
     /* Parent slot + parent link count. */
     if (inode_read(dino, di) != 0) {
@@ -1920,6 +1967,28 @@ int nova_selftest(void) {
         serial_puts("NOVA-FAIL note-bytes\n");
         return -1;
     }
+    /* Native identity (Phase 13c): HELLO world-readable root,
+     * NOTE owned and shut (see tools/mknova.py). */
+    {
+        uint32_t uid = 0, gid = 0;
+        uint16_t mode = 0;
+        if (nova_inode_info("/HELLO.TXT", &uid, &gid, &mode) != 0 ||
+            uid != 0 || gid != 0 || mode != 0644) {
+            serial_puts("NOVA-FAIL hello-id\n");
+            return -1;
+        }
+        if (nova_inode_info("/DOCS/NOTE.TXT", &uid, &gid, &mode) !=
+                0 ||
+            uid != 1000u || gid != 100u || mode != 0600) {
+            serial_puts("NOVA-FAIL note-id\n");
+            return -1;
+        }
+        if (nova_inode_info("/NOPE.TXT", &uid, &gid, &mode) !=
+            -NOVA_ENOENT) {
+            serial_puts("NOVA-FAIL id-missing\n");
+            return -1;
+        }
+    }
     {
         int hello = 0, docs = 0;
         for (uint32_t i = 0; i < 8u; i++) {
@@ -1976,6 +2045,17 @@ int nova_selftest(void) {
     if (nova_create_file("/W.TXT") != -NOVA_EEXIST) {
         serial_puts("NOVA-FAIL exist\n");
         return -1;
+    }
+    /* Create stamps the creator (root harness here): the write
+     * path below proves data, this proves identity at birth. */
+    {
+        uint32_t uid = 0, gid = 0;
+        uint16_t mode = 0;
+        if (nova_inode_info("/W.TXT", &uid, &gid, &mode) != 0 ||
+            uid != 0 || gid != 0 || mode != 0644) {
+            serial_puts("NOVA-FAIL create-id\n");
+            return -1;
+        }
     }
     {
         uint32_t i;

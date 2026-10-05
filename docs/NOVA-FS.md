@@ -60,9 +60,11 @@ Inode (128B, ext-compatible numbering from 1, first usable 11):
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 2 | mode (file/dir bits + permission stub) |
-| 2 | 2 | uid stub (0 until identity exists) |
+| 2 | 2 | uid (owner; live since Phase 13c) |
 | 4 | 4 | size low |
 | 8/12/16 | 4+4+4 | atime/ctime/mtime (fixed at mkfs in fixtures) |
+| 20 | 4 | reserved (zero; fsck ignores content, checks nothing) |
+| 24 | 2 | gid (owner group; live since Phase 13c, 0 on old images) |
 | 26 | 2 | link count |
 | 28 | 4 | block count (512B units, fsck cross-check) |
 | 40 | 60 | extent tree root (4 inline extents; see §3) |

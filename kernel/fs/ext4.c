@@ -492,6 +492,45 @@ int ext_stat(const char *path, uint32_t *size_out, int *is_dir_out) {
     return NOVA_ESUCCESS;
 }
 
+/* Identity readout (Phase 13c): uid/gid + perm bits (0777) from
+ * the standard inode slots (mode@0, uid@2, gid@24). 0 or -errno. */
+int ext_inode_info(const char *path, uint32_t *uid_out,
+                   uint32_t *gid_out, uint16_t *mode_out) {
+    uint32_t dino;
+    const char *last;
+    uint32_t len;
+    uint32_t ei = 0;
+    uint8_t ft = 0;
+    uint32_t size = 0;
+    uint8_t fi[EXT_INODE_SIZE];
+    int rc;
+    path = strip_ext(path);
+    if (path == 0) {
+        return -NOVA_EINVAL;
+    }
+    rc = split_parent(path, &dino, &last, &len);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = dir_find(dino, last, len, &ei, &ft, &size);
+    if (rc != 0) {
+        return rc;
+    }
+    if (inode_read(ei, fi) != 0) {
+        return -NOVA_EIO;
+    }
+    if (uid_out != 0) {
+        *uid_out = rd16(fi + 2);
+    }
+    if (gid_out != 0) {
+        *gid_out = rd16(fi + 24);
+    }
+    if (mode_out != 0) {
+        *mode_out = (uint16_t)(rd16(fi) & 0777u);
+    }
+    return NOVA_ESUCCESS;
+}
+
 int ext_read_file(const char *path, uint8_t *dst, uint32_t max,
                   uint32_t *len_out) {
     uint32_t dino;
@@ -662,6 +701,28 @@ int ext_selftest(void) {
         got != 15u || !ext_eq(buf, "ext4 nested ok\n", 15u)) {
         serial_puts("EXT-FAIL note-bytes\n");
         return -1;
+    }
+    /* Native identity (Phase 13c): HELLO is world-readable root,
+     * NOTE is owned and shut (see tools/mkext4.py). */
+    {
+        uint32_t uid = 0, gid = 0;
+        uint16_t mode = 0;
+        if (ext_inode_info("/HELLO.TXT", &uid, &gid, &mode) != 0 ||
+            uid != 0 || gid != 0 || mode != 0644) {
+            serial_puts("EXT-FAIL hello-id\n");
+            return -1;
+        }
+        if (ext_inode_info("/DOCS/NOTE.TXT", &uid, &gid, &mode) !=
+                0 ||
+            uid != 1000u || gid != 100u || mode != 0600) {
+            serial_puts("EXT-FAIL note-id\n");
+            return -1;
+        }
+        if (ext_inode_info("/NOPE.TXT", &uid, &gid, &mode) !=
+            -NOVA_ENOENT) {
+            serial_puts("EXT-FAIL id-missing\n");
+            return -1;
+        }
     }
     {
         int hello = 0, docs = 0;

@@ -119,6 +119,23 @@ int main(int argc, char **argv) {
               got == 15u && memcmp(buf, "ext4 nested ok\n", 15u) == 0,
           "note-bytes", got, 0);
 
+    /* Native identity (Phase 13c): HELLO world-readable root,
+     * NOTE owned and shut (see tools/mkext4.py). */
+    {
+        uint32_t uid = 0, gid = 0;
+        uint16_t mode = 0;
+        check(ext_inode_info("/HELLO.TXT", &uid, &gid, &mode) == 0 &&
+                  uid == 0 && gid == 0 && mode == 0644,
+              "hello-id", uid, mode);
+        check(ext_inode_info("/DOCS/NOTE.TXT", &uid, &gid, &mode) ==
+                      0 &&
+                  uid == 1000u && gid == 100u && mode == 0600,
+              "note-id", uid, mode);
+        check(ext_inode_info("/NOPE.TXT", &uid, &gid, &mode) ==
+                  -NOVA_ENOENT,
+              "id-missing", 0, 0);
+    }
+
     /* Case-sensitive (extra vs FAT): lowercase misses. */
     check(ext_stat("/hello.txt", &size, &is_dir) == -NOVA_ENOENT,
           "case", 0, 0);

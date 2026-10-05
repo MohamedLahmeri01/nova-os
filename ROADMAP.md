@@ -223,8 +223,11 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 13b CPU quotas (per-process tick accounting,
   preemption-point kill, RLIMIT_TICKS + shell, TICK-OK
   gate), 20/20 (ADR-0047)
-- [ ] 13c+ candidates: user sockets + DNS, on-disk chmod,
-  native uid passthrough, IRQ-driven virtio
+- [x] 13c native file identity (ext4/nova uid/gid/mode
+  passthrough, fixture identities, create stamping),
+  20/20 (ADR-0048)
+- [ ] 13d+ candidates: user sockets + DNS, on-disk chmod,
+  IRQ-driven virtio
 
 
 ## Non-goals for 0.x

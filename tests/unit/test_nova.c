@@ -50,6 +50,16 @@ void serial_puthex32(uint32_t v) {
     printf("%08x", v);
 }
 
+/* No scheduler on host: creators stamp root, exactly like guest
+ * boot context (NULL current). nova_create_file stamps via these. */
+uint32_t fs_current_uid(void) {
+    return 0;
+}
+
+uint32_t fs_current_gid(void) {
+    return 0;
+}
+
 /* --- image-backed sector source (mutable copy for injection) --- */
 
 static uint8_t *g_img;
@@ -129,6 +139,23 @@ int main(int argc, char **argv) {
                   0 &&
               got == 15u && memcmp(buf, "nova nested ok\n", 15u) == 0,
           "note-bytes", got, 0);
+
+    /* Native identity (Phase 13c): HELLO world-readable root,
+     * NOTE owned and shut (see tools/mknova.py). */
+    {
+        uint32_t uid = 0, gid = 0;
+        uint16_t mode = 0;
+        check(nova_inode_info("/HELLO.TXT", &uid, &gid, &mode) == 0 &&
+                  uid == 0 && gid == 0 && mode == 0644,
+              "hello-id", uid, mode);
+        check(nova_inode_info("/DOCS/NOTE.TXT", &uid, &gid,
+                              &mode) == 0 &&
+                  uid == 1000u && gid == 100u && mode == 0600,
+              "note-id", uid, mode);
+        check(nova_inode_info("/NOPE.TXT", &uid, &gid, &mode) ==
+                  -NOVA_ENOENT,
+              "id-missing", 0, 0);
+    }
 
     /* Opaque names: lowercase misses. */
     check(nova_stat("/hello.txt", &size, &is_dir) == -NOVA_ENOENT,

@@ -397,6 +397,23 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
             }
             return (rc != 0) ? rc : -NOVA_EIO;
         }
+        /* Native identity (Phase 13c): the opener-owned blank node
+         * takes the on-disk uid/gid/mode (fail-closed: good data
+         * with unreadable identity refuses). */
+        {
+            uint32_t ouid = 0, ogid = 0;
+            uint16_t omode = 0;
+            if (ext_inode_info(kpath, &ouid, &ogid, &omode) != 0) {
+                kfree(n);
+                if (data != 0) {
+                    kfree(data);
+                }
+                return -NOVA_EIO;
+            }
+            n->uid = ouid;
+            n->gid = ogid;
+            n->mode = omode;
+        }
         return open_attach(p, n, data, size, flags, 0);
     }
     /* NOVA-FS graft (Phase 7f-2): writable materialize with stored
@@ -447,6 +464,23 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
                 kfree(data);
             }
             return (rc != 0) ? rc : -NOVA_EIO;
+        }
+        /* Native identity (Phase 13c): newly created files were
+         * just stamped with the creator (create path), so the
+         * inode read agrees; older files carry their own. */
+        {
+            uint32_t ouid = 0, ogid = 0;
+            uint16_t omode = 0;
+            if (nova_inode_info(kpath, &ouid, &ogid, &omode) != 0) {
+                kfree(n);
+                if (data != 0) {
+                    kfree(data);
+                }
+                return -NOVA_EIO;
+            }
+            n->uid = ouid;
+            n->gid = ogid;
+            n->mode = omode;
         }
         return open_attach(p, n, data, size, flags, kpath);
     }

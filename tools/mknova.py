@@ -78,13 +78,15 @@ def superblock(free_blocks):
     return bytes(sb)
 
 
-def inode(mode, size, links, ext_start):
+def inode(mode, size, links, ext_start, uid=0, gid=0):
     ino = bytearray(128)
     struct.pack_into("<H", ino, 0, mode)
+    struct.pack_into("<H", ino, 2, uid)
     struct.pack_into("<I", ino, 4, size)
     struct.pack_into("<I", ino, 8, MTIME)
     struct.pack_into("<I", ino, 12, MTIME)
     struct.pack_into("<I", ino, 16, MTIME)
+    struct.pack_into("<H", ino, 24, gid)
     struct.pack_into("<H", ino, 26, links)
     struct.pack_into("<I", ino, 28, 8)  # 512B units for 1 block
     # extent root: magic, count=1, depth=0, reserved
@@ -134,7 +136,9 @@ def build():
     img[o + 128:o + 256] = inode(0x41ED, BLOCK, 3, 68)  # root
     img[o + 256:o + 384] = inode(0x41ED, BLOCK, 2, 70)  # DOCS
     img[o + 384:o + 512] = inode(0x81A4, len(HELLO), 1, 69)
-    img[o + 512:o + 640] = inode(0x81A4, len(NOTE), 1, 71)
+    # NOTE is owned, not world-readable (passthrough proof).
+    img[o + 512:o + 640] = inode(0x8180, len(NOTE), 1, 71, 1000,
+                                 100)
 
     # --- root dir (block 68): 4 spare slots for create tests ---
     img[68 * BLOCK:69 * BLOCK] = dirblock(

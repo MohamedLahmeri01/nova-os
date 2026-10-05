@@ -34,13 +34,15 @@ def dirent(ino, name, ftype):
     return bytes(e)
 
 
-def inode(mode, size, links, block0):
+def inode(mode, size, links, block0, uid=0, gid=0):
     ino = bytearray(128)
     struct.pack_into("<H", ino, 0, mode)
+    struct.pack_into("<H", ino, 2, uid)
     struct.pack_into("<I", ino, 4, size)
     struct.pack_into("<I", ino, 8, MTIME)
     struct.pack_into("<I", ino, 12, MTIME)
     struct.pack_into("<I", ino, 16, MTIME)
+    struct.pack_into("<H", ino, 24, gid)
     struct.pack_into("<H", ino, 26, links)
     struct.pack_into("<I", ino, 28, 8)  # 512B units for 1 block
     struct.pack_into("<I", ino, 40, block0)
@@ -97,7 +99,9 @@ def build():
     img[o + 128:o + 256] = inode(0x41ED, BLOCK, 3, 5)  # root
     img[o + 256:o + 384] = inode(0x41ED, BLOCK, 2, 7)  # DOCS
     img[o + 384:o + 512] = inode(0x81A4, len(HELLO), 1, 6)
-    img[o + 512:o + 640] = inode(0x81A4, len(NOTE), 1, 8)
+    # NOTE is owned, not world-readable (passthrough proof).
+    img[o + 512:o + 640] = inode(0x8180, len(NOTE), 1, 8, 1000,
+                                 100)
 
     # --- root dir (block 5) ---
     o = 5 * BLOCK

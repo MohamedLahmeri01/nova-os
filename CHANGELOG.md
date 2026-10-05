@@ -201,6 +201,10 @@ No releases yet.
 - Phase 13b CPU quotas (tested 2026-10-05, `nova test` 20/20):
   tick accounting, preemption kill, RLIMIT_TICKS + shell,
   TICK-OK gate (ADR-0047).
+- Phase 13c native identity (tested 2026-10-05, `nova test` 20/20):
+  ext4/nova uid/gid/mode passthrough, fixture identities,
+  create-time stamping (ADR-0048).
+
 
 
 
