@@ -81,6 +81,12 @@ static uint8_t g_mac[6];
 static uint8_t *g_rx_frames[N_RX_BUFS];
 static uint8_t g_tx_frame[4096];
 static int g_ready;
+/* Interrupt state (Phase 14c): BIOS-routed ISA line, IDT vector,
+ * and counted ISR invocations. Zero vector = unrouted (polling
+ * only; the net selftest skips its silence assert). */
+static uint32_t g_irq;
+static uint32_t g_irqvec;
+static volatile uint32_t g_nirq;
 
 /* MMIO accessors (Phase 9b FIX: width-correct volatile accesses —
  * byte-wise reconstruction of DWORD registers fails on VBox (reads
@@ -370,6 +376,32 @@ int virtio_net_init(void) {
     serial_puthex32(mm_r8(g_common + 20u));
     serial_putc('\n');
     mm_exit(k);
+    /* Interrupt routing (Phase 14c): PCI Line/Pin decide. A live
+     * line unmasks its PIC bit (read-modify-write: timer, kbd,
+     * and the dormant mouse mask stay); anything else (no pin,
+     * 0/0xFF line, out of range) leaves polling in charge. */
+    {
+        uint32_t irq4 =
+            pci_read_cfg(dev->bus, dev->slot, dev->func, 0x3Cu);
+        uint32_t line = irq4 & 0xFFu;
+        uint32_t pin = (irq4 >> 8) & 0xFFu;
+        serial_puts("VIRTIO-IRQ line=");
+        serial_putdec32(line);
+        serial_puts(" pin=");
+        serial_putdec32(pin);
+        serial_putc('\n');
+        if (pin != 0 && line != 0 && line != 0xFFu && line < 16u) {
+            g_irq = line;
+            g_irqvec = 32u + line;
+            if (line < 8u) {
+                arch_outb(0x21u, (uint8_t)(arch_inb(0x21u) &
+                                           ~(1u << line)));
+            } else {
+                arch_outb(0xA1u, (uint8_t)(arch_inb(0xA1u) &
+                                           ~(1u << (line - 8u))));
+            }
+        }
+    }
     g_ready = 1;
     notify_q(VQ_RX); /* let the device see posted RX buffers */
     serial_puts("VIRTIO-NOTIFY mul=");
@@ -400,6 +432,35 @@ const uint8_t *virtio_net_mac(void) {
 
 int virtio_net_ready(void) {
     return g_ready;
+}
+
+/* IDT vector for this device (0 when unrouted: irq_handler skips
+ * us without touching the PIC state). */
+uint32_t virtio_net_irqvec(void) {
+    return g_irqvec;
+}
+
+/* Interrupts expected at all (a routed line exists). */
+int virtio_irq_expected(void) {
+    return (g_irqvec != 0) ? 1 : 0;
+}
+
+/* Handled interrupts so far (ISR-acknowledged ones only: shared
+ * lines firing for others don't count). */
+uint32_t virtio_irq_count(void) {
+    return g_nirq;
+}
+
+/* ISR entry (IRQ context, any CR3: the kernel window handles
+ * it). Reading ISR acks level-triggered INTx (deasserts before
+ * the generic path EOIs, so no storm). */
+void virtio_net_irq(void) {
+    uint32_t k = mm_enter();
+    uint32_t isr = mm_r8(g_isr);
+    if (isr != 0) {
+        g_nirq++;
+    }
+    mm_exit(k);
 }
 
 int virtio_net_tx(const uint8_t *frame, uint32_t len) {

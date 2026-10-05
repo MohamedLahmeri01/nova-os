@@ -15,6 +15,7 @@
 #include "gdt.h"
 #include "input/kbd.h"
 #include "input/mouse.h"
+#include "drivers/virtio_net.h"
 #include "time.h"
 
 #if defined(__i386__)
@@ -74,11 +75,12 @@ static void pic_remap(void) {
     arch_outb(PIC_S_DATA, 0x02);
     arch_outb(PIC_M_DATA, 0x01);
     arch_outb(PIC_S_DATA, 0x01);
-    /* Unmask IRQ0 (timer) + IRQ1 (keyboard) only: 0xFC. (0xFD would
-     * mask the timer; 0xFE was timer-only before the keyboard.)
-     * Slave stays fully masked here (0xFF): the mouse driver
-     * unmasks IRQ12 itself after its reset proves the device. */
-    arch_outb(PIC_M_DATA, 0xFCu);
+    /* Unmask IRQ0 (timer) + IRQ1 (keyboard) + IRQ2 (cascade:
+     * slave IRQs can never arrive with the cascade masked --
+     * 0xFC would deafen IRQ8-15 regardless of the slave mask).
+     * Slave stays fully masked here (0xFF): devices unmask their
+     * own lines after proving themselves (mouse, virtio). */
+    arch_outb(PIC_M_DATA, 0xF8u);
     arch_outb(PIC_S_DATA, 0xFFu);
     /* IMCR: force PIC mode so the 8259 INT reaches the CPU directly. */
     arch_outb(0x22u, 0x70u);
@@ -147,6 +149,14 @@ void irq_handler(trap_frame_t *f) {
         kbd_irq();
     } else if (f->vec == 44) {
         mouse_irq();
+    } else {
+        /* Virtio INTx (Phase 14c): vector assigned at init (0 =
+         * unrouted: skip without touching anything). One call per
+         * IRQ is a load + compare on the hot timer path. */
+        uint32_t vv = virtio_net_irqvec();
+        if (vv != 0 && f->vec == (int)vv) {
+            virtio_net_irq();
+        }
     }
     if (f->vec >= 40) {
         arch_outb(PIC_S_CMD, PIC_EOI);
@@ -173,7 +183,7 @@ void irq_init(void) {
         }
     }
     pic_remap();
-    if (arch_inb(PIC_M_DATA) != 0xFCu || arch_inb(PIC_S_DATA) != 0xFFu) {
+    if (arch_inb(PIC_M_DATA) != 0xF8u || arch_inb(PIC_S_DATA) != 0xFFu) {
         nova_panic("pic-mask-fail");
     }
     kbd_init();

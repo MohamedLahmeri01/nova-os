@@ -218,6 +218,10 @@ see docs/RELEASE.md for scope and limitations.
 - Phase 14b DNS (tested 2026-10-06, `nova test` 21/21):
   A-record resolver, codec vectors, opportunistic live
   query, SYS_DNS, shell nslookup (ADR-0051).
+- Phase 14c virtio IRQs (tested 2026-10-06, `nova test` 21/21):
+  PCI routing, ISR field + count, post-traffic assert;
+  fixed slave-PIC cascade masking (ADR-0052).
+
 
 
 

@@ -234,7 +234,9 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 14b DNS resolver (RFC 1035 A subset, codec-gated
   vectors, opportunistic live query, SYS_DNS + shell
   nslookup), 21/21 (ADR-0051)
-- [ ] 14c+ candidates: IRQ-driven virtio
+- [x] 14c virtio interrupts (Line/Pin routing, ISR field +
+  count, silence assert after traffic), 21/21 (ADR-0052)
+- [ ] 14d+ candidates: blocking RX (wait queues), widgets
 
 
 ## Non-goals for 0.x

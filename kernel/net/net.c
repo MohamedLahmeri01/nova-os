@@ -1902,6 +1902,14 @@ int net_selftest(void) {
             serial_puts("NET-FAIL wire-ping\n");
             return -1;
         }
+        /* Interrupt proof (Phase 14c): the completions above
+         * (ARP + ping + DHCP + DNS TX/RX) raised IRQs through our
+         * vector, acked + counted in the ISR. Skipped when the
+         * BIOS left the line unrouted (polling covers). */
+        if (virtio_irq_expected() && virtio_irq_count() == 0) {
+            serial_puts("NET-FAIL irq-silent\n");
+            return -1;
+        }
         serial_puts("NET-WIRE-OK gw=");
         for (uint32_t i = 0; i < 6u; i++) {
             uint32_t b = gw[i];

@@ -71,6 +71,16 @@ int virtio_net_rx(uint8_t *o, uint32_t m) {
     (void)m;
     return -NOVA_EAGAIN;
 }
+
+/* No interrupts on the host (polling only): the silence assert
+ * skips, exactly like an unrouted guest line. */
+int virtio_irq_expected(void) {
+    return 0;
+}
+
+uint32_t virtio_irq_count(void) {
+    return 0;
+}
 /* Independent checksum oracle (different loop shape). */
 static uint16_t oracle_ck(const uint8_t *d, uint32_t n) {
     uint32_t s = 0;
