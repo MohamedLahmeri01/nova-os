@@ -1,0 +1,10 @@
+# EXT4 mutant manifest (base: build/ext4.raw from tools/mkext4.py).
+# Format: probe offset hex expect  # comment (see fat32/MUTANTS.txt
+# for the contract; stat/read probe /HELLO.TXT).
+init 1080 00 -5  # sb-magic: 0xEF53 broken -> EIO
+init 1112 40 -5  # sb-inodesize: 64 != 128 -> EIO
+stat 20484 0000 -5  # dir-reclen0: zero progress -> refuse EIO
+stat 20484 00FF -5  # dir-reclen-huge: past block end -> refuse EIO
+read 16808 5A000000 -5  # ino-block-oob: block 90 past image -> EIO
+read 16772 30110100 -28  # ino-size-huge: 70000B claim, 512B buf -> ENOSPC
+stat 16776 01 0  # benign: mtime touch still stats (discrimination)
