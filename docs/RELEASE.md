@@ -37,3 +37,17 @@ compositor, text, windows, menu bar, dormant mouse), file
 lifecycle, CPU quotas, native identity, on-disk chmod.
 Not in 0.1.0: user sockets/DNS, widgets, mouse motion (needs
 a talking 8042), IRQ-driven virtio, secure boot, IOMMU.
+
+## 0.2.0 scope (2026-10-06)
+
+Phases 14a-16-i on top of 0.1.0: user-space UDP sockets +
+shell uloop (14a), DNS + nslookup (14b), virtio interrupts
+fielded + counted with the PIC cascade fix (14c), widget
+toolkit + about dialog (14d), click routing through
+windows, widgets, and user space (14e-i..iii, SYS_WINCLICK
+34), sleep/wakeup + blocking sockets + wire demux + single-
+ingress RX + tick pump (15-i..v), blocking keyboard (16-i).
+Suite 21/21 (was 20/20). ABI v1 + 1 call; GETKEY parks.
+Not in 0.2.0: mouse motion (still dormant here), device-ISR
+RX drain (reverted, see ADR-0061), secure boot, IOMMU, live
+peer traffic for wire-to-socket (proven without a peer).

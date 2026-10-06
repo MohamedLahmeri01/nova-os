@@ -4,8 +4,32 @@ All notable changes will be documented here. Format follows Keep a Changelog.
 
 ## [Unreleased]
 
+## 0.2.0 - 2026-10-06 (second release)
+
+Input, blocking I/O, and a living network stack: user-space
+UDP sockets + DNS (14a-b), widgets + clicks (14d-e),
+sleep/wakeup + blocking sockets + wire RX + tick pump
+(15-i..v), blocking keyboard (16-i). Suite 21/21 on the
+constrained VM. ABI v1 grows one call (SYS_WINCLICK 34);
+GETKEY now parks instead of polling (documented).
+Known limitations (carried from 0.1.0, still true): mouse
+motion needs a talking 8042 (dormant here), no IRQ-driven
+virtio drain (built, reverted: nesting hazard, see
+ADR-0061), secure boot and IOMMU deferred; wire-to-socket
+delivery has no live peer traffic yet (pump + demux proven,
+peer pending).
+
 ### Added
 
+- Phase 14a sockets (tested 2026-10-06, `nova test` 21/21):
+  loopback-first UDP sockets, multiplexed SYS_SOCK, shell
+  uloop, SOCK-OK gate, T21 discipline fuzz (ADR-0050).
+- Phase 14b DNS (tested 2026-10-06, `nova test` 21/21):
+  A-record resolver, codec vectors, opportunistic live
+  query, SYS_DNS, shell nslookup (ADR-0051).
+- Phase 14c virtio IRQs (tested 2026-10-06, `nova test` 21/21):
+  PCI routing, ISR field + count, post-traffic assert;
+  fixed slave-PIC cascade masking (ADR-0052).
 - Phase 14d widget toolkit: `wid_label`/`wid_button` over
   `comp_geom`, guest `wid_selftest` (`WID-OK` gate), teal
   about dialog in compositor demo, T19 coverage (ADR-0053).
@@ -259,15 +283,6 @@ see docs/RELEASE.md for scope and limitations.
 - Phase 13d on-disk chmod (tested 2026-10-05, `nova test` 20/20):
   journaled NOVA-FS mode writes, fs_chmod routing, round-trip
   proofs (ADR-0049).
-- Phase 14a sockets (tested 2026-10-06, `nova test` 21/21):
-  loopback-first UDP sockets, multiplexed SYS_SOCK, shell
-  uloop, SOCK-OK gate, T21 discipline fuzz (ADR-0050).
-- Phase 14b DNS (tested 2026-10-06, `nova test` 21/21):
-  A-record resolver, codec vectors, opportunistic live
-  query, SYS_DNS, shell nslookup (ADR-0051).
-- Phase 14c virtio IRQs (tested 2026-10-06, `nova test` 21/21):
-  PCI routing, ISR field + count, post-traffic assert;
-  fixed slave-PIC cascade masking (ADR-0052).
 
 
 

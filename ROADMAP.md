@@ -263,7 +263,9 @@ Capabilities, sandboxing, resource limits, secure handles.
   reverted), 21/21 (ADR-0061)
 - [x] 16-i blocking getkey (parked shell, waiter discipline
   fixed in kbd + sock, KBDBLK-OK gate), 21/21 (ADR-0062)
-- [ ] Next: 0.2.0 release pass (version bump, dist, notes)
+- [x] 0.2.0 release (version bump, gates green, dist,
+  changelog + notes, tag v0.2.0)
+- [ ] Next: disk sleep callers (last polling family)
 
 
 ## Non-goals for 0.x
