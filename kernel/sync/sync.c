@@ -76,12 +76,25 @@ void spin_unlock_irqrestore(struct spinlock *l, uint32_t was_on) {
 
 static volatile uint32_t sy_n;
 static volatile uint32_t sy_done;
+static volatile uint32_t sy_was0;
+static volatile uint32_t sy_was1;
 static struct spinlock sy_lock;
 
 static void sync_worker(void *arg) {
     uint32_t was = 0;
+    uint32_t id = (uint32_t)(uintptr_t)arg;
     for (uint32_t i = 0; i < 100000u; i++) {
         spin_lock_irqsave(&sy_lock, (uintptr_t)arg, &was);
+        if (i == 0) {
+            /* Threads always run IF=1 (IRQs return to thread
+             * context enabled): the save end is asserted, not
+             * assumed. First iteration only, slotted by id. */
+            if (id == 1u) {
+                sy_was0 = was;
+            } else {
+                sy_was1 = was;
+            }
+        }
         sy_n++;
         spin_unlock_irqrestore(&sy_lock, was);
     }
@@ -96,6 +109,8 @@ int sync_contention_selftest(void) {
     uint32_t t0;
     sy_n = 0;
     sy_done = 0;
+    sy_was0 = 0;
+    sy_was1 = 0;
     spin_init(&sy_lock, "sy-test");
     /* Scheduler + timer live (runs after the sleep selftest);
      * g_init_process survives it. Owner tokens are distinct. */
@@ -114,9 +129,14 @@ int sync_contention_selftest(void) {
         __asm__ volatile("hlt");
     }
     /* Exactly 200k: no lost update survived the lock (a single
-     * torn increment would show, deterministically). */
+     * torn increment would show, deterministically). IF was on
+     * at every park (irqsave contract, both workers). */
     if (sy_n != 200000u) {
         serial_puts("SYNC-FAIL count\n");
+        return -1;
+    }
+    if (sy_was0 != 0x200u || sy_was1 != 0x200u) {
+        serial_puts("SYNC-FAIL ifsave\n");
         return -1;
     }
     serial_puts("SYNC-OK\n");
