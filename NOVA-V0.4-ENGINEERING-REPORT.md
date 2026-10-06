@@ -6,7 +6,7 @@ Date: 2026-10-06. Head at write time: see log. No release tag
 ## 1. Baseline
 
 ```text
-commit:    6173e88 (v0.3 head, clean) → work ends HEAD (see log)
+commit:    1023ffa (post-v0.3 + v0.2.0 audit, clean) → work ends HEAD (see log)
 compiler:  gcc mingw-w64 15.2.0 (-m32 freestanding; tests -O2/-m32)
 host:      Ryzen 5 5500 / Win11 / Python 3.11.2 / VBox 7.2.6
 VM:        2 CPU / 1024 MB, NAT+virtio, COM1 serial
