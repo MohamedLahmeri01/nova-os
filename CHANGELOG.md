@@ -14,6 +14,10 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   focus + repaint) for mouse press edges and synthesized
   clicks, `CLICK-OK` gate, demo clicks the dialog's OK
   button every boot (ADR-0054). Suite 21/21.
+- Phase 14e-ii press states: `wid_hit` edge-matched to
+  `comp_hit`, `wid_button_down` pressed look over a shared
+  painter, `PRESS-OK` gate, demo renders the OK button down
+  on the click frame (ADR-0055). Suite 21/21.
 ## 0.1.0 - 2026-10-05 (first release)
 
 All Phase 0-13d work, suite 20/20 on the constrained VM.

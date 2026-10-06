@@ -262,18 +262,23 @@ static void demo_console_text(void) {
     fb_text(16, 56, "COMP-OK", FB_WHITE);
 }
 
-/* About dialog content via the widget API (dogfooding toolkit). */
-static void demo_dialog(void) {
+/* About dialog content via the widget API (dogfooding toolkit).
+ * Pressed variant renders the OK button down (click feedback). */
+static void demo_dialog(int down) {
     wid_label(3, 8, 20, "NOVA OS", FB_WHITE);
     wid_label(3, 8, 30, "ABI v1", FB_WHITE);
     wid_label(3, 8, 40, "21/21 OK", FB_WHITE);
-    wid_button(3, 8, 50, 60, 20, "OK");
+    if (down) {
+        wid_button_down(3, 8, 50, 60, 20, "OK");
+    } else {
+        wid_button(3, 8, 50, 60, 20, "OK");
+    }
 }
 
-static void demo_frame(void) {
+static void demo_frame(int down) {
     comp_present();
     demo_console_text();
-    demo_dialog();
+    demo_dialog(down);
 }
 
 void comp_demo(void) {
@@ -295,29 +300,30 @@ void comp_demo(void) {
     comp_title(3, "about");
     comp_focus(0);
     demo_mark(0);
-    demo_frame();
+    demo_frame(0);
     demo_wait(50);
     comp_focus_next();
     demo_mark(comp_focused());
-    demo_frame();
+    demo_frame(0);
     demo_wait(50);
     comp_focus_next();
     demo_mark(comp_focused());
-    demo_frame();
+    demo_frame(0);
     demo_wait(50);
     comp_focus_next();
     demo_mark(comp_focused());
-    demo_frame();
+    demo_frame(0);
     demo_wait(50);
     /* Synthesized click on the dialog's OK button (203,165,60,20
      * -> center 233,175): proves the shared click path every
-     * boot, hardware or not. Dialog ends focused. */
+     * boot, hardware or not. Pressed frame shows the landing;
+     * release returns to console. */
     comp_click(233, 175);
-    demo_frame();
+    demo_frame(1);
     demo_wait(50);
     comp_focus(0);
     demo_mark(comp_focused());
-    demo_frame();
+    demo_frame(0);
 }
 
 int comp_selftest(void) {

@@ -241,8 +241,10 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 14e-i click routing (shared comp_click for press
   edges + synthesized clicks, CLICK-OK gate), 21/21
   (ADR-0054)
-- [ ] 14e+ candidates: widget hit/press states
-  (button bounds + down rendering), input events
+- [x] 14e-ii press states (wid_hit edges, pressed-look
+  renderer, PRESS-OK gate + demo click feedback), 21/21
+  (ADR-0055)
+- [ ] 14e+ candidates: user-space click surface
   (SYS_CLICK/shell click), blocking RX (wait queues)
 
 
