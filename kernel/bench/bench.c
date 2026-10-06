@@ -129,7 +129,6 @@ int bench_selftest(void) {
         static const uint8_t pl[8] = { 'p', 'e', 'r', 'f',
                                        '0', '1', '2', '3' };
         static uint8_t rx[64];
-        uint32_t got = 0;
         int a = sock_open(5200);
         int b = sock_open(5201);
         if (a < 0 || b < 0) {
