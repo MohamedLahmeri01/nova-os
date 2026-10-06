@@ -29,6 +29,8 @@
 
 #define SCHED_LEVELS 32u
 
+extern volatile uint32_t g_ticks;
+
 volatile int sched_need_resched;
 
 static struct thread *g_current;
@@ -166,6 +168,89 @@ void sched_enter(struct thread *t) {
     t->state = THREAD_RUNNING;
 }
 
+/* --- sleep/wakeup (blocking primitives) ---
+ * Blocked threads leave the runqueue and link on the sleep list
+ * (their `next` field, sleeper-owned while BLOCKED). Expiry runs
+ * in sched_tick (IRQ context, stores only). Wakeup is a no-op on
+ * anything not BLOCKED (safe against wake-after-gone). */
+
+static struct thread *g_sleep_head;
+
+static void sleep_unlink(struct thread *t) {
+    struct thread **link = &g_sleep_head;
+    while (*link != 0 && *link != t) {
+        link = &(*link)->next;
+    }
+    if (*link != 0) {
+        *link = t->next;
+    }
+    t->next = 0;
+}
+
+static void sleep_wake(struct thread *t, int timedout) {
+    struct thread *cur;
+    sleep_unlink(t);
+    t->state = THREAD_READY;
+    t->sleep_timed = 0;
+    t->sleep_timedout = timedout;
+    sched_add(t);
+    /* Strict priority: a higher-prio wakeup preempts at the next
+     * IRQ return (same mechanism as slice expiry). */
+    if (g_started) {
+        cur = g_current;
+        if (cur == 0 || t->prio > cur->prio) {
+            sched_need_resched = 1;
+        }
+    }
+}
+
+void sched_wakeup(struct thread *t) {
+    __asm__ volatile("cli" ::: "memory");
+    if (t != 0 && t->state == THREAD_BLOCKED) {
+        sleep_wake(t, 0);
+    }
+    __asm__ volatile("sti" ::: "memory");
+}
+
+static void sleep_enter(uint32_t deadline, int timed) {
+    struct thread *cur;
+    struct thread *next;
+    __asm__ volatile("cli" ::: "memory");
+    cur = g_current;
+    if (cur == 0) {
+        nova_panic("sleep-no-thread");
+    }
+    cur->state = THREAD_BLOCKED;
+    cur->sleep_deadline = deadline;
+    cur->sleep_timed = timed;
+    cur->sleep_timedout = 0;
+    sched_remove(cur);
+    /* Sleep list push-front (`next` was cleared by remove). */
+    cur->next = g_sleep_head;
+    g_sleep_head = cur;
+    next = sched_pick(cur);
+    if (next == 0 || next == cur) {
+        nova_panic("sched-empty");
+    }
+    sched_switch_to(cur, next);
+    __asm__ volatile("sti" ::: "memory");
+}
+
+void sched_sleep(void) {
+    sleep_enter(0, 0);
+}
+
+int sched_sleep_until(uint32_t deadline) {
+    struct thread *cur;
+    sleep_enter(deadline, 1);
+    /* Resumed here (same thread): the waker set the verdict. */
+    cur = g_current;
+    if (cur == 0) {
+        nova_panic("sleep-no-thread");
+    }
+    return cur->sleep_timedout;
+}
+
 /* Adopt the boot stack as thread 0 (no PMM stack, never exits). */
 struct thread *sched_adopt_boot(void) {
     struct thread *t;
@@ -184,6 +269,9 @@ struct thread *sched_adopt_boot(void) {
     t->pnext = 0;
     t->user_stack = 0;
     t->user_shared = 0;
+    t->sleep_deadline = 0;
+    t->sleep_timed = 0;
+    t->sleep_timedout = 0;
     if (g_init_process == 0) {
         g_init_process = process_create();
     }
@@ -207,12 +295,25 @@ struct thread *sched_current_thread(void) {
 
 void sched_tick(void) {
     struct thread *cur;
+    struct thread *t;
+    struct thread *nx;
     if (!g_started) {
         return;
     }
     cur = g_current;
     if (cur == 0) {
         return;
+    }
+    /* Sleep expiry (IRQ context, stores only): wake timed
+     * sleepers at/past deadline (signed compare: wrap-safe). */
+    t = g_sleep_head;
+    while (t != 0) {
+        nx = t->next;
+        if (t->sleep_timed &&
+            (int32_t)(g_ticks - t->sleep_deadline) >= 0) {
+            sleep_wake(t, 1);
+        }
+        t = nx;
     }
     /* CPU accounting (Phase 13b): whoever runs burns their
      * process's ticks (kernel threads included; only user
@@ -290,8 +391,6 @@ static volatile uint32_t st_start[3];
 static volatile uint32_t st_end[3];
 
 static void sched_prio_test(void);
-
-extern volatile uint32_t g_ticks;
 
 static void worker_long(void *arg) {
     (void)arg;
@@ -472,5 +571,113 @@ int sched_ticklimit_selftest(void) {
     addrspace_destroy(as);
     kfree(p);
     serial_puts("TICK-OK\n");
+    return 0;
+}
+
+/* --- sleep/wakeup proof: early wake x2 + timeout, deterministic ---
+ * Worker (prio 16, above boot 0) parks with a far deadline twice
+ * (main wakes it early) then sleeps 30 ticks with no waker
+ * (expiry must fire). Return codes are the verdicts (0 woken,
+ * 1 expired); the timeout window (30..500) proves promptness
+ * without racing the tick granularity. */
+
+static volatile int sl_done;
+static volatile int sl_phase;
+static volatile uint32_t sl_entry;
+static volatile uint32_t sl_wake;
+static volatile int sl_rc0;
+static volatile int sl_rc1;
+static volatile int sl_rc2;
+static struct thread *sl_worker;
+
+static void sleep_worker(void *arg) {
+    (void)arg;
+    sl_entry = g_ticks;
+    sl_rc0 = sched_sleep_until(sl_entry + 500u); /* woken early */
+    sl_wake = g_ticks;
+    sl_phase = 1;
+    sl_rc1 = sched_sleep_until(g_ticks + 500u); /* woken early */
+    sl_phase = 2;
+    sl_entry = g_ticks;
+    sl_rc2 = sched_sleep_until(sl_entry + 30u); /* expires */
+    sl_wake = g_ticks;
+    sl_phase = 3;
+    sl_done = 1;
+    thread_exit(0);
+}
+
+static int sleep_wait_blocked(uint32_t t0) {
+    while (sl_worker->state != THREAD_BLOCKED) {
+        if (g_ticks - t0 > 2000u) {
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    return 0;
+}
+
+int sched_sleep_selftest(void) {
+    uint32_t t0;
+    sl_done = 0;
+    sl_phase = 0;
+    sl_entry = 0;
+    sl_wake = 0;
+    sl_rc0 = -1;
+    sl_rc1 = -1;
+    sl_rc2 = -1;
+    /* Scheduler + timer already live (runs after sched_selftest);
+     * g_init_process survives it. */
+    sl_worker = thread_create(g_init_process, sleep_worker, 0, 16u);
+    if (sl_worker == 0) {
+        serial_puts("SLEEP-FAIL spawn\n");
+        return -1;
+    }
+    sched_yield(); /* worker runs to its first sleep */
+    /* Phase 0: blocked with a far deadline, woken early. */
+    t0 = g_ticks;
+    if (sleep_wait_blocked(t0) != 0 || sl_phase != 0) {
+        serial_puts("SLEEP-FAIL park0\n");
+        return -1;
+    }
+    sched_wakeup(sl_worker);
+    /* Phase 1: blocked again, woken early again. */
+    t0 = g_ticks;
+    while (sl_phase != 1) {
+        if (g_ticks - t0 > 2000u) {
+            serial_puts("SLEEP-FAIL phase1\n");
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    t0 = g_ticks;
+    if (sleep_wait_blocked(t0) != 0) {
+        serial_puts("SLEEP-FAIL park1\n");
+        return -1;
+    }
+    sched_wakeup(sl_worker);
+    /* Phase 2: no waker; the 30-tick deadline must expire. */
+    t0 = g_ticks;
+    while (!sl_done) {
+        if (g_ticks - t0 > 2000u) {
+            serial_puts("SLEEP-FAIL expire\n");
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    /* Early wakes return 0 (not expired); the timeout returns 1,
+     * inside its window (not early, not lost). */
+    if (sl_rc0 != 0 || sl_rc1 != 0) {
+        serial_puts("SLEEP-FAIL early\n");
+        return -1;
+    }
+    if (sl_rc2 != 1) {
+        serial_puts("SLEEP-FAIL timeout\n");
+        return -1;
+    }
+    if (sl_wake - sl_entry < 30u || sl_wake - sl_entry > 500u) {
+        serial_puts("SLEEP-FAIL window\n");
+        return -1;
+    }
+    serial_puts("SLEEP-OK\n");
     return 0;
 }

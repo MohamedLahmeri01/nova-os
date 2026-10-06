@@ -90,6 +90,9 @@ struct thread *thread_create(struct process *p, thread_fn_t fn, void *arg,
     t->proc = p;
     t->user_stack = 0;
     t->user_shared = 0;
+    t->sleep_deadline = 0;
+    t->sleep_timed = 0;
+    t->sleep_timedout = 0;
     process_attach(p, t);
     sched_add(t);
     g_thread_count++;
@@ -151,6 +154,9 @@ struct thread *thread_create_user(struct process *p, uint32_t eip,
     t->proc = p;
     t->user_stack = ustack_base;
     t->user_shared = shared_phys;
+    t->sleep_deadline = 0;
+    t->sleep_timed = 0;
+    t->sleep_timedout = 0;
     process_attach(p, t);
     sched_add(t);
     g_thread_count++;

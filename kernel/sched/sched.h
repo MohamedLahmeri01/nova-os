@@ -31,9 +31,24 @@ void sched_tick(void);
 void sched_do_switch(void);
 void sched_yield(void);
 void sched_switch_to(struct thread *cur, struct thread *next);
+/* Sleep until woken (no timeout). The sleeper leaves the
+ * runqueue; at least one other runnable thread must exist
+ * (sleeping last panics like sched-empty). IRQ-safe to enter
+ * from thread context only (not from an IRQ handler). */
+void sched_sleep(void);
+/* Sleep until woken or absolute tick deadline (wrap-safe).
+ * Returns 0 woken, 1 expired. Same runnable-other precondition. */
+int sched_sleep_until(uint32_t deadline);
+/* Wake a blocked thread (no-op otherwise: safe against
+ * wake-after-gone races). IRQ-safe (stores only); a woken
+ * higher-prio thread preempts at the next IRQ return. */
+void sched_wakeup(struct thread *t);
 int sched_selftest(void);
 /* CPU quota proof: a spinning user thread dies on schedule.
  * Prints TICK-OK. Nonzero on failure (fatal: panic). */
 int sched_ticklimit_selftest(void);
+/* Sleep/wakeup proof: early wake x2 + timeout expiry.
+ * Prints SLEEP-OK. Nonzero on failure (fatal: panic). */
+int sched_sleep_selftest(void);
 
 #endif /* NOVA_SCHED_H */

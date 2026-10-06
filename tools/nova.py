@@ -1238,6 +1238,7 @@ def cmd_run_vbox():
                                        b"CAPS-OK", b"RLIM-OK", b"PERM-OK",
                                        b"JAIL-OK", b"SDK-OK", b"WIN-OK",
                                        b"TICK-OK", b"SOCK-OK", b"IDT-OK",
+                                       b"SLEEP-OK",
                                        b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
@@ -1298,7 +1299,8 @@ PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                   b"NOVA-OK", b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
                   b"CAPS-OK", b"RLIM-OK", b"PERM-OK", b"JAIL-OK",
                   b"WIN-OK", b"TICK-OK", b"SOCK-OK", b"IDT-OK",
-                 b"TIMER-OK", b"SCHED-OK",
+                  b"SLEEP-OK",
+                  b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]
 # NOTE: no HI-OK/SDK-OK here: the fault image panics synchronously

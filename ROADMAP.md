@@ -246,7 +246,11 @@ Capabilities, sandboxing, resource limits, secure handles.
   (ADR-0055)
 - [x] 14e-iii user-space click (SYS_WINCLICK 34 + shell
   click, dispatch vectors under WIN-OK), 21/21 (ADR-0056)
-- [ ] Next: blocking RX (wait queues)
+- [x] 15-i sleep/wakeup primitives (THREAD_BLOCKED, timer
+  expiry, early-wake + timeout proof, SLEEP-OK gate),
+  21/21 (ADR-0057)
+- [ ] Next: blocking sock_recv (sleep/wakeup + deadline,
+  loopback delivery wakes)
 
 
 ## Non-goals for 0.x

@@ -392,6 +392,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
             nova_panic("sched-selftest-fail");
         }
     }
+    /* Sleep/wakeup primitives (scheduler + timer live now). */
+    if (sched_sleep_selftest() != 0) {
+        nova_panic("sleep-selftest-fail");
+    }
     {
         int user_rc = user_selftest();
         if (user_rc != 0) {

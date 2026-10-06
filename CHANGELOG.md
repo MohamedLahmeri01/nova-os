@@ -21,6 +21,10 @@ All notable changes will be documented here. Format follows Keep a Changelog.
 - Phase 14e-iii user-space click: `SYS_WINCLICK` 34 +
   `nova_winclick` + shell `click X Y`, dispatch vectors in
   `win_selftest` (ADR-0056). Suite 21/21.
+- Phase 15-i sleep/wakeup: `THREAD_BLOCKED`, timer-driven
+  expiry, `sched_sleep`/`sched_sleep_until`/`sched_wakeup`,
+  early-wake + timeout proof (`SLEEP-OK` gate, no callers
+  yet) (ADR-0057). Suite 21/21.
 ## 0.1.0 - 2026-10-05 (first release)
 
 All Phase 0-13d work, suite 20/20 on the constrained VM.

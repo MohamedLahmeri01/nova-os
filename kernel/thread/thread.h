@@ -13,6 +13,7 @@
 #define THREAD_READY 0
 #define THREAD_RUNNING 1
 #define THREAD_ZOMBIE 2
+#define THREAD_BLOCKED 3
 
 #define THREAD_STACK_FRAMES 2u
 #define THREAD_STACK_SIZE (THREAD_STACK_FRAMES * 4096u)
@@ -31,9 +32,16 @@ struct thread {
     uint32_t slice_used;
     uint8_t prio; /* 0..31, higher preempts (strict); RR within level */
     uint8_t is_user; /* scheduled user thread (trampoline entry) */
-    struct thread *next; /* runqueue link (policy-owned) */
+    struct thread *next; /* runqueue link (policy-owned);
+                            * sleep-list link while BLOCKED
+                            * (sleeper-owned: off runqueue) */
     struct thread *pnext; /* process member link (process-owned) */
     struct process *proc;
+    /* Sleep state (scheduler-owned): absolute deadline + flags.
+     * sleep_timed = 0 means no deadline (sleeps till woken). */
+    uint32_t sleep_deadline;
+    int sleep_timed;
+    int sleep_timedout;
     /* User-thread owned frames (freed on 0x81 exit): */
     uint32_t user_stack;
     uint32_t user_shared;
