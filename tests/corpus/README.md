@@ -1,10 +1,22 @@
-# tests/corpus/ — checked-in fuzz seeds (Phase 0.3-F)
+# tests/corpus/ — checked-in fuzz seeds (Phase 0.3-F wire,
+Phase 0.4 FS/net/shell)
 
-Wire-protocol seeds for the DHCP validator and DNS codec,
-replayed by T14 (`test_net.c` corpus block, corpus dir from
-argv[1]). Built byte-for-byte by `tools/mkcorpus.py` from the
-same constructions as the inline mutants (delete nothing on
-drift — regenerate with the script and re-verify).
+Layout (one README per directory with origins + expectations):
+
+- `dhcp/`, `dns/` — wire seeds, replayed by T14 (argv[1]).
+  (Moved here in v0.4; previously flat. Manifest lives in
+  the replay table in `test_net.c`.)
+- `udp/` — wire-shape seeds, replayed by T21 (argv[1]).
+- `fat32/`, `ext4/`, `nova_fs/` — `MUTANTS.txt` manifests
+  (offset/hex/expect), replayed by T10/T11/T12 at driver
+  level and (nova_fs) by T13 at fsck-tool level.
+- `shell/` — one command line per file, replayed by T23.
+
+Built byte-for-byte by `tools/mkcorpus.py` (wire + shell)
+from the same constructions as the inline mutants (delete
+nothing on drift — regenerate with the script and
+re-verify). FS manifests are hand-designed against driver
+checks (offsets from `tools/mk{fat,ext4,nova}.py`).
 
 ## DHCP (`dhcp_parse_msg`, XID 0x12345678, chaddr 08:00:27:3C:A1:A1)
 
