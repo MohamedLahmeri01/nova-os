@@ -1,6 +1,8 @@
-# ADR-0002: Kernel language — Rust-first with isolated C/asm
+# ADR-0002: Kernel language — Rust-first with isolated C/asm (SUPERSEDED by ADR-0065)
 
-Status: accepted (Phase 0). Date: 2026-09-29.
+Status: superseded 2026-10-06 (was: accepted). Decision history preserved below.
+
+Original status line (historical): accepted (Phase 0). Date: 2026-09-29.
 
 ## Context
 
