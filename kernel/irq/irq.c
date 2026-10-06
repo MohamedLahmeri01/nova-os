@@ -154,7 +154,7 @@ void irq_handler(trap_frame_t *f) {
          * unrouted: skip without touching anything). One call per
          * IRQ is a load + compare on the hot timer path. */
         uint32_t vv = virtio_net_irqvec();
-        if (vv != 0 && f->vec == (int)vv) {
+        if (vv != 0 && f->vec == vv) {
             virtio_net_irq();
         }
     }

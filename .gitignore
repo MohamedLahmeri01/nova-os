@@ -10,6 +10,8 @@ images/*.img
 *.a
 *.elf
 *.bin
+# ... except the checked-in fuzz corpus (replayed by T14)
+!tests/corpus/*.bin
 *.iso
 
 # Rust

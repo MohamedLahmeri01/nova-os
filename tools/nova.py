@@ -31,8 +31,9 @@ CONSTRAINED_CPUS = 2
 CONSTRAINED_RAM_MB = 1024
 VM_BASEFOLDER = os.path.join(ROOT, "vms")
 
-REQUIRED_DIRS = ["kernel", "boot", "userspace", "libs", "fs", "net",
-                 "drivers", "tools", "tests", "docs", "docs/adr", "ci"]
+REQUIRED_DIRS = ["kernel", "boot", "userspace", "tools", "tests",
+                 "tests/integration", "docs", "docs/adr", "ci", "sdk",
+                 "benchmarks"]
 REQUIRED_DOCS = ["docs/ARCHITECTURE.md", "docs/ENVIRONMENT.md",
                  "docs/ABI-STRATEGY.md", "docs/THREAT-MODEL.md",
                  "docs/TESTING-STRATEGY.md", "docs/RESOURCE-BUDGET.md",
@@ -840,7 +841,9 @@ def cmd_test():
         print(f"[fail] T14 net test compile:\n{(r.stderr or '')[:1500]}")
         failed += 1
     else:
-        r = run([net_exe], timeout=120)
+        # Corpus dir absolute (cwd-independent replay).
+        r = run([net_exe, os.path.join(ROOT, "tests", "corpus")],
+                timeout=120)
         print((r.stdout or "") + (r.stderr or ""))
         if r.returncode == 0:
             print("[pass] T14 host net test"); passed += 1
@@ -1410,11 +1413,102 @@ def cmd_clean():
     return 0
 
 
+def cmd_lint():
+    """Static checks, no VM needed (Phase 0.3-F).
+    1. gcc -fsyntax-only -Wall -Wextra over every kernel/boot/
+       userspace C file (freestanding flags): ERRORS fail; warnings
+       are counted and reported (one triaged pre-existing:
+       jail_selftest's defensive zeroed frame; three more were
+       fixed to reach this baseline: virtio hex sign-change,
+       irq vector compare, smp AP_TRAMP duplicates).
+    2. python -m py_compile over tools/*.py.
+    3. ADR continuity: docs/adr/ADR-0001..N with no gaps and
+       title-number agreement.
+    4. No empty scaffold dirs under versioned source trees.
+    No clang-format/tidy/cppcheck on this host (absent, and host
+    policy forbids silent installs): compiler warnings are the
+    enforced linter until tooling lands.
+    """
+    import glob
+    fails = 0
+    warns = 0
+    cfiles = sorted(glob.glob(os.path.join(ROOT, "kernel", "**", "*.c"),
+                              recursive=True) +
+                    glob.glob(os.path.join(ROOT, "boot", "*.S")) +
+                    glob.glob(os.path.join(ROOT, "userspace", "**", "*.c"),
+                              recursive=True))
+    for s in cfiles:
+        extra = ["-I", os.path.join(ROOT, "kernel"), "-I",
+                 os.path.join(ROOT, "kernel", "mm"), "-I",
+                 os.path.join(ROOT, "sdk", "include"), "-I",
+                 os.path.join(ROOT, "boot")]
+        if s.endswith(".S"):
+            r = run(["gcc", "-m32", "-fsyntax-only"] + extra +
+                    ["-c", s], timeout=60)
+        else:
+            r = run(["gcc"] + CFLAGS32 + extra + ["-fsyntax-only", s],
+                    timeout=60)
+        err = (r.stderr or "")
+        if r.returncode != 0:
+            print(f"[fail] lint syntax {os.path.relpath(s, ROOT)}:\n"
+                  f"{err[:800]}")
+            fails += 1
+        else:
+            n = err.count("warning:")
+            warns += n
+            if n:
+                print(f"[info] lint {n} warning(s): "
+                      f"{os.path.relpath(s, ROOT)}")
+    for s in sorted(glob.glob(os.path.join(ROOT, "tools", "*.py"))):
+        r = run([sys.executable, "-m", "py_compile", s], timeout=60)
+        if r.returncode != 0:
+            print(f"[fail] lint py_compile "
+                  f"{os.path.relpath(s, ROOT)}")
+            fails += 1
+    nums = []
+    for s in sorted(glob.glob(os.path.join(ROOT, "docs", "adr",
+                                           "ADR-*.md"))):
+        base = os.path.basename(s)
+        try:
+            n = int(base[4:8])
+        except ValueError:
+            print(f"[fail] lint ADR name {base}")
+            fails += 1
+            continue
+        nums.append(n)
+        with open(s, encoding="utf-8") as f:
+            first = f.readline()
+        if f"ADR-{n:04d}:" not in first:
+            print(f"[fail] lint ADR title {base}: {first.strip()[:60]}")
+            fails += 1
+    if nums != list(range(1, (max(nums) if nums else 0) + 1)):
+        print(f"[fail] lint ADR gap: {[n for n in nums][:5]}..."
+              f"total {len(nums)}")
+        fails += 1
+    else:
+        print(f"[ok] lint ADR continuity 0001..{max(nums):04d} "
+              f"({len(nums)} files)")
+    for top in ["kernel", "boot", "userspace", "tests", "tools",
+                "sdk", "docs", "benchmarks"]:
+        for dp, dn, fn in os.walk(os.path.join(ROOT, top)):
+            if not dn and not fn:
+                print(f"[fail] lint empty dir: "
+                      f"{os.path.relpath(dp, ROOT)}")
+                fails += 1
+    print(f"[info] lint warnings total (tolerated, reported): {warns}")
+    if fails:
+        print(f"[fail] lint {fails} failure(s)")
+        return 1
+    print("[ok] lint clean (errors/gaps/empties: none)")
+    return 0
+
+
 def main(argv):
     cmds = {"env": cmd_env, "build": cmd_build, "test": cmd_test,
             "run-vbox": cmd_run_vbox, "vbox-check": cmd_vbox_check,
             "image": cmd_image, "panic-test": cmd_panic_test,
             "bench-pmm": cmd_bench_pmm, "clean": cmd_clean,
+            "lint": cmd_lint,
             "abi": cmd_abi, "dist": cmd_dist, "version": cmd_version}
     if len(argv) != 2 or argv[1] not in cmds:
         print(f"usage: {sys.argv[0]} {{{'|'.join(cmds)}}}")

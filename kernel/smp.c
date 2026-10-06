@@ -25,8 +25,8 @@
 #endif
 
 #define MAX_APS 8u
-#define AP_TRAMP_BASE 0x8000u
-#define AP_TRAMP_VECTOR 0x08u
+/* AP_TRAMP_BASE/VECTOR live in boot/ap_addrs.h (shared contract
+ * with the trampoline; single source, no local duplicates). */
 #define IA32_APIC_BASE 0x1Bu
 #define LAPIC_ID 0x20u
 #define LAPIC_ICR_LO 0x300u

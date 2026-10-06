@@ -417,8 +417,10 @@ int virtio_net_init(void) {
         uint8_t b = g_mac[i];
         uint8_t hi = (uint8_t)(b >> 4);
         uint8_t lo = (uint8_t)(b & 0xFu);
-        serial_putc((char)(hi < 10u ? '0' + hi : 'a' + hi - 10u));
-        serial_putc((char)(lo < 10u ? '0' + lo : 'a' + lo - 10u));
+        /* Single int-typed expression (no ?: signedness clash);
+         * values 0..15 map to '0'..'f' exactly as before. */
+        serial_putc((char)(hi + (hi < 10u ? '0' : ('a' - 10))));
+        serial_putc((char)(lo + (lo < 10u ? '0' : ('a' - 10))));
         if (i < 5u) {
             serial_putc(':');
         }

@@ -120,9 +120,12 @@ static uint32_t lcg(void) {
     return lcg_state;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     uint8_t pkt[512];
     uint8_t tmp[512];
+    /* Corpus dir from argv[1] (nova.py passes it absolute);
+     * default is the in-tree relative path. */
+    const char *cdir = (argc > 1) ? argv[1] : "tests/corpus";
 
     check(net_init() == 0, "init", 0, 0);
 
@@ -498,6 +501,84 @@ int main(void) {
         r[ql + 3u] = 0x05;
         check(dns_parse(r, rl, 0x1234, &ip) == -NOVA_ENOENT,
               "dns-cname", 0, 0);
+    }
+
+    /* Checked-in corpus replay (tests/corpus seed files, built by
+     * tools/mkcorpus.py from the same constructions as the
+     * inline mutants above): every file replays through the
+     * real parser with its recorded expectation. A drifted or
+     * corrupted file fails loudly (regenerate, don't delete). */
+    {
+        static const uint8_t tmac2[6] = { 0x08, 0x00, 0x27,
+                                          0x3C, 0xA1, 0xA1 };
+        static const struct {
+            const char *name;
+            int is_dns;
+            int expect;
+        } items[] = {
+            { "dhcp-offer.bin", 0, 0 },
+            { "dhcp-xid.bin", 0, -NOVA_EINVAL },
+            { "dhcp-magic.bin", 0, -NOVA_EINVAL },
+            { "dhcp-short.bin", 0, -NOVA_EINVAL },
+            { "dhcp-chaddr.bin", 0, -NOVA_EINVAL },
+            { "dhcp-wireaddr.bin", 0, -NOVA_EINVAL },
+            { "dns-ok.bin", 1, 0 },
+            { "dns-id.bin", 1, -NOVA_EINVAL },
+            { "dns-nxdomain.bin", 1, -NOVA_ENOENT },
+            { "dns-trunc.bin", 1, -NOVA_EINVAL },
+            { "dns-cname.bin", 1, -NOVA_ENOENT },
+        };
+        char path[256];
+        uint32_t i;
+        for (i = 0; i < sizeof(items) / sizeof(items[0]); i++) {
+            FILE *f;
+            uint8_t buf[320];
+            size_t n = 0;
+            size_t dl = strlen(cdir);
+            size_t nl = strlen(items[i].name);
+            uint8_t mt = 0;
+            uint32_t y = 0, sv = 0, mk = 0, rt = 0, le = 0;
+            uint32_t ip = 0;
+            int rc;
+            if (dl + nl + 2u > sizeof(path)) {
+                check(0, "corpus-path", i, 0);
+                continue;
+            }
+            memcpy(path, cdir, dl);
+            path[dl] = '/';
+            memcpy(path + dl + 1u, items[i].name, nl);
+            path[dl + 1u + nl] = 0;
+            f = fopen(path, "rb");
+            if (f == 0) {
+                check(0, "corpus-open", i, 0);
+                continue;
+            }
+            n = fread(buf, 1, sizeof(buf), f);
+            fclose(f);
+            if (items[i].is_dns) {
+                rc = dns_parse(buf, (uint32_t)n, 0x1234, &ip);
+                check(rc == items[i].expect, "corpus-dns",
+                      (unsigned long)i, (unsigned long)rc);
+                if (items[i].expect == 0) {
+                    check(ip == 0x5DB8D822u, "corpus-dns-ip",
+                          ip, 0);
+                }
+            } else {
+                rc = dhcp_parse_msg(buf, (uint32_t)n,
+                                    0x12345678u, tmac2, &mt, &y,
+                                    &sv, &mk, &rt, &le);
+                check(rc == items[i].expect, "corpus-dhcp",
+                      (unsigned long)i, (unsigned long)rc);
+                if (items[i].expect == 0) {
+                    check(mt == 2 && y == 0x0A00020Fu &&
+                              sv == 0x0A000202u &&
+                              mk == 0xFFFFFF00u &&
+                              rt == 0x0A000202u && le == 3600u,
+                          "corpus-dhcp-fields", mt, le);
+                }
+            }
+        }
+        printf("corpus: 11 wire seeds replayed\n");
     }
 
     /* Guest selftest runs the same stack in-guest (NET-OK). */
