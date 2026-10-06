@@ -2,7 +2,30 @@
 
 All notable changes will be documented here. Format follows Keep a Changelog.
 
-## [Unreleased]
+## [Unreleased] — v0.3 hardening (in progress)
+
+- Legal + language hygiene: Apache-2.0 `LICENSE` (ADR-0064,
+  supersedes deferred ADR-0008), C-first record (ADR-0065,
+  supersedes Rust-first ADR-0002), dist carries LICENSE.
+- Syscall copy model: `copy_from_user`/`copy_to_user`
+  centralized, all payload sites converted, T8 refusal
+  vectors, TOCTOU closure with load-bearing invariant
+  (ADR-0066). Fixed en route: static sock bounce race,
+  whole-print cli span.
+- Memory execution: read-only kernel text (caught + fixed
+  AP-handoff words in .text), CPUID NX report, mapping
+  isolation verified, ASLR declined with reason (ADR-0067).
+- Scheduler: starvation tripwire (`STARVE-OK`), switch
+  counter, `last_used` audit (ADR-0068). No policy change.
+- SMP foundations: LOCK atomics, spinlock + irqsave pair,
+  `docs/LOCKING.md`, `smp_cpu_id`, host T22 + guest
+  contention proof (`SYNC-OK`); APs parked (ADR-0069).
+- Hygiene: 14 empty dirs removed, `nova lint`, 3 warnings
+  fixed (1 tolerated), `ci/gate.py`, wire-seed fuzz corpus
+  with T14 replay (ADR-0070).
+- Observability: `SYS_STATS` (35) read-only counters +
+  shell `stat` + `STATS-OK` proof, `GATES-OK` summary line
+  (ADR-0071). Suite 22/22.
 
 ## 0.2.0 - 2026-10-06 (second release)
 
