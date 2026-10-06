@@ -265,7 +265,11 @@ Capabilities, sandboxing, resource limits, secure handles.
   fixed in kbd + sock, KBDBLK-OK gate), 21/21 (ADR-0062)
 - [x] 0.2.0 release (version bump, gates green, dist,
   changelog + notes, tag v0.2.0)
-- [ ] Next: disk sleep callers (last polling family)
+- [x] 16-ii disk assessment (bounded spins + masked IRQs by
+  design, no idle case: stays polling, ATA IRQs a future
+  phase) (ADR-0063)
+- [ ] Next: to be chosen (sleep arc complete; candidates in
+  ADR deferral lists)
 
 
 ## Non-goals for 0.x
