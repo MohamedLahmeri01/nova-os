@@ -13,6 +13,7 @@
 #include "drivers/fb.h"
 #include "gui/comp.h"
 #include "gui/font.h"
+#include "gui/widget.h"
 #include "syscall/syscall.h"
 
 static int g_failed;
@@ -166,8 +167,10 @@ int main(void) {
           fb_get(10, 50), 0);
     check(comp_close(1) == 0, "close2", 0, 0);
 
-    /* Text through a synthetic font ('X' diagonals only): title
-     * placement + clipping exact, out-of-range chars map to '?'. */
+    /* Text through a synthetic font ('X' diagonals only, plus
+     * box 'O' + bar 'K' for the widget selftest's "OK" label):
+     * title placement + clipping exact, out-of-range chars map
+     * to '?'. */
     {
         static uint8_t xfont[128][8];
         uint32_t r, k;
@@ -179,6 +182,8 @@ int main(void) {
         for (r = 0; r < 8u; r++) {
             xfont['X'][r] = (uint8_t)((0x81u >> r) | (0x81u << r));
             xfont['?'][r] = 0xFFu;
+            xfont['O'][r] = (r == 0 || r == 7) ? 0xFFu : 0x81u;
+            xfont['K'][r] = (uint8_t)(0x80u | (1u << r));
         }
         font_load(&xfont[0][0]);
         check(font_is_fallback() == 0, "font-load", 0, 0);
@@ -194,6 +199,10 @@ int main(void) {
         check(comp_title(0, "toolongtitle123456") == -NOVA_EINVAL,
               "title-shut", 0, 0);
     }
+
+    /* Guest widget selftest runs the same stack in-guest
+     * (WID-OK): pool is drained, X-font loaded. */
+    check(wid_selftest() == 0, "wid-selftest", 0, 0);
 
     /* Guest selftest runs the same stack in-guest (COMP-OK). */
     check(comp_selftest() == 0, "selftest", 0, 0);

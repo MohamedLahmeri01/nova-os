@@ -291,6 +291,7 @@ def build_phase1(fault=False):
                                    ("kernel/drivers/fb.c", "fb.o", []),
                                    ("kernel/gui/font.c", "font.o", []),
                                    ("kernel/gui/comp.c", "comp.o", []),
+                                   ("kernel/gui/widget.c", "widget.o", []),
                                   ("kernel/drivers/virtio_net.c", "virtio.o", []),
                                   ("kernel/fs/ramfs.c", "ramfs.o", []),
                                   ("kernel/fs/file.c", "file.o", []),
@@ -326,8 +327,8 @@ def build_phase1(fault=False):
                "caps.o", "rlimit.o",
                "kbd.o", "mouse.o", "init_blob.o", "hi_blob.o", "uname_blob.o", "ramfs.o", "file.o",
               "fat32.o", "ext4.o", "novafs.o", "ata.o", "pci.o",
-               "vga.o", "fb.o", "font.o", "comp.o", "virtio.o", "net.o",
-               "sock.o", PMM_BACKEND_O],
+               "vga.o", "fb.o", "font.o", "comp.o", "widget.o",
+               "virtio.o", "net.o", "sock.o", PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -960,6 +961,7 @@ def cmd_test():
            os.path.join(ROOT, "tests", "unit", "test_comp.c"),
            os.path.join(ROOT, "kernel", "gui", "comp.c"),
            os.path.join(ROOT, "kernel", "gui", "font.c"),
+           os.path.join(ROOT, "kernel", "gui", "widget.c"),
            "-o", comp_exe]
     r = run(cmd, timeout=120)
     if r.returncode != 0:
@@ -1226,7 +1228,8 @@ def cmd_run_vbox():
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
                                        b"HEAP-OK", b"ATA-OK", b"PCI-OK",
-                                       b"FB-OK", b"COMP-OK", b"MOUSE-OK",
+                                       b"FB-OK", b"COMP-OK", b"WID-OK",
+                                       b"MOUSE-OK",
                                        b"VIRTIO-OK",
                                        b"DMA-OK", b"FS-OK",
                                        b"FAT-OK", b"EXT-OK", b"NOVA-OK",
@@ -1289,7 +1292,7 @@ def cmd_image():
 PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                  b"STACK:", b"END-PANIC-HALT", b"PMM-OK", b"VMM-OK",
                  b"HEAP-OK", b"ATA-OK", b"PCI-OK", b"FB-OK", b"COMP-OK",
-                 b"MOUSE-OK",
+                 b"WID-OK", b"MOUSE-OK",
                  b"VIRTIO-OK", b"DMA-OK", b"FS-OK", b"FAT-OK", b"EXT-OK",
                   b"NOVA-OK", b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
                   b"CAPS-OK", b"RLIM-OK", b"PERM-OK", b"JAIL-OK",

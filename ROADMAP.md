@@ -236,7 +236,10 @@ Capabilities, sandboxing, resource limits, secure handles.
   nslookup), 21/21 (ADR-0051)
 - [x] 14c virtio interrupts (Line/Pin routing, ISR field +
   count, silence assert after traffic), 21/21 (ADR-0052)
-- [ ] 14d+ candidates: blocking RX (wait queues), widgets
+- [x] 14d widget toolkit (labels, buttons, comp_geom,
+  about dialog, WID-OK gate + T19), 21/21 (ADR-0053)
+- [ ] 14e+ candidates: input events (click routing,
+  focus-by-click, press states), blocking RX (wait queues)
 
 
 ## Non-goals for 0.x

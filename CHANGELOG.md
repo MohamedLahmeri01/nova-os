@@ -1,6 +1,15 @@
 # Changelog
 
 All notable changes will be documented here. Format follows Keep a Changelog.
+
+## [Unreleased]
+
+### Added
+
+- Phase 14d widget toolkit: `wid_label`/`wid_button` over
+  `comp_geom`, guest `wid_selftest` (`WID-OK` gate), teal
+  about dialog in compositor demo, T19 coverage (ADR-0053).
+  Suite 21/21 on the constrained VM.
 ## 0.1.0 - 2026-10-05 (first release)
 
 All Phase 0-13d work, suite 20/20 on the constrained VM.

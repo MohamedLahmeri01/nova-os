@@ -10,6 +10,7 @@
 #include "serial.h"
 #include "drivers/fb.h"
 #include "gui/comp.h"
+#include "gui/widget.h"
 #include "input/mouse.h"
 #include "syscall/syscall.h"
 #include "time/time.h"
@@ -149,6 +150,26 @@ int comp_hit(uint32_t x, uint32_t y) {
     return -1;
 }
 
+int comp_geom(uint32_t id, uint32_t *x, uint32_t *y, uint32_t *w,
+              uint32_t *h) {
+    if (!valid_id(id)) {
+        return -NOVA_EINVAL;
+    }
+    if (x != 0) {
+        *x = g_wins[id].x;
+    }
+    if (y != 0) {
+        *y = g_wins[id].y;
+    }
+    if (w != 0) {
+        *w = g_wins[id].w;
+    }
+    if (h != 0) {
+        *h = g_wins[id].h;
+    }
+    return NOVA_ESUCCESS;
+}
+
 void comp_present(void) {
     uint32_t mx = 0, my = 0;
     fb_clear(FB_DARKGRAY);
@@ -222,40 +243,56 @@ static void demo_console_text(void) {
     fb_text(16, 56, "COMP-OK", FB_WHITE);
 }
 
+/* About dialog content via the widget API (dogfooding toolkit). */
+static void demo_dialog(void) {
+    wid_label(3, 8, 20, "NOVA OS", FB_WHITE);
+    wid_label(3, 8, 30, "ABI v1", FB_WHITE);
+    wid_label(3, 8, 40, "21/21 OK", FB_WHITE);
+    wid_button(3, 8, 50, 60, 20, "OK");
+}
+
+static void demo_frame(void) {
+    comp_present();
+    demo_console_text();
+    demo_dialog();
+}
+
 void comp_demo(void) {
-    int a, b, c;
-    /* Console + two alerts (back-to-front by id). Titles prove
-     * text on screen; the console body proves multi-line text.
-     * Geometry starts below the desktop bar (bar covers y 0..12;
-     * nothing legible may live up there). */
+    int a, b, c, d;
+    /* Console + two alerts + an about dialog (back-to-front by
+     * id). Titles prove text on screen; the console body proves
+     * multi-line text; the dialog proves widgets. Geometry stays
+     * below the desktop bar (nothing legible at y 0..12). */
     a = comp_open(8, 16, 190, 176, FB_BLUE);
     b = comp_open(170, 28, 140, 70, FB_RED);
-    c = comp_open(150, 122, 150, 76, FB_GREEN);
-    if (a != 0 || b != 1 || c != 2) {
+    c = comp_open(20, 110, 120, 70, FB_GREEN);
+    d = comp_open(195, 115, 115, 75, FB_TEAL);
+    if (a != 0 || b != 1 || c != 2 || d != 3) {
         return; /* selftest covers errors; demo never panics */
     }
     comp_title(0, "console");
     comp_title(1, "alert");
     comp_title(2, "green");
+    comp_title(3, "about");
     comp_focus(0);
     demo_mark(0);
-    comp_present();
-    demo_console_text();
+    demo_frame();
     demo_wait(50);
     comp_focus_next();
     demo_mark(comp_focused());
-    comp_present();
-    demo_console_text();
+    demo_frame();
     demo_wait(50);
     comp_focus_next();
     demo_mark(comp_focused());
-    comp_present();
-    demo_console_text();
+    demo_frame();
+    demo_wait(50);
+    comp_focus_next();
+    demo_mark(comp_focused());
+    demo_frame();
     demo_wait(50);
     comp_focus(0);
     demo_mark(comp_focused());
-    comp_present();
-    demo_console_text();
+    demo_frame();
 }
 
 int comp_selftest(void) {
