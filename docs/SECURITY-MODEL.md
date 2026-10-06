@@ -111,13 +111,56 @@ defense.
 
 ## 5. Weakness register (live list — update on every fix/find)
 
+Re-triaged 2026-10-06 (v0.5 Phase A). Statuses: OPEN /
+MITIGATED / CLOSED / DEFERRED (exactly one each).
+
 ```text
-W1  sibling-thread data tearing (accepted semantics; fault-escape closed)
-W2  no NX/ASLR; kernel code readable from user PDs (supervisor-only, not readable — ROP needs an info leak first, which doesn't exist either; residual, not imminent)
-W3  ring-0 drivers unisolated (any driver bug = kernel bug)
-W4  parser depth: FS images beyond 4 mutants, packets beyond 11 seeds, shell parser unfuzzed (v0.4 J/L/M target this)
-W5  DMA without IOMMU (BMIDE masters freely; VBox-only threat today)
-W6  PIC shared lines + no MSI (trusted routing; cascade bug history says stay vigilant)
+W1  sibling-thread data tearing — MITIGATED (unchanged).
+    Snapshots hold everywhere (re-verified: 8 helper sites
+    + struct snapshots + NUL-scan paths). No new sibling-
+    writer surface in v0.4 (bench file churn runs boot-
+    threaded, sequential). Residual accepted semantics.
+W2  mapping boundary — MITIGATED (was: open with imprecise
+    wording). Code-patch closed (RO text enforced +
+    runtime asserts); user access to kernel maps verified
+    impossible (U/S=0, grep + MEMMAP grid). Residual:
+    user data executes (no NX bit exists) + no
+    randomization. See §14 of ADR-0067.
+W3  ring-0 drivers unisolated — OPEN (unchanged). No v0.5
+    work isolates drivers; virtio/ATA/fb stay fully
+    trusted. Bounds-checking (rings, BARs, ATA status)
+    is the only control.
+W4  parser depth — MITIGATED (was: open). Corpus grown:
+    11 wire seeds + 10 shapes + queue flood (net), FS
+    manifests (7+7+9 rows, driver + fsck), shell T23
+    (16 lines + 3k soup, strtoi UB fixed). Remaining:
+    packet-shape breadth, concurrent-FS (needs locks
+    first), shell syntax that doesn't exist yet.
+W5  DMA without IOMMU — OPEN (unchanged, out of scope
+    with reason: VBox-only threat, BMIDE uses kernel
+    pages, no userspace DMA buffers exist).
+W6  PIC shared lines, no MSI — OPEN (unchanged). Routing
+    trusted; cascade history says stay vigilant; MSI is
+    future work with the APIC milestone.
+W7  trace/stats disclosure surface — DEFERRED (new).
+    No userspace reader exists yet (panic dump goes to
+    serial only — physical-console privilege, no new
+    exposure). Trigger: the fetch ABI (v0.5 Phase C)
+    must project fields (counters, tids, ports), never
+    memcpy structs: thread/process structs carry kernel
+    addresses (sp, stack_base, cr3, user_stack) and the
+    FAULT event carries the faulting address (possibly
+    a kernel address a user probed). Requirements
+    recorded in Phase A report; Phase C enforces.
+W8  FS concurrent use unsound — OPEN (new, found Phase A).
+    Refcounts plain ++/--, node buffers + fd offsets
+    shared, zero locking anywhere in fs/. Safe today
+    ONLY because no two threads use FS concurrently
+    (shell single-threaded; selftests sequential).
+    Contract declared in ADR-0076: FS syscalls are
+    single-threaded-only until locking lands; Phase O
+    stress is gated on it. Not exploitable from the
+    current userspace (one reader), so OPEN-not-P0.
 ```
 
 W2 corrected 2026-10-06 vs the v0.2 audit's P1-3 wording: user
