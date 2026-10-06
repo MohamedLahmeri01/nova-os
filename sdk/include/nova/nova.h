@@ -83,6 +83,16 @@
 
 #define NOVA_EAGAIN 11
 
+/* Raw INT 0x80 gate: EAX number, EBX/ECX/EDX args, EAX result.
+ * Host-test seam: with NOVA_TEST_STUB_SYSCALL defined, call
+ * sites redirect to test_syscall_stub (provided by the test)
+ * so userspace TUs run on host without executing INT 0x80.
+ * Guest builds never define it: identical codegen. */
+#ifdef NOVA_TEST_STUB_SYSCALL
+int32_t test_syscall_stub(uint32_t nr, uint32_t a, uint32_t b,
+                          uint32_t c);
+#define nova_syscall test_syscall_stub
+#else
 static inline int32_t nova_syscall(uint32_t nr, uint32_t a, uint32_t b,
                                    uint32_t c) {
     int32_t ret;
@@ -92,6 +102,7 @@ static inline int32_t nova_syscall(uint32_t nr, uint32_t a, uint32_t b,
                      : "memory");
     return ret;
 }
+#endif
 
 static inline int32_t nova_yield(void) {
     return nova_syscall(SYS_YIELD, 0, 0, 0);

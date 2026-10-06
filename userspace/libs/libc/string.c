@@ -57,11 +57,20 @@ int nova_strtoi(const char *s, int *ok) {
         return 0;
     }
     while (*s != 0) {
+        int d;
         if (*s < '0' || *s > '9') {
             *ok = 0;
             return 0;
         }
-        v = v * 10 + (*s - '0');
+        d = *s - '0';
+        /* Saturate: signed overflow is UB, so overlong tokens
+         * refuse (callers print usage). INT_MIN magnitude is
+         * unrepresentable through this path: refused, documented. */
+        if (v > (2147483647 - d) / 10) {
+            *ok = 0;
+            return 0;
+        }
+        v = v * 10 + d;
         s++;
     }
     *ok = 1;

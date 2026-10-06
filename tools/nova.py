@@ -1044,6 +1044,31 @@ def cmd_test():
             print("[pass] T22 host sync test"); passed += 1
         else:
             print("[fail] T22 host sync test"); failed += 1
+    # T23: host shell parser test (sh.c + libc, syscalls neutered
+    # via NOVA_TEST_STUB_SYSCALL; -m32 so host pointers survive
+    # the u32 ABI exactly like guest addresses)
+    print("[info] T23 compiling + running host shell test...")
+    shell_exe = os.path.join(BUILD, "test_shell.exe")
+    cmd = ["gcc", "-m32", "-O2", "-Wall", "-Wextra",
+           "-DNOVA_TEST_STUB_SYSCALL",
+           "-I", os.path.join(ROOT, "userspace"),
+           "-I", os.path.join(ROOT, "userspace", "init"),
+           "-I", os.path.join(ROOT, "sdk", "include"),
+           os.path.join(ROOT, "tests", "unit", "test_shell.c"),
+           "-o", shell_exe]
+    r = run(cmd, timeout=120)
+    if r.returncode != 0:
+        print(f"[fail] T23 shell test compile:\n{(r.stderr or '')[:1500]}")
+        failed += 1
+    else:
+        r = run([shell_exe,
+                 os.path.join(ROOT, "tests", "corpus", "shell")],
+                timeout=120)
+        print((r.stdout or "") + (r.stderr or ""))
+        if r.returncode == 0:
+            print("[pass] T23 host shell test"); passed += 1
+        else:
+            print("[fail] T23 host shell test"); failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 

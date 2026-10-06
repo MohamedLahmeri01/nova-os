@@ -1,0 +1,191 @@
+/* NOVA OS shell parser fuzz (Phase 0.4-M, T23).
+ * Host-side: the REAL userspace/init/sh.c (plus libc string/
+ * stdio) with syscalls neutered at the macro level: every
+ * nova_syscall(...) call site expands to the test stub, so no
+ * INT 0x80 ever executes. PRINT output is captured bounded;
+ * all other calls fail closed (-EIO) without touching memory,
+ * which drives every builtin down its parse/error paths.
+ * Matrix: exact lines (bounds, overflow, weird bytes), corpus
+ * replay (tests/corpus shell text files via argv[1]), strtoi unit
+ * vectors (incl. the overflow UB this phase fixed), then 3000
+ * PRNG soup lines. Every line must return with bounded output
+ * (parsers advance or refuse; hangs would hang the suite, and
+ * none exist by construction — verified by this run).
+ * VERDICT line.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+
+/* Syscall neutering via the header seam (NOVA_TEST_STUB_SYSCALL
+ * on the compile line): every nova_syscall(...) site expands to
+ * the stub below, so no INT 0x80 ever executes. PRINT output is
+ * captured bounded; all other calls fail closed (-EIO) without
+ * touching memory, driving every builtin down parse/error paths.
+ */
+
+/* Bounded output capture (PRINT writes only). */
+static uint8_t cap_buf[65536];
+static uint32_t cap_n;
+static int cap_overflow;
+static int stub_calls;
+
+/* Non-static: matches the header seam declaration (the macro
+ * renames call sites to this definition). */
+int32_t test_syscall_stub(uint32_t nr, uint32_t a, uint32_t b,
+                          uint32_t c) {
+    (void)c;
+    stub_calls++;
+    if (nr == 2u) { /* SYS_PRINT: capture, bounded */
+        const uint8_t *p = (const uint8_t *)(uintptr_t)a;
+        uint32_t i;
+        for (i = 0; i < b; i++) {
+            if (cap_n >= sizeof(cap_buf)) {
+                cap_overflow = 1;
+                break;
+            }
+            cap_buf[cap_n++] = p[i];
+        }
+        return (int32_t)b;
+    }
+    return -5; /* EIO: fail closed, touch nothing */
+}
+
+#include "libs/libc/string.c"
+#include "libs/libc/stdio.c"
+#include "init/sh.c"
+
+static int g_failed;
+
+static void check(int cond, const char *what, unsigned long a,
+                  unsigned long b) {
+    if (!cond) {
+        printf("FAIL: %s (%lu, %lu)\n", what, a, b);
+        g_failed = 1;
+    }
+}
+
+/* One line through dispatch: must return, output stays bounded. */
+static void runline(const char *line, const char *name) {
+    uint32_t before = cap_n;
+    sh_run(line);
+    check(cap_n - before < 4096u, name, cap_n - before, 0);
+}
+
+int main(int argc, char **argv) {
+    const char *cdir = (argc > 1) ? argv[1] : "tests/corpus/shell";
+    static const char *files[] = {
+        "shell-01-empty.txt", "shell-02-spaces.txt",
+        "shell-03-help.txt", "shell-04-unknown.txt",
+        "shell-05-a127.txt", "shell-06-a128.txt",
+        "shell-07-a300.txt", "shell-08-winopen-ok.txt",
+        "shell-09-winopen-huge.txt", "shell-10-winopen-neg.txt",
+        "shell-11-chmod-bad.txt", "shell-12-chmod-ok.txt",
+        "shell-13-quote.txt", "shell-14-click-neg.txt",
+        "shell-15-nslookup-empty.txt", "shell-16-put-deep.txt",
+    };
+    uint32_t i;
+    uint32_t lcg = 0x5EED01u;
+
+    /* strtoi unit vectors (overflow UB fixed this phase). */
+    {
+        int ok = 0;
+        check(nova_strtoi("123", &ok) == 123 && ok, "stoi-ok",
+              0, 0);
+        check(nova_strtoi("-42", &ok) == -42 && ok, "stoi-neg",
+              0, 0);
+        check(nova_strtoi("", &ok) == 0 && !ok, "stoi-empty",
+              0, 0);
+        check(nova_strtoi("12a", &ok) == 0 && !ok, "stoi-garbage",
+              0, 0);
+        check(nova_strtoi("9999999999", &ok) == 0 && !ok,
+              "stoi-overflow", 0, 0);
+        check(nova_strtoi("2147483647", &ok) == 2147483647 && ok,
+              "stoi-max", 0, 0);
+        check(nova_strtoi("2147483648", &ok) == 0 && !ok,
+              "stoi-maxplus", 0, 0);
+        check(nova_strtoi("-2147483648", &ok) == 0 && !ok,
+              "stoi-min", 0, 0);
+    }
+
+    /* Exact matrix (bounds that matter). */
+    runline("", "empty");
+    runline("   ", "spaces");
+    runline("help", "help");
+    {
+        char a300[301];
+        for (i = 0; i < 300u; i++) {
+            a300[i] = 'a';
+        }
+        a300[300] = 0;
+        a300[127] = 0;
+        runline(a300, "a127");
+        a300[127] = 'a';
+        a300[128] = 0;
+        runline(a300, "a128");
+        a300[128] = 'a';
+        a300[300] = 0;
+        runline(a300, "a300");
+    }
+    runline("winopen 9999999999 0 0 0 0", "huge-num");
+
+    /* Checked-in corpus replay (one line per file). */
+    for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+        char path[256];
+        FILE *f;
+        static char line[512];
+        size_t n = 0;
+        size_t dl = strlen(cdir);
+        size_t nl = strlen(files[i]);
+        if (dl + nl + 2u > sizeof(path)) {
+            check(0, "corpus-path", i, 0);
+            continue;
+        }
+        memcpy(path, cdir, dl);
+        path[dl] = '/';
+        memcpy(path + dl + 1u, files[i], nl);
+        path[dl + 1u + nl] = 0;
+        f = fopen(path, "rb");
+        if (f == 0) {
+            check(0, "corpus-open", i, 0);
+            continue;
+        }
+        n = fread(line, 1, sizeof(line) - 1u, f);
+        fclose(f);
+        line[n] = 0;
+        /* Trailing newline is file formatting, not input. */
+        if (n > 0 && line[n - 1u] == '\n') {
+            line[n - 1u] = 0;
+        }
+        runline(line, files[i]);
+    }
+    printf("corpus: 16 shell lines replayed\n");
+
+    /* PRNG soup (bytes 1..255, lengths 0..200): dispatch must
+     * always return with bounded output. Fixed seed. */
+    for (i = 0; i < 3000u; i++) {
+        char line[201];
+        uint32_t len = 0;
+        uint32_t seed = lcg;
+        lcg = lcg * 1664525u + 1013904223u;
+        len = seed % 201u;
+        for (uint32_t k = 0; k < len; k++) {
+            lcg = lcg * 1664525u + 1013904223u;
+            line[k] = (char)(1u + (lcg >> 8) % 255u);
+        }
+        line[len] = 0;
+        runline(line, "fuzz-soup");
+        if (g_failed) {
+            break;
+        }
+    }
+    printf("fuzz: 3000 shell lines dispatched\n");
+    check(cap_overflow == 0, "output-bounded", cap_n, 0);
+    if (g_failed) {
+        printf("VERDICT: shell BROKEN\n");
+        return 1;
+    }
+    printf("VERDICT: shell correct\n");
+    return 0;
+}
