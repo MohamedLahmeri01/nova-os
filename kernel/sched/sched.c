@@ -2,7 +2,8 @@
  * 32 priority queues (higher number preempts); rotation inside the top
  * non-empty level. Slice accounting in sched_tick; switching through
  * sched_switch_to (CR3 to next address space + canary + ctx_switch).
- * No aging yet: strict priority can starve (documented, Phase 4d).
+ * No aging: strict priority can starve (measured by
+ * sched_starve_selftest; fairness work needs those numbers first).
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -33,6 +34,11 @@
 extern volatile uint32_t g_ticks;
 
 volatile int sched_need_resched;
+
+/* Completed context switches (every site funnels through
+ * sched_switch_to: yield, preemption, exit, wake). First
+ * observability counter; Phase G grows the family. */
+volatile uint32_t g_sched_switches;
 
 static struct thread *g_current;
 static struct thread *g_prio_head[SCHED_LEVELS];
@@ -140,6 +146,8 @@ struct thread *sched_pick(struct thread *cur) {
 /* Central switch: canary, address space, context. Every switch site
  * funnels here (yield, IRQ preemption, exit, user return). */
 void sched_switch_to(struct thread *cur, struct thread *next) {
+    check_canary(next);
+    g_sched_switches++;
     check_canary(next);
     if (cur != 0) {
         check_canary(cur);
@@ -694,5 +702,88 @@ int sched_sleep_selftest(void) {
         return -1;
     }
     serial_puts("SLEEP-OK\n");
+    return 0;
+}
+
+/* --- starvation measurement: strict priority contains low work ---
+ * Hog (prio 31) burns 30M iterations without yielding; worker
+ * (prio 1) burns 100k then exits. The worker's first act records
+ * whether the hog had finished: under strict priority it always
+ * has (early == 0, starvation demonstrated deterministically by
+ * ORDER, not timing). Any future fair policy must flip early to
+ * 1 -- this test is the tripwire. Also reports hog tick cost +
+ * switch count (first latency/throughput numbers in-tree). */
+
+static volatile uint32_t sv_hog_n;
+static volatile uint32_t sv_work_n;
+static volatile int sv_phase;
+static volatile int sv_early;
+static volatile int sv_work_done;
+static volatile uint32_t sv_t0;
+static volatile uint32_t sv_t1;
+
+static void starve_hog(void *arg) {
+    (void)arg;
+    for (uint32_t i = 0; i < 300000000u; i++) {
+        sv_hog_n++;
+    }
+    sv_phase = 1;
+    thread_exit(0);
+}
+
+static void starve_work(void *arg) {
+    (void)arg;
+    if (sv_phase != 1) {
+        sv_early = 1;
+    }
+    for (uint32_t i = 0; i < 100000u; i++) {
+        sv_work_n++;
+    }
+    sv_work_done = 1;
+    thread_exit(0);
+}
+
+int sched_starve_selftest(void) {
+    extern volatile uint32_t g_ticks;
+    uint32_t sw0;
+    uint32_t t0;
+    sv_hog_n = 0;
+    sv_work_n = 0;
+    sv_phase = 0;
+    sv_early = 0;
+    sv_work_done = 0;
+    if (thread_create(g_init_process, starve_hog, 0, 31u) == 0 ||
+        thread_create(g_init_process, starve_work, 0, 1u) == 0) {
+        serial_puts("STARVE-FAIL spawn\n");
+        return -1;
+    }
+    sw0 = g_sched_switches;
+    sv_t0 = g_ticks;
+    sched_yield(); /* hog (top prio) preempts immediately */
+    t0 = g_ticks;
+    while (!sv_work_done) {
+        if (g_ticks - t0 > 8000u) {
+            serial_puts("STARVE-FAIL stuck\n");
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    sv_t1 = g_ticks;
+    /* Worker ran strictly after the hog (starved throughout),
+     * did its full 100k, and the hog did its full 30M. */
+    if (sv_early != 0) {
+        serial_puts("STARVE-FAIL early\n");
+        return -1;
+    }
+    if (sv_hog_n != 300000000u || sv_work_n != 100000u) {
+        serial_puts("STARVE-FAIL count\n");
+        return -1;
+    }
+    serial_puts("STARVE hog_ticks=");
+    serial_putdec32(sv_t1 - sv_t0);
+    serial_puts(" switches=");
+    serial_putdec32(g_sched_switches - sw0);
+    serial_puts(" early=0 done=1\n");
+    serial_puts("STARVE-OK\n");
     return 0;
 }

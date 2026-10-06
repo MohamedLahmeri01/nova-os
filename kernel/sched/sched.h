@@ -1,7 +1,10 @@
-/* NOVA OS scheduler interface (Phase 4a).
- * Policy behind ops (ADR-0004); default is preemptive round-robin with
- * a fixed slice. need_resched is set by sched_tick (IRQ context) and
- * consumed in irq_common before iret; sched_yield switches directly.
+/* NOVA OS scheduler interface (Phase 4a, strict-prio since 4c).
+ * Policy behind ops (ADR-0004, ADR-0016); current default is
+ * strict 32-level priority + RR within level, 10-tick slices.
+ * need_resched is set by sched_tick (IRQ context) and consumed
+ * in irq_common before iret; sched_yield switches directly.
+ * No aging: strict priority can starve (measured, not wished;
+ * see sched_starve_selftest).
  */
 #ifndef NOVA_SCHED_H
 #define NOVA_SCHED_H
@@ -19,6 +22,8 @@ typedef struct {
 #define SCHED_SLICE_TICKS 10u
 
 extern volatile int sched_need_resched;
+/* Completed context switches (see sched.c). */
+extern volatile uint32_t g_sched_switches;
 
 void sched_init(void);
 struct thread *sched_adopt_boot(void);
@@ -54,5 +59,10 @@ int sched_ticklimit_selftest(void);
 /* Sleep/wakeup proof: early wake x2 + timeout expiry.
  * Prints SLEEP-OK. Nonzero on failure (fatal: panic). */
 int sched_sleep_selftest(void);
+/* Starvation measurement: a prio-31 hog must strictly contain a
+ * prio-1 worker (the worker records whether it ever ran early).
+ * Prints STARVE-OK with hog ticks + switch count. Nonzero on
+ * failure (fatal: panic). */
+int sched_starve_selftest(void);
 
 #endif /* NOVA_SCHED_H */

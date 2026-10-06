@@ -397,6 +397,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (sched_sleep_selftest() != 0) {
         nova_panic("sleep-selftest-fail");
     }
+    /* Starvation measurement (strict-prio semantics + numbers). */
+    if (sched_starve_selftest() != 0) {
+        nova_panic("starve-selftest-fail");
+    }
     /* Blocking sockets (threads exist now; proves park/wake). */
     if (sock_block_selftest() != 0) {
         nova_panic("sockblock-selftest-fail");
