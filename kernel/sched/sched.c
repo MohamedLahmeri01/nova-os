@@ -747,11 +747,13 @@ int sched_starve_selftest(void) {
     extern volatile uint32_t g_ticks;
     uint32_t sw0;
     uint32_t t0;
+    uint32_t base_count;
     sv_hog_n = 0;
     sv_work_n = 0;
     sv_phase = 0;
     sv_early = 0;
     sv_work_done = 0;
+    base_count = thread_count();
     if (thread_create(g_init_process, starve_hog, 0, 31u) == 0 ||
         thread_create(g_init_process, starve_work, 0, 1u) == 0) {
         serial_puts("STARVE-FAIL spawn\n");
@@ -784,6 +786,214 @@ int sched_starve_selftest(void) {
     serial_puts(" switches=");
     serial_putdec32(g_sched_switches - sw0);
     serial_puts(" early=0 done=1\n");
+    /* Lifecycle accounting (Phase G re-audit): both workers exited;
+     * drain the graveyard and prove the count returns to base
+     * (no leaked threads, no double-decrement). */
+    thread_reap_graveyard();
+    if (thread_count() != base_count) {
+        serial_puts("STARVE-FAIL threads\n");
+        return -1;
+    }
     serial_puts("STARVE-OK\n");
+    return 0;
+}
+
+/* --- deterministic workload battery (v0.4 Phase E): RR fairness,
+ * scale, wake latency, sleep accuracy. Machine-readable SCHED-W
+ * lines on serial (the grep-able results channel; guests cannot
+ * hand files to the host). All bounds deterministic; watchdogs
+ * fail loud. Prints SCHEDW-OK. */
+
+static volatile uint32_t wl_s[2];
+static volatile uint32_t wl_e[2];
+static volatile uint32_t wl_c[2];
+static volatile int wl_done[2];
+
+static void wl_rr(void *arg) {
+    uint32_t id = (uint32_t)(uintptr_t)arg;
+    wl_s[id] = g_ticks;
+    for (uint32_t i = 0; i < 200000u; i++) {
+        wl_c[id]++;
+    }
+    wl_e[id] = g_ticks;
+    wl_done[id] = 1;
+    thread_exit(0);
+}
+
+static volatile uint32_t wm_n[6];
+static volatile uint32_t wm_done;
+
+static void wl_many(void *arg) {
+    uint32_t id = (uint32_t)(uintptr_t)arg;
+    for (uint32_t i = 0; i < 50000u; i++) {
+        wm_n[id]++;
+    }
+    arch_atomic_add_u32(&wm_done, 1u);
+    thread_exit(0);
+}
+
+static volatile uint32_t ww_t_wake;
+static volatile uint32_t ww_t_resume;
+static volatile int ww_done;
+static struct thread *ww_w;
+
+static void wl_waiter(void *arg) {
+    uint32_t d;
+    (void)arg;
+    d = g_ticks + 50u;
+    sched_sleep_until(d);
+    ww_t_resume = g_ticks;
+    ww_done = 1;
+    thread_exit(0);
+}
+
+static volatile uint32_t ws_t0;
+static volatile uint32_t ws_t1;
+static volatile int ws_done;
+
+static void wl_sleeper(void *arg) {
+    uint32_t d;
+    (void)arg;
+    ws_t0 = g_ticks;
+    d = ws_t0 + 20u;
+    sched_sleep_until(d);
+    ws_t1 = g_ticks;
+    ws_done = 1;
+    thread_exit(0);
+}
+
+static int wl_wait_done(volatile int *flag, uint32_t t0,
+                        const char *what) {
+    while (!*flag) {
+        if (g_ticks - t0 > 8000u) {
+            serial_puts("SCHEDW-FAIL ");
+            serial_puts(what);
+            serial_puts("\n");
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    return 0;
+}
+
+int sched_workload_selftest(void) {
+    extern volatile uint32_t g_ticks;
+    uint32_t t0;
+    uint32_t sw0;
+    /* W1 RR-equal: same-level pair must interleave (slice
+     * rotation), both complete exact counts. */
+    wl_s[0] = 0;
+    wl_s[1] = 0;
+    wl_e[0] = 0;
+    wl_e[1] = 0;
+    wl_c[0] = 0;
+    wl_c[1] = 0;
+    wl_done[0] = 0;
+    wl_done[1] = 0;
+    if (thread_create(g_init_process, wl_rr, (void *)0, 16u) == 0 ||
+        thread_create(g_init_process, wl_rr, (void *)1, 16u) == 0) {
+        serial_puts("SCHEDW-FAIL spawn-rr\n");
+        return -1;
+    }
+    sw0 = g_sched_switches;
+    t0 = g_ticks;
+    if (wl_wait_done(&wl_done[0], t0, "rr0") != 0 ||
+        wl_wait_done(&wl_done[1], t0, "rr1") != 0) {
+        return -1;
+    }
+    if (wl_c[0] != 200000u || wl_c[1] != 200000u) {
+        serial_puts("SCHEDW-FAIL rr-count\n");
+        return -1;
+    }
+    /* Overlap either direction (whoever ran first, the other
+     * started before the first finished): rotation proven. */
+    if (!((wl_s[1] <= wl_e[0] && wl_s[0] <= wl_e[1]))) {
+        serial_puts("SCHEDW-FAIL rr-fair\n");
+        return -1;
+    }
+    serial_puts("SCHED-W rr overlap=1 switches=");
+    serial_putdec32(g_sched_switches - sw0);
+    serial_putc('\n');
+    /* W2 many-runnable: six same-level workers all finish
+     * exact counts (rotation scales past pairs). */
+    wm_done = 0;
+    for (uint32_t i = 0; i < 6u; i++) {
+        wm_n[i] = 0;
+        if (thread_create(g_init_process, wl_many, (void *)i,
+                          8u) == 0) {
+            serial_puts("SCHEDW-FAIL spawn-many\n");
+            return -1;
+        }
+    }
+    sw0 = g_sched_switches;
+    t0 = g_ticks;
+    while (wm_done != 6u) {
+        if (g_ticks - t0 > 8000u) {
+            serial_puts("SCHEDW-FAIL many\n");
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    for (uint32_t i = 0; i < 6u; i++) {
+        if (wm_n[i] != 50000u) {
+            serial_puts("SCHEDW-FAIL many-count\n");
+            return -1;
+        }
+    }
+    serial_puts("SCHED-W many n=6 switches=");
+    serial_putdec32(g_sched_switches - sw0);
+    serial_putc('\n');
+    /* W3 wake latency: main wakes a +50 sleeper early; resume
+     * lands within 2 ticks (10ms granularity: 0-1 typical,
+     * bound never exceeded without a scheduling stall). */
+    ww_done = 0;
+    ww_t_wake = 0;
+    ww_t_resume = 0;
+    ww_w = thread_create(g_init_process, wl_waiter, 0, 16u);
+    if (ww_w == 0) {
+        serial_puts("SCHEDW-FAIL spawn-wait\n");
+        return -1;
+    }
+    sched_yield();
+    t0 = g_ticks;
+    while (ww_w->state != THREAD_BLOCKED) {
+        if (g_ticks - t0 > 8000u) {
+            serial_puts("SCHEDW-FAIL wait-park\n");
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    ww_t_wake = g_ticks;
+    sched_wakeup(ww_w);
+    t0 = g_ticks;
+    if (wl_wait_done(&ww_done, t0, "wait-done") != 0) {
+        return -1;
+    }
+    if (ww_t_resume - ww_t_wake > 2u) {
+        serial_puts("SCHEDW-FAIL wait-lat\n");
+        return -1;
+    }
+    serial_puts("SCHED-W wake latency=");
+    serial_putdec32(ww_t_resume - ww_t_wake);
+    serial_puts(" bound=2\n");
+    /* W4 sleep accuracy: +20 deadline fires in-window
+     * (tick-exact expiry, generous upper bound). */
+    ws_done = 0;
+    if (thread_create(g_init_process, wl_sleeper, 0, 16u) == 0) {
+        serial_puts("SCHEDW-FAIL spawn-sleep\n");
+        return -1;
+    }
+    t0 = g_ticks;
+    if (wl_wait_done(&ws_done, t0, "sleep-done") != 0) {
+        return -1;
+    }
+    if (ws_t1 - ws_t0 < 20u || ws_t1 - ws_t0 > 25u) {
+        serial_puts("SCHEDW-FAIL sleep-win\n");
+        return -1;
+    }
+    serial_puts("SCHED-W sleep asked=20 actual=");
+    serial_putdec32(ws_t1 - ws_t0);
+    serial_putc('\n');
+    serial_puts("SCHEDW-OK\n");
     return 0;
 }

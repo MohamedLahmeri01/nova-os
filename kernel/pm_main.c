@@ -406,6 +406,11 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (sched_starve_selftest() != 0) {
         nova_panic("starve-selftest-fail");
     }
+    /* Workload battery (RR pair, many-runnable, wake latency,
+     * sleep accuracy; SCHED-W machine-readable lines). */
+    if (sched_workload_selftest() != 0) {
+        nova_panic("workload-selftest-fail");
+    }
     /* Blocking sockets (threads exist now; proves park/wake). */
     if (sock_block_selftest() != 0) {
         nova_panic("sockblock-selftest-fail");

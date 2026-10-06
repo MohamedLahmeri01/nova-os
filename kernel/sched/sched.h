@@ -64,5 +64,9 @@ int sched_sleep_selftest(void);
  * Prints STARVE-OK with hog ticks + switch count. Nonzero on
  * failure (fatal: panic). */
 int sched_starve_selftest(void);
+/* Deterministic workload battery (RR pair, many-runnable, wake
+ * latency, sleep accuracy). Machine-readable SCHED-W lines.
+ * Prints SCHEDW-OK. Nonzero on failure (fatal: panic). */
+int sched_workload_selftest(void);
 
 #endif /* NOVA_SCHED_H */
