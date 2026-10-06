@@ -238,8 +238,12 @@ Capabilities, sandboxing, resource limits, secure handles.
   count, silence assert after traffic), 21/21 (ADR-0052)
 - [x] 14d widget toolkit (labels, buttons, comp_geom,
   about dialog, WID-OK gate + T19), 21/21 (ADR-0053)
-- [ ] 14e+ candidates: input events (click routing,
-  focus-by-click, press states), blocking RX (wait queues)
+- [x] 14e-i click routing (shared comp_click for press
+  edges + synthesized clicks, CLICK-OK gate), 21/21
+  (ADR-0054)
+- [ ] 14e+ candidates: widget hit/press states
+  (button bounds + down rendering), input events
+  (SYS_CLICK/shell click), blocking RX (wait queues)
 
 
 ## Non-goals for 0.x

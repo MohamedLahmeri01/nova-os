@@ -145,14 +145,10 @@ void mouse_feed(uint8_t b) {
         }
         apply_motion(dx, dy);
         g_btn = btn;
-        /* Left press edge: focus the topmost window under the
-         * cursor (stores only: IRQ-safe). */
+        /* Left press edge routes through the shared click path
+         * (hit + focus + present, IRQ-safe like the rest here). */
         if ((btn & 1u) != 0 && (was & 1u) == 0) {
-            int id = comp_hit(g_mx, g_my);
-            if (id >= 0) {
-                comp_focus((uint32_t)id);
-                comp_present();
-            }
+            comp_click(g_mx, g_my);
         }
     }
 }

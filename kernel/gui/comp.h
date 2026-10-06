@@ -41,6 +41,10 @@ int comp_stat(struct nova_winstat *out, uint32_t max);
 /* Topmost live window containing (x,y), or -1 (the click target;
  * menu bar clicks hit nothing: chrome is not a window). */
 int comp_hit(uint32_t x, uint32_t y);
+/* Click routing: hit + focus + repaint, shared by hardware
+ * press edges and synthesized clicks. Returns the hit id,
+ * or -1 on miss (focus unchanged, silent). */
+int comp_click(uint32_t x, uint32_t y);
 /* Window geometry for relative drawing (toolkit). EINVAL on
  * unused id. */
 int comp_geom(uint32_t id, uint32_t *x, uint32_t *y, uint32_t *w,

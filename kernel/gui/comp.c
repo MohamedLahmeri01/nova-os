@@ -1,9 +1,11 @@
 /* NOVA OS compositor (Phase 12b).
  * Windows live in a fixed pool; paint order is id order (stable,
  * testable layering). Borders: 2px white when focused, 1px gray
- * otherwise; title bar is a border-colored strip (no text yet).
- * Everything clips through fb_rect/fb_pixel, so wild geometry is
- * safe. Single-core: no locking (IRQ handlers never compose).
+ * otherwise. Everything clips through fb_rect/fb_pixel, so wild
+ * geometry is safe. Single-core: no locking. The click path
+ * (hit + focus + present) runs in IRQ context too (mouse press
+ * edge): stores only plus a full repaint, safe under any
+ * preemption, matching what mouse_feed already did inline.
  */
 #include <stdint.h>
 
@@ -170,6 +172,23 @@ int comp_geom(uint32_t id, uint32_t *x, uint32_t *y, uint32_t *w,
     return NOVA_ESUCCESS;
 }
 
+/* Click routing (Phase 14e): one shared path for hardware
+ * press edges (mouse_feed) and synthesized clicks (demo,
+ * tests). Hit + focus + repaint; misses and bar clicks
+ * return -1 silently (misses are routine pointer motion). */
+int comp_click(uint32_t x, uint32_t y) {
+    int id = comp_hit(x, y);
+    if (id < 0) {
+        return -1;
+    }
+    comp_focus((uint32_t)id);
+    comp_present();
+    serial_puts("CLICK id=");
+    serial_putdec32((uint32_t)id);
+    serial_putc('\n');
+    return id;
+}
+
 void comp_present(void) {
     uint32_t mx = 0, my = 0;
     fb_clear(FB_DARKGRAY);
@@ -290,6 +309,12 @@ void comp_demo(void) {
     demo_mark(comp_focused());
     demo_frame();
     demo_wait(50);
+    /* Synthesized click on the dialog's OK button (203,165,60,20
+     * -> center 233,175): proves the shared click path every
+     * boot, hardware or not. Dialog ends focused. */
+    comp_click(233, 175);
+    demo_frame();
+    demo_wait(50);
     comp_focus(0);
     demo_mark(comp_focused());
     demo_frame();
@@ -395,6 +420,37 @@ int comp_selftest(void) {
         serial_puts("COMP-FAIL empty\n");
         return -1;
     }
+    /* Click routing: overlapping scratch pair (A back, B front).
+     * Back-only click hits A, overlap hits front B, bar/off-screen
+     * miss silently, empty pool misses. */
+    if (comp_open(100, 80, 80, 60, FB_RED) != 0 ||
+        comp_open(150, 100, 80, 60, FB_BLUE) != 1 ||
+        comp_focus(0) != 0) {
+        serial_puts("COMP-FAIL click-scratch\n");
+        return -1;
+    }
+    if (comp_click(110, 90) != 0 || comp_focused() != 0) {
+        serial_puts("COMP-FAIL click-back\n");
+        return -1;
+    }
+    if (comp_click(160, 120) != 1 || comp_focused() != 1) {
+        serial_puts("COMP-FAIL click-front\n");
+        return -1;
+    }
+    if (comp_click(160, 4) != -1 || comp_focused() != 1) {
+        serial_puts("COMP-FAIL click-bar\n");
+        return -1;
+    }
+    if (comp_click(400, 300) != -1 || comp_focused() != 1) {
+        serial_puts("COMP-FAIL click-off\n");
+        return -1;
+    }
+    if (comp_close(0) != 0 || comp_close(1) != 0 ||
+        comp_click(160, 120) != -1 || comp_focused() != -1) {
+        serial_puts("COMP-FAIL click-empty\n");
+        return -1;
+    }
+    serial_puts("CLICK-OK\n");
     serial_puts("COMP-OK\n");
     return NOVA_ESUCCESS;
 }

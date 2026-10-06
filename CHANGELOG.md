@@ -10,6 +10,10 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   `comp_geom`, guest `wid_selftest` (`WID-OK` gate), teal
   about dialog in compositor demo, T19 coverage (ADR-0053).
   Suite 21/21 on the constrained VM.
+- Phase 14e-i click routing: shared `comp_click` (hit +
+  focus + repaint) for mouse press edges and synthesized
+  clicks, `CLICK-OK` gate, demo clicks the dialog's OK
+  button every boot (ADR-0054). Suite 21/21.
 ## 0.1.0 - 2026-10-05 (first release)
 
 All Phase 0-13d work, suite 20/20 on the constrained VM.

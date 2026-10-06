@@ -51,6 +51,8 @@ static int stub_hit = -1;
 static int focus_calls;
 static int focus_last = -2;
 static int present_calls;
+static int click_calls;
+static int click_last = -2;
 
 int comp_hit(uint32_t x, uint32_t y) {
     (void)x;
@@ -66,6 +68,21 @@ int comp_focus(uint32_t id) {
 
 void comp_present(void) {
     present_calls++;
+}
+
+/* Shared click path stub: mirrors the real semantics (hit +
+ * focus + present, silent miss) so the press edge proves
+ * routing through comp_click, not past it. */
+int comp_click(uint32_t x, uint32_t y) {
+    int id = comp_hit(x, y);
+    click_calls++;
+    click_last = id;
+    if (id < 0) {
+        return -1;
+    }
+    comp_focus((uint32_t)id);
+    comp_present();
+    return id;
 }
 
 /* Referenced only by mouse_selftest (never runs on host). */
@@ -123,16 +140,20 @@ int main(void) {
         check(x == 319u && y == 0u, "clamp", x, y);
     }
 
-    /* Click wiring: press edge focuses the hit window and
-     * repaints; release changes nothing further. */
+    /* Click wiring: press edge routes through comp_click to
+     * the hit window (focus + repaint); release changes
+     * nothing further. */
     stub_hit = 4;
     focus_calls = 0;
     present_calls = 0;
+    click_calls = 0;
     mouse_feed(0x09u);
     mouse_feed(0);
     mouse_feed(0);
     check(mouse_buttons() == 1u, "press-btn", mouse_buttons(),
           0);
+    check(click_calls == 1 && click_last == 4, "press-click",
+          (unsigned long)click_calls, (unsigned long)click_last);
     check(focus_calls == 1 && focus_last == 4, "press-focus",
           (unsigned long)focus_calls, (unsigned long)focus_last);
     check(present_calls == 1, "press-present",
@@ -144,16 +165,23 @@ int main(void) {
           mouse_buttons(), 0);
     check(focus_calls == 1, "release-quiet",
           (unsigned long)focus_calls, 0);
+    check(click_calls == 1, "release-noclick",
+          (unsigned long)click_calls, 0);
 
-    /* Miss: no hit, no focus call, button still tracks. */
+    /* Miss: no hit, no focus call, no repaint, button still
+     * tracks. */
     stub_hit = -1;
     mouse_feed(0x09u);
     mouse_feed(0);
     mouse_feed(0);
     check(mouse_buttons() == 1u, "miss-btn", mouse_buttons(),
           0);
+    check(click_calls == 2 && click_last == -1, "miss-click",
+          (unsigned long)click_calls, 0);
     check(focus_calls == 1, "miss-nofocus",
           (unsigned long)focus_calls, 0);
+    check(present_calls == 1, "miss-nopresent",
+          (unsigned long)present_calls, 0);
     mouse_feed(0x08u);
     mouse_feed(0);
     mouse_feed(0);
