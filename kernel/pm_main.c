@@ -396,6 +396,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (sched_sleep_selftest() != 0) {
         nova_panic("sleep-selftest-fail");
     }
+    /* Blocking sockets (threads exist now; proves park/wake). */
+    if (sock_block_selftest() != 0) {
+        nova_panic("sockblock-selftest-fail");
+    }
     {
         int user_rc = user_selftest();
         if (user_rc != 0) {

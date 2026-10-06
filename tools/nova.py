@@ -300,6 +300,8 @@ def build_phase1(fault=False):
                                   ("kernel/fs/nova.c", "novafs.o", []),
                                    ("kernel/net/net.c", "net.o", []),
                                    ("kernel/net/sock.c", "sock.o", []),
+                                   ("kernel/net/sock_block.c",
+                                    "sock_block.o", []),
                                   (PMM_BACKEND_C, PMM_BACKEND_O, [])]:
         s = os.path.join(ROOT, src)
         if not os.path.isfile(s):
@@ -328,7 +330,8 @@ def build_phase1(fault=False):
                "kbd.o", "mouse.o", "init_blob.o", "hi_blob.o", "uname_blob.o", "ramfs.o", "file.o",
               "fat32.o", "ext4.o", "novafs.o", "ata.o", "pci.o",
                "vga.o", "fb.o", "font.o", "comp.o", "widget.o",
-               "virtio.o", "net.o", "sock.o", PMM_BACKEND_O],
+               "virtio.o", "net.o", "sock.o", "sock_block.o",
+               PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
                ["-Wl,-T," + os.path.join(ROOT, ld)] +
@@ -1238,7 +1241,7 @@ def cmd_run_vbox():
                                        b"CAPS-OK", b"RLIM-OK", b"PERM-OK",
                                        b"JAIL-OK", b"SDK-OK", b"WIN-OK",
                                        b"TICK-OK", b"SOCK-OK", b"IDT-OK",
-                                       b"SLEEP-OK",
+                                       b"SLEEP-OK", b"SOCKBLK-OK",
                                        b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
@@ -1299,7 +1302,7 @@ PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                   b"NOVA-OK", b"NET-OK", b"NET-WIRE-OK", b"DHCP-OK",
                   b"CAPS-OK", b"RLIM-OK", b"PERM-OK", b"JAIL-OK",
                   b"WIN-OK", b"TICK-OK", b"SOCK-OK", b"IDT-OK",
-                  b"SLEEP-OK",
+                  b"SLEEP-OK", b"SOCKBLK-OK",
                   b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]

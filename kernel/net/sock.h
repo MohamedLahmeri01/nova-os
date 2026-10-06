@@ -33,12 +33,19 @@ int sock_close(uint32_t id);
  * success once validated, even with nobody home). */
 int sock_send(uint32_t id, uint32_t dst, uint16_t dport,
               const uint8_t *payload, uint32_t len);
-/* Receive one datagram payload (copy, clear slot). -EAGAIN on
- * timeout (ticks). */
+/* Receive one datagram payload (copy, clear slot). Blocks when
+ * scheduled (delivery/close wakes; close or rebind under a
+ * waiter fails it with EBADF); spins in early boot; polls on
+ * timeout 0. -EAGAIN on deadline, -EBUSY when another thread
+ * already parks here. */
 int sock_recv(uint32_t id, uint8_t *out, uint32_t max,
               uint32_t timeout, uint32_t *len_out);
 /* Deterministic selftest (bind/loop/close/errors through real
  * paths). Prints SOCK-OK. Nonzero on failure (fatal: panic). */
 int sock_selftest(void);
+/* Blocking proof (scheduler live): parked waiter woken by a
+ * loopback send, deadline expiry, close-under-waiter EBADF.
+ * Prints SOCKBLK-OK. Nonzero on failure (fatal: panic). */
+int sock_block_selftest(void);
 
 #endif /* NOVA_SOCK_H */

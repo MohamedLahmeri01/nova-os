@@ -1,17 +1,24 @@
-/* NOVA OS UDP sockets (Phase 14a).
+/* NOVA OS UDP sockets (Phase 14a, blocking recv 15-ii).
  * Fixed pool, global port space, single-slot RX (overwrite like
  * loopback). Loopback destinations (127.0.0.1, self) deliver
  * straight into the peer slot (never touches virtio: host-
  * testable); everything else rides net_udp_send (ARP, routing,
  * and its errors included). Fire-and-forget sends (UDP
  * semantics: validated sends succeed with nobody home).
- * Single-core: no locking (IRQ handlers never socket).
+ * Receive blocks when scheduled (loopback delivery or close
+ * wakes the waiter; rebind under a sleeper fails it with
+ * EBADF via the bind generation) and spins in early boot
+ * (scheduler dead: selftests). One waiter per socket (EBUSY).
+ * Single-core: no locking (no IRQ delivery yet; wakeups run
+ * in thread context, expiry in IRQ context on owned fields).
  */
 #include <stdint.h>
 
 #include "serial.h"
 #include "net/net.h"
 #include "net/sock.h"
+#include "sched/sched.h"
+#include "thread/thread.h"
 #include "syscall/syscall.h"
 #include "time/time.h"
 
@@ -23,10 +30,15 @@ struct sock {
     uint8_t rx[SOCK_MTU_PAYLOAD];
     uint32_t rxlen;
     int has;
+    /* Blocked receiver (one; woken on delivery/close). */
+    struct thread *waiter;
+    /* Bind generation (bumps per open; rebind detection). */
+    uint32_t gen;
 };
 
 static struct sock g_socks[SOCK_MAX];
 static uint16_t g_next_ephem = SOCK_EPHEMERAL_MIN;
+static uint32_t g_sock_gen; /* 0 = never bound (skipped on wrap) */
 
 static int valid_id(uint32_t id) {
     return id < SOCK_MAX && g_socks[id].used;
@@ -72,6 +84,11 @@ int sock_open(uint16_t port) {
             g_socks[i].port = want;
             g_socks[i].rxlen = 0;
             g_socks[i].has = 0;
+            g_socks[i].waiter = 0;
+            if (++g_sock_gen == 0) {
+                ++g_sock_gen;
+            }
+            g_socks[i].gen = g_sock_gen;
             return (int)i;
         }
     }
@@ -81,6 +98,11 @@ int sock_open(uint16_t port) {
 int sock_close(uint32_t id) {
     if (!valid_id(id)) {
         return -NOVA_EBADF;
+    }
+    /* A parked receiver fails (EBADF on wake: slot gone). */
+    if (g_socks[id].waiter != 0) {
+        sched_wakeup(g_socks[id].waiter);
+        g_socks[id].waiter = 0;
     }
     g_socks[id].used = 0;
     g_socks[id].has = 0;
@@ -98,7 +120,9 @@ int sock_send(uint32_t id, uint32_t dst, uint16_t dport,
     }
     sport = g_socks[id].port;
     if (dst == SOCK_LOOPBACK || dst == net_self_ip()) {
-        /* Loopback delivery (no wire, no ARP, no waiting). */
+        /* Loopback delivery (no wire, no ARP, no waiting). A
+         * parked receiver wakes with the data (field cleared
+         * before waking: it can never observe a stale waiter). */
         for (uint32_t i = 0; i < SOCK_MAX; i++) {
             if (g_socks[i].used && g_socks[i].port == dport) {
                 for (uint32_t k = 0; k < len; k++) {
@@ -106,6 +130,11 @@ int sock_send(uint32_t id, uint32_t dst, uint16_t dport,
                 }
                 g_socks[i].rxlen = len;
                 g_socks[i].has = 1;
+                if (g_socks[i].waiter != 0) {
+                    struct thread *w = g_socks[i].waiter;
+                    g_socks[i].waiter = 0;
+                    sched_wakeup(w);
+                }
                 break;
             }
         }
@@ -115,29 +144,77 @@ int sock_send(uint32_t id, uint32_t dst, uint16_t dport,
                         len);
 }
 
+/* Drain one buffered datagram (copy, clear slot). Shared by the
+ * fast path, the early-boot spin, and the blocking wakeup. */
+static int recv_copy(uint32_t id, uint8_t *out, uint32_t max,
+                     uint32_t *len_out) {
+    uint32_t n = g_socks[id].rxlen;
+    if (n > max) {
+        return -NOVA_ENOSPC;
+    }
+    for (uint32_t k = 0; k < n; k++) {
+        out[k] = g_socks[id].rx[k];
+    }
+    *len_out = n;
+    g_socks[id].has = 0;
+    return (int)n;
+}
+
 int sock_recv(uint32_t id, uint8_t *out, uint32_t max,
               uint32_t timeout, uint32_t *len_out) {
-    uint32_t t0 = g_ticks;
     if (!valid_id(id)) {
         return -NOVA_EBADF;
     }
     if (out == 0 || len_out == 0) {
         return -NOVA_EINVAL;
     }
-    for (;;) {
-        if (g_socks[id].has) {
-            if (g_socks[id].rxlen > max) {
-                return -NOVA_ENOSPC;
+    /* Fast path: data waiting (no sleep, any context). */
+    if (g_socks[id].has) {
+        return recv_copy(id, out, max, len_out);
+    }
+    /* Poll (timeout 0 never sleeps: frozen host ticks stay safe,
+     * scheduled or not). */
+    if (timeout == 0) {
+        return -NOVA_EAGAIN;
+    }
+    /* Early boot (scheduler dead): legacy spin (selftests). */
+    if (!sched_can_sleep()) {
+        uint32_t t0 = g_ticks;
+        for (;;) {
+            if (g_socks[id].has) {
+                return recv_copy(id, out, max, len_out);
             }
-            for (uint32_t k = 0; k < g_socks[id].rxlen; k++) {
-                out[k] = g_socks[id].rx[k];
+            if (g_ticks - t0 >= timeout) {
+                return -NOVA_EAGAIN;
             }
-            *len_out = g_socks[id].rxlen;
-            g_socks[id].has = 0;
-            return (int)g_socks[id].rxlen;
         }
-        if (g_ticks - t0 >= timeout) {
-            return -NOVA_EAGAIN;
+    }
+    /* Blocking path: park till delivery or deadline. One waiter
+     * per socket (a second sleeper is EBUSY, never stranded).
+     * Woken states: data (copy), close/rebind (EBADF via used +
+     * generation), deadline (EAGAIN). Anything else loops back
+     * to sleep (defensive: no such waker exists today). */
+    if (g_socks[id].waiter != 0) {
+        return -NOVA_EBUSY;
+    }
+    {
+        uint32_t deadline = g_ticks + timeout;
+        uint32_t gen = g_socks[id].gen;
+        struct thread *me = sched_current_thread();
+        for (;;) {
+            int expired;
+            g_socks[id].waiter = me;
+            expired = sched_sleep_until(deadline);
+            g_socks[id].waiter = 0;
+            if (!valid_id(id) || g_socks[id].gen != gen) {
+                return -NOVA_EBADF;
+            }
+            if (g_socks[id].has) {
+                return recv_copy(id, out, max, len_out);
+            }
+            if (expired) {
+                return -NOVA_EAGAIN;
+            }
         }
     }
 }

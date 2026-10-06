@@ -1,9 +1,14 @@
 /* NOVA OS socket host test (Phase 14a, T21).
  * Host-side: the REAL kernel/net/sock.c; loopback never touches
  * virtio (net_* stubbed, never called on loopback paths), ticks
- * frozen (timeouts are immediate). Bind matrix, loopback
- * round-trips, error discipline, close/reuse, randomized
- * open/send/recv/close fuzz for crash-freedom. VERDICT line.
+ * frozen (timeouts are immediate). No scheduler on host
+ * (can_sleep is 0: the early-boot spin path executes, which is
+ * exactly what the guest pre-scheduler selftest proves too).
+ * The blocking proof needs real threads + timer: guest-only
+ * (kernel/net/sock_block.c, SOCKBLK-OK).
+ * Bind matrix, loopback round-trips, error discipline,
+ * close/reuse, randomized open/send/recv/close fuzz for
+ * crash-freedom. VERDICT line.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +16,7 @@
 #include <string.h>
 
 #include "net/sock.h"
+#include "thread/thread.h"
 #include "syscall/syscall.h"
 
 static int g_failed;
@@ -47,6 +53,28 @@ void serial_puthex32(uint32_t v) {
 }
 
 volatile uint32_t g_ticks = 1000u;
+
+/* No scheduler on host: recv takes the early-boot spin path
+ * (frozen ticks: timeouts decide on the first check). */
+int sched_can_sleep(void) {
+    return 0;
+}
+
+int sched_sleep_until(uint32_t deadline) {
+    (void)deadline;
+    return 1;
+}
+
+void sched_wakeup(struct thread *t) {
+    (void)t;
+}
+
+/* Unreached on host (can_sleep is 0, so the blocking path that
+ * reads the current thread never executes); present for the
+ * link, like the sleep/wake stubs above. */
+struct thread *sched_current_thread(void) {
+    return 0;
+}
 
 uint32_t net_self_ip(void) {
     return 0x0A00020Fu;

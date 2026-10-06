@@ -43,6 +43,10 @@ int sched_sleep_until(uint32_t deadline);
  * wake-after-gone races). IRQ-safe (stores only); a woken
  * higher-prio thread preempts at the next IRQ return. */
 void sched_wakeup(struct thread *t);
+/* Nonzero when sleeping is legal (scheduler started with a
+ * current thread). Advisory fast check for paths (early boot)
+ * that must spin instead. */
+int sched_can_sleep(void);
 int sched_selftest(void);
 /* CPU quota proof: a spinning user thread dies on schedule.
  * Prints TICK-OK. Nonzero on failure (fatal: panic). */

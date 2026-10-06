@@ -249,8 +249,11 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 15-i sleep/wakeup primitives (THREAD_BLOCKED, timer
   expiry, early-wake + timeout proof, SLEEP-OK gate),
   21/21 (ADR-0057)
-- [ ] Next: blocking sock_recv (sleep/wakeup + deadline,
-  loopback delivery wakes)
+- [x] 15-ii blocking sock_recv (park/wake/expire, waiter +
+  generation, guest-only proof file, SOCKBLK-OK gate),
+  21/21 (ADR-0058)
+- [ ] Next: wire-RX socket demux (IRQ-context delivery
+  wake), more sleep callers (getkey/disk)
 
 
 ## Non-goals for 0.x

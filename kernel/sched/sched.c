@@ -212,6 +212,14 @@ void sched_wakeup(struct thread *t) {
     __asm__ volatile("sti" ::: "memory");
 }
 
+int sched_can_sleep(void) {
+    int ok;
+    __asm__ volatile("cli" ::: "memory");
+    ok = g_started && g_current != 0;
+    __asm__ volatile("sti" ::: "memory");
+    return ok;
+}
+
 static void sleep_enter(uint32_t deadline, int timed) {
     struct thread *cur;
     struct thread *next;
