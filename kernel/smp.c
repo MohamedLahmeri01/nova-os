@@ -28,6 +28,7 @@
 #define AP_TRAMP_BASE 0x8000u
 #define AP_TRAMP_VECTOR 0x08u
 #define IA32_APIC_BASE 0x1Bu
+#define LAPIC_ID 0x20u
 #define LAPIC_ICR_LO 0x300u
 #define LAPIC_ICR_HI 0x310u
 
@@ -40,6 +41,8 @@ extern void ap_prot_addr(void);
 static uint32_t g_apic_ids[MAX_APS];
 static uint32_t g_ap_count;
 static uint32_t g_ncpus;
+static uint32_t g_bsp_id;
+static int g_bsp_known;
 static volatile uint32_t g_ap_done;
 static uint32_t g_ap_online;
 static uint32_t g_lapic_base;
@@ -111,6 +114,10 @@ static void mp_parse(void) {
             if (flags & 1u) {
                 if (g_ncpus < MAX_APS + 1u) {
                     g_ncpus++;
+                }
+                if ((flags & 2u) != 0 && !g_bsp_known) {
+                    g_bsp_id = apic_id;
+                    g_bsp_known = 1;
                 }
                 if (!(flags & 2u) && g_ap_count < MAX_APS) {
                     g_apic_ids[g_ap_count++] = apic_id;
@@ -224,9 +231,42 @@ void smp_boot(void) {
     if (g_ap_online != g_ap_count) {
         nova_panic("smp-count-mismatch");
     }
+    /* Self-ID proof (SMP foundations): the LAPIC ID register
+     * reads stable across two reads, and matches the MP-table
+     * BSP entry when the table named one (hardware truth, not
+     * a constant). All callers today are the BSP. */
+    {
+        uint32_t id0 = smp_cpu_id();
+        uint32_t id1 = smp_cpu_id();
+        uint32_t bsp = 0;
+        if (id0 != id1) {
+            nova_panic("smp-id-unstable");
+        }
+        if (smp_bsp_id(&bsp) == 0 && id0 != bsp) {
+            nova_panic("smp-id-mismatch");
+        }
+        serial_puts("SMP-CPU id=");
+        serial_putdec32(id0);
+        serial_putc('\n');
+    }
     serial_puts("SMP-OK\n");
 }
 
 uint32_t smp_cpu_count(void) {
     return g_ncpus;
+}
+
+uint32_t smp_cpu_id(void) {
+    volatile uint32_t *lapic = (volatile uint32_t *)lapic_base();
+    return lapic[LAPIC_ID >> 2] >> 24;
+}
+
+int smp_bsp_id(uint32_t *out) {
+    if (!g_bsp_known) {
+        return -1;
+    }
+    if (out != 0) {
+        *out = g_bsp_id;
+    }
+    return 0;
 }

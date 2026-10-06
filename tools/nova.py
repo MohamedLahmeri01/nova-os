@@ -302,6 +302,7 @@ def build_phase1(fault=False):
                                    ("kernel/net/sock.c", "sock.o", []),
                                    ("kernel/net/sock_block.c",
                                     "sock_block.o", []),
+                                   ("kernel/sync/sync.c", "sync.o", []),
                                   (PMM_BACKEND_C, PMM_BACKEND_O, [])]:
         s = os.path.join(ROOT, src)
         if not os.path.isfile(s):
@@ -331,6 +332,7 @@ def build_phase1(fault=False):
               "fat32.o", "ext4.o", "novafs.o", "ata.o", "pci.o",
                "vga.o", "fb.o", "font.o", "comp.o", "widget.o",
                "virtio.o", "net.o", "sock.o", "sock_block.o",
+               "sync.o",
                PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
@@ -1019,6 +1021,26 @@ def cmd_test():
             print("[pass] T21 host socket test"); passed += 1
         else:
             print("[fail] T21 host socket test"); failed += 1
+    # T22: host spinlock contract test (sync.c atomics + lock discipline)
+    print("[info] T22 compiling + running host sync test...")
+    sync_exe = os.path.join(BUILD, "test_sync.exe")
+    cmd = ["gcc", "-O2", "-Wall", "-Wextra",
+           "-I", os.path.join(ROOT, "kernel"),
+           "-I", os.path.join(ROOT, "sdk", "include"),
+           os.path.join(ROOT, "tests", "unit", "test_sync.c"),
+           os.path.join(ROOT, "kernel", "sync", "sync.c"),
+           "-o", sync_exe]
+    r = run(cmd, timeout=120)
+    if r.returncode != 0:
+        print(f"[fail] T22 sync test compile:\n{(r.stderr or '')[:1500]}")
+        failed += 1
+    else:
+        r = run([sync_exe], timeout=120)
+        print((r.stdout or "") + (r.stderr or ""))
+        if r.returncode == 0:
+            print("[pass] T22 host sync test"); passed += 1
+        else:
+            print("[fail] T22 host sync test"); failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 
@@ -1245,7 +1267,7 @@ def cmd_run_vbox():
                                        b"TICK-OK", b"SOCK-OK", b"IDT-OK",
                                        b"SLEEP-OK", b"SOCKBLK-OK",
                                        b"IRQPUMP-OK", b"KBDBLK-OK",
-                                       b"STARVE-OK",
+                                       b"STARVE-OK", b"SYNC-OK",
                                        b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
@@ -1307,7 +1329,7 @@ PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                   b"CAPS-OK", b"RLIM-OK", b"PERM-OK", b"JAIL-OK",
                   b"WIN-OK", b"TICK-OK", b"SOCK-OK", b"IDT-OK",
                   b"SLEEP-OK", b"SOCKBLK-OK", b"IRQPUMP-OK",
-                  b"KBDBLK-OK", b"STARVE-OK",
+                  b"KBDBLK-OK", b"STARVE-OK", b"SYNC-OK",
                   b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]

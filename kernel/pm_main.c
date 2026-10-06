@@ -31,6 +31,7 @@
 #include "input/kbd.h"
 #include "input/mouse.h"
 #include "net/sock.h"
+#include "sync/sync.h"
 #include "drivers/virtio_net.h"
 #include "thread/thread.h"
 #include "process/process.h"
@@ -412,6 +413,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
     /* Blocking keyboard (reader threads exist now). */
     if (kbd_block_selftest() != 0) {
         nova_panic("kbdblock-selftest-fail");
+    }
+    /* SMP foundations: lock contention under preemption. */
+    if (sync_contention_selftest() != 0) {
+        nova_panic("sync-selftest-fail");
     }
     {
         int user_rc = user_selftest();

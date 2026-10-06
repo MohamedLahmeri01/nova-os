@@ -91,12 +91,66 @@ static inline void arch_sti(void) {
     __asm__ volatile("sti" ::: "memory");
 }
 
+/* IF save/restore for irqsave locks (the restore end must know
+ * whether interrupts were on: blind sti inside an ISR handler
+ * re-enables mid-handler — see ADR-0061). */
+static inline uint32_t arch_irq_save(void) {
+    uint32_t eflags;
+    __asm__ volatile("pushfl; popl %0" : "=r"(eflags)::"memory");
+    __asm__ volatile("cli" ::: "memory");
+    return eflags & 0x200u;
+}
+
+static inline void arch_irq_restore(uint32_t was_on) {
+    if (was_on != 0) {
+        __asm__ volatile("sti" ::: "memory");
+    }
+}
+
 static inline void arch_hlt(void) {
     __asm__ volatile("hlt" ::: "memory");
 }
 
 static inline void arch_invlpg(uint32_t addr) {
     __asm__ volatile("invlpg (%0)" :: "r"(addr) : "memory");
+}
+
+/* SMP atomics (Phase 0.3-E): LOCK-prefixed, bus-locking on 486+,
+ * cache-locking on modern cores. Generic code uses these, never
+ * inline LOCK asm directly. Correct on one CPU too (atomicity
+ * vs interrupts comes from the caller's cli discipline, not
+ * from LOCK). */
+static inline void arch_pause(void) {
+    __asm__ volatile("pause" ::: "memory");
+}
+
+/* Atomic exchange: stores v, returns the previous value. */
+static inline uint32_t arch_atomic_xchg_u32(volatile uint32_t *p,
+                                            uint32_t v) {
+    __asm__ volatile("xchgl %0, %1"
+                     : "+r"(v), "+m"(*p)::"memory");
+    return v;
+}
+
+/* Atomic compare-exchange: if *p == expect, stores want.
+ * Returns the previous value (compare with expect to tell). */
+static inline uint32_t arch_atomic_cmpxchg_u32(volatile uint32_t *p,
+                                               uint32_t expect,
+                                               uint32_t want) {
+    uint32_t prev = expect;
+    __asm__ volatile("lock; cmpxchgl %2, %1"
+                     : "+a"(prev), "+m"(*p)
+                     : "r"(want)
+                     : "memory");
+    return prev;
+}
+
+/* Atomic fetch-and-add: adds v, returns the previous value. */
+static inline uint32_t arch_atomic_add_u32(volatile uint32_t *p,
+                                           uint32_t v) {
+    __asm__ volatile("lock; xaddl %0, %1"
+                     : "+r"(v), "+m"(*p)::"memory");
+    return v;
 }
 
 #endif /* NOVA_ARCH_X86_CPU_H */
