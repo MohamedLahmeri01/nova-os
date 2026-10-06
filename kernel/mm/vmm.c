@@ -29,6 +29,7 @@
 #include "panic.h"
 #include "pmm.h"
 #include "vmm.h"
+#include "addrspace.h"
 #include "../../boot/mem_layout.h"
 
 #if defined(__i386__)
@@ -185,6 +186,8 @@ int mem_page_state(uint32_t addr, int *present, int *user,
     }
 }
 
+static int vmm_audit_mappings(void);
+
 int vmm_selftest(void) {    if ((g_pt0[0] & (PTE_P | PTE_RW)) != PTE_P) {
         return -1; /* page zero must be present read-only */
     }
@@ -200,8 +203,9 @@ int vmm_selftest(void) {    if ((g_pt0[0] & (PTE_P | PTE_RW)) != PTE_P) {
         for (uint32_t page = NOVA_KERNEL_LOAD; page < tend;
              page += 0x1000u) {
             uint32_t e = g_pt0[page >> 12];
-            if ((e & PTE_P) == 0 || (e & PTE_RW) != 0) {
-                return -7; /* text must be present read-only */
+            if ((e & PTE_P) == 0 || (e & PTE_RW) != 0 ||
+                (e & PTE_US) != 0) {
+                return -7; /* text must be present RO supervisor */
             }
         }
     }
@@ -216,5 +220,110 @@ int vmm_selftest(void) {    if ((g_pt0[0] & (PTE_P | PTE_RW)) != PTE_P) {
     if ((arch_read_cr0() & 0x80000000u) == 0) {
         return -6; /* PG really on */
     }
+    if (vmm_audit_mappings() != 0) {
+        return -8; /* permission grid violated (see serial) */
+    }
+    return 0;
+}
+
+/* Full permission grid audit (v0.4 Phase D): every mapping class
+ * asserted against the §D table — not assumed from the code that
+ * built it. Runs once at boot (tables are static afterwards;
+ * MMIO mappings added later are RW-supervisor by construction).
+ * Prints MEMMAP-OK. Nonzero (with reason) on any violation. */
+static uint32_t vmm_audit_data_probe;
+
+static int vmm_audit_mappings(void) {
+    /* Null page: present, RO, supervisor. */
+    if ((g_pt0[0] & (PTE_P | PTE_RW | PTE_US)) != PTE_P) {
+        serial_puts("MEMMAP-FAIL null\n");
+        return -1;
+    }
+    /* Kernel data sample (this function's own static): RW,
+     * supervisor (execute is implicit: no NX bit exists). */
+    {
+        uint32_t pg = ((uint32_t)(uintptr_t)&vmm_audit_data_probe) >>
+                      12;
+        uint32_t e = g_pt0[pg];
+        if ((e & (PTE_P | PTE_RW)) != (PTE_P | PTE_RW) ||
+            (e & PTE_US) != 0) {
+            serial_puts("MEMMAP-FAIL data\n");
+            return -1;
+        }
+    }
+    /* Framebuffer page: RW, supervisor (mapped, writable). */
+    {
+        uint32_t e = g_pt0[0xA0u];
+        if ((e & (PTE_P | PTE_RW)) != (PTE_P | PTE_RW) ||
+            (e & PTE_US) != 0) {
+            serial_puts("MEMMAP-FAIL fb\n");
+            return -1;
+        }
+    }
+    /* Large pages [4MB, map_end): present, RW, supervisor. */
+    for (uint32_t p = 1; p * LARGE_4MB < g_map_end; p++) {
+        uint32_t e = g_pd[p];
+        if ((e & (PTE_P | PTE_RW)) != (PTE_P | PTE_RW) ||
+            (e & PTE_US) != 0) {
+            serial_puts("MEMMAP-FAIL large\n");
+            return -1;
+        }
+    }
+    /* Gap [map_end, 2GB): unmapped (user half + MMIO later). */
+    for (uint32_t p = (uint32_t)(g_map_end >> 22); p < KERNEL_PDS;
+         p++) {
+        if ((g_pd[p] & PTE_P) != 0) {
+            serial_puts("MEMMAP-FAIL gap\n");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* User-half audit (called after kheap_init: needs kmalloc for a
+ * scratch addrspace). Kernel-clone isolation + exact user-map
+ * bits. Prints MEMMAP-OK. */
+int vmm_audit_user(void) {
+    struct addrspace *as;
+    uint32_t f1, f2;
+    uint32_t *pd;
+    uint32_t *pt;
+    /* Scratch user space: kernel clone is supervisor-only
+     * (isolation holds by bits, not by trust); user maps get
+     * exactly the requested U/S+RW combination. */
+    as = addrspace_create();
+    f1 = pmm_alloc_frame();
+    f2 = pmm_alloc_frame();
+    if (as == 0 || f1 == 0 || f2 == 0) {
+        serial_puts("MEMMAP-FAIL alloc\n");
+        return -1;
+    }
+    pd = (uint32_t *)as->pd;
+    for (uint32_t i = 0; i < KERNEL_PDS; i++) {
+        if ((pd[i] & PTE_P) != 0 && (pd[i] & PTE_US) != 0) {
+            serial_puts("MEMMAP-FAIL clone\n");
+            return -1;
+        }
+    }
+    if (addrspace_map(as, USER_BASE, f1, 1) != 0 ||
+        addrspace_map(as, USER_BASE + 0x1000u, f2, 0) != 0) {
+        serial_puts("MEMMAP-FAIL map\n");
+        return -1;
+    }
+    pt = (uint32_t *)(pd[USER_BASE >> 22] & ~0xFFFu);
+    if ((pt[0] & (PTE_P | PTE_US | PTE_RW)) !=
+            (PTE_P | PTE_US | PTE_RW)) {
+        serial_puts("MEMMAP-FAIL urw\n");
+        return -1;
+    }
+    if ((pt[1] & (PTE_P | PTE_US)) != (PTE_P | PTE_US) ||
+        (pt[1] & PTE_RW) != 0) {
+        serial_puts("MEMMAP-FAIL uro\n");
+        return -1;
+    }
+    pmm_free_frame(f1);
+    pmm_free_frame(f2);
+    addrspace_destroy(as);
+    serial_puts("MEMMAP-OK\n");
     return 0;
 }

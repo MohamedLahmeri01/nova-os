@@ -10,6 +10,10 @@
 #include <stdint.h>
 
 #define USER_BASE 0x80000000u
+/* PD entries cloned from the kernel PD (identity low 1GB,
+ * supervisor-only). Single source (was duplicated in vmm
+ * audit code); addrspace_create + destroy + audits share it. */
+#define KERNEL_PDS 256u
 
 struct addrspace {
     uint32_t pd; /* physical address of the page directory */

@@ -287,6 +287,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
         nova_panic("heap-selftest-fail");
     }
     serial_puts("HEAP-OK\n");
+    /* User-half mapping audit (needs the heap above). */
+    if (vmm_audit_user() != 0) {
+        nova_panic("memmap-selftest-fail");
+    }
     /* IDT first (Phase 7c lesson): slow polling (ATA PIO) crosses the
      * first BIOS timer tick (~55ms); without a valid IDT that IRQ
      * vectors through the IVT-as-IDT garbage and triple-faults. With
