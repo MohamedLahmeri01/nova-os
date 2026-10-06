@@ -20,6 +20,7 @@
 #include "process/rlimit.h"
 #include "mm/addrspace.h"
 #include "net/net.h"
+#include "trace/trace.h"
 
 #if defined(__i386__)
 #include "../arch/x86/cpu.h"
@@ -202,6 +203,8 @@ static void sleep_wake(struct thread *t, int timedout) {
     t->state = THREAD_READY;
     t->sleep_timed = 0;
     t->sleep_timedout = timedout;
+    trace_emit(TRACE_WAKE, (uint16_t)(t->id & 0xFFFFu),
+               (uint32_t)timedout);
     sched_add(t);
     /* Strict priority: a higher-prio wakeup preempts at the next
      * IRQ return (same mechanism as slice expiry). */
@@ -241,6 +244,7 @@ static void sleep_enter(uint32_t deadline, int timed) {
     cur->sleep_deadline = deadline;
     cur->sleep_timed = timed;
     cur->sleep_timedout = 0;
+    trace_emit(TRACE_SLEEP, (uint16_t)(cur->id & 0xFFFFu), deadline);
     sched_remove(cur);
     /* Sleep list push-front (`next` was cleared by remove). */
     cur->next = g_sleep_head;

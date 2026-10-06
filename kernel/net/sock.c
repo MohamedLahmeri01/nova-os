@@ -22,6 +22,7 @@
 #include "sched/sched.h"
 #include "thread/thread.h"
 #include "syscall/syscall.h"
+#include "trace/trace.h"
 #include "time/time.h"
 
 #if defined(__i386__)
@@ -57,14 +58,16 @@ static int valid_id(uint32_t id) {
 /* Fill one RX slot + wake its waiter. Wake-then-clear: a
  * newcomer between the two sees a waiter (EBUSY) instead of
  * stealing the wake. Shared by loopback delivery and the wire
- * demux (one wake path, two arrivals). */
-static void sock_slot_deliver(uint32_t i, const uint8_t *payload,
-                              uint32_t len) {
+ * demux (one wake path, two arrivals). Traces the divert with
+ * the destination port. */
+static void sock_slot_deliver(uint32_t i, uint16_t dport,
+                              const uint8_t *payload, uint32_t len) {
     for (uint32_t k = 0; k < len; k++) {
         g_socks[i].rx[k] = payload[k];
     }
     g_socks[i].rxlen = len;
     g_socks[i].has = 1;
+    trace_emit(TRACE_RXDIV, dport, len);
     if (g_socks[i].waiter != 0) {
         struct thread *w = g_socks[i].waiter;
         sched_wakeup(w);
@@ -151,7 +154,7 @@ int sock_send(uint32_t id, uint32_t dst, uint16_t dport,
         /* Loopback delivery (no wire, no ARP, no waiting). */
         for (uint32_t i = 0; i < SOCK_MAX; i++) {
             if (g_socks[i].used && g_socks[i].port == dport) {
-                sock_slot_deliver(i, payload, len);
+                sock_slot_deliver(i, dport, payload, len);
                 break;
             }
         }
@@ -305,7 +308,7 @@ int sock_demux_frame(const uint8_t *frame, uint32_t len) {
     }
     for (uint32_t i = 0; i < SOCK_MAX; i++) {
         if (g_socks[i].used && g_socks[i].port == dport) {
-            sock_slot_deliver(i, frame + uoff + 8u, n);
+            sock_slot_deliver(i, dport, frame + uoff + 8u, n);
             return 1;
         }
     }

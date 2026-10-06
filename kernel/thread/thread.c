@@ -17,6 +17,7 @@
 #include "thread/thread.h"
 #include "sched/sched.h"
 #include "process/process.h"
+#include "trace/trace.h"
 
 extern void thread_trampoline(void);
 
@@ -96,6 +97,7 @@ struct thread *thread_create(struct process *p, thread_fn_t fn, void *arg,
     process_attach(p, t);
     sched_add(t);
     g_thread_count++;
+    trace_emit(TRACE_CREATE, (uint16_t)(t->id & 0xFFFFu), t->prio);
     return t;
 }
 
@@ -160,6 +162,7 @@ struct thread *thread_create_user(struct process *p, uint32_t eip,
     process_attach(p, t);
     sched_add(t);
     g_thread_count++;
+    trace_emit(TRACE_CREATE, (uint16_t)(t->id & 0xFFFFu), t->prio);
     return t;
 }
 
@@ -172,6 +175,7 @@ __attribute__((noreturn)) void thread_exit(int code) {
     if (t == 0 || t->stack_base == 0) {
         nova_panic("thread-exit-main");
     }
+    trace_emit(TRACE_EXIT, (uint16_t)(t->id & 0xFFFFu), 0);
     thread_zombie_handoff(t);
     next = sched_pick(t);
     if (next == 0 || next == t) {

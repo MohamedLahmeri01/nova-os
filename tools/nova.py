@@ -303,6 +303,10 @@ def build_phase1(fault=False):
                                    ("kernel/net/sock.c", "sock.o", []),
                                    ("kernel/net/sock_block.c",
                                     "sock_block.o", []),
+                                   ("kernel/trace/trace.c",
+                                    "trace.o", []),
+                                   ("kernel/bench/bench.c",
+                                    "bench.o", []),
                                    ("kernel/sync/sync.c", "sync.o", []),
                                   (PMM_BACKEND_C, PMM_BACKEND_O, [])]:
         s = os.path.join(ROOT, src)
@@ -333,7 +337,7 @@ def build_phase1(fault=False):
               "fat32.o", "ext4.o", "novafs.o", "ata.o", "pci.o",
                "vga.o", "fb.o", "font.o", "comp.o", "widget.o",
                "virtio.o", "net.o", "sock.o", "sock_block.o",
-               "sync.o",
+               "sync.o", "trace.o", "bench.o",
                PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
@@ -1326,6 +1330,7 @@ def cmd_run_vbox():
                                        b"STARVE-OK", b"SYNC-OK",
                                        b"STATS-OK", b"GATES-OK",
                                        b"MEMMAP-OK", b"SCHEDW-OK",
+                                       b"TRACE-OK", b"PERF-OK",
                                        b"TIMER-OK",
                                        b"SCHED-OK", b"USER-OK",
                                        b"USER-SCHED-OK", b"SYSCALL-OK",
@@ -1389,7 +1394,7 @@ PANIC_MARKERS = [b"INJECT-FAULT", b"TRAP vec=6", b"trap-UD", b"PANIC",
                   b"SLEEP-OK", b"SOCKBLK-OK", b"IRQPUMP-OK",
                   b"KBDBLK-OK", b"STARVE-OK", b"SYNC-OK",
                   b"STATS-OK", b"GATES-OK", b"MEMMAP-OK",
-                  b"SCHEDW-OK",
+                  b"SCHEDW-OK", b"TRACE-OK", b"PERF-OK",
                   b"TIMER-OK", b"SCHED-OK",
                  b"USER-OK", b"USER-SCHED-OK", b"SYSCALL-OK", b"SMP-OK",
                  b"INIT-OK"]

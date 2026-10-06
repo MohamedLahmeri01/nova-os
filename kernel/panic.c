@@ -8,6 +8,7 @@
 
 #include "serial.h"
 #include "panic.h"
+#include "trace/trace.h"
 
 #define PANIC_MAX_FRAMES 8u
 #define STACK_LO 0x5000u
@@ -94,6 +95,31 @@ __attribute__((noreturn)) void nova_panic(const char *reason) {
         ebp = next_ebp;
     }
     serial_puts("END-PANIC-HALT\n");
+    /* Event tail (last 12, oldest first): what the kernel was
+     * doing when it died (thread/sleep/wake/fault/divert).
+     * After END-PANIC-HALT (T6 marker compatibility), before
+     * the halt loop. */
+    {
+        uint32_t n = trace_count();
+        uint32_t start = (n > 12u) ? n - 12u : 0u;
+        serial_puts("TRACE:\n");
+        for (uint32_t i = start; i < n; i++) {
+            struct trace_event e;
+            if (trace_read(i, &e) != 0) {
+                break;
+            }
+            serial_puts("  t=");
+            serial_putdec32(e.tick);
+            serial_puts(" k=");
+            serial_putdec32(e.kind);
+            serial_puts(" id=");
+            serial_putdec32(e.id);
+            serial_puts(" arg=0x");
+            serial_puthex32(e.arg);
+            serial_putc('\n');
+        }
+    }
+    serial_puts("END-TRACE-HALT\n");
     for (;;) {
         __asm__ volatile("cli; hlt");
     }

@@ -16,6 +16,7 @@
 #include "input/kbd.h"
 #include "input/mouse.h"
 #include "drivers/virtio_net.h"
+#include "trace/trace.h"
 #include "time.h"
 
 #if defined(__i386__)
@@ -89,6 +90,9 @@ static void pic_remap(void) {
 
 void trap_handler(trap_frame_t *f) {
     const char *name = (f->vec < 32) ? trap_names[f->vec] : "IRQ";
+    if (f->vec == 14) {
+        trace_emit(TRACE_FAULT, 14, arch_read_cr2());
+    }
     serial_puts("TRAP vec=");
     serial_putdec32(f->vec);
     serial_puts(" (");

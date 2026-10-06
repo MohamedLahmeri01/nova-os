@@ -32,6 +32,8 @@
 #include "input/mouse.h"
 #include "net/sock.h"
 #include "sync/sync.h"
+#include "trace/trace.h"
+#include "bench/bench.h"
 #include "drivers/virtio_net.h"
 #include "thread/thread.h"
 #include "process/process.h"
@@ -427,9 +429,19 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (sync_contention_selftest() != 0) {
         nova_panic("sync-selftest-fail");
     }
+    /* Event trace ring (emits from thread exits/sleeps/wakes
+     * below; reset first for a deterministic selftest). */
+    trace_init();
+    if (trace_selftest() != 0) {
+        nova_panic("trace-selftest-fail");
+    }
     /* Stats dispatch (real user page). */
     if (stats_selftest() != 0) {
         nova_panic("stats-selftest-fail");
+    }
+    /* Microbenchmarks (numbers informational; completion gated). */
+    if (bench_selftest() != 0) {
+        nova_panic("bench-selftest-fail");
     }
     {
         int user_rc = user_selftest();
