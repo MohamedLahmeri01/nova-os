@@ -1,0 +1,15 @@
+# FAT32 mutant manifest (base: build/fat32.raw from tools/mkfat.py).
+# Format: probe offset hex expect  # comment
+#   probe: init | stat | read  (stat/read probe /HELLO.TXT; init rows
+#          re-init the patched image; stat/read rows require init==0)
+#   offset/len: absolute image bytes (hex replaces, not xors)
+#   expect: exact rc (0 or negative errno)
+# Regenerate nothing: rows are hand-designed against kernel/fs/fat32.c
+# checks; a mismatch means driver or manifest drift — investigate.
+init 510 00 -5  # bpb-sig: boot signature killed -> EIO
+init 44 00 -5  # bpb-root0: root cluster 0 (< 2) -> EIO
+stat 17430 01 0  # benign: timestamp touch still stats (discrimination)
+read 17434 5A00 -5  # fat-clusteroob: cluster 90 past volume -> EIO
+read 17436 58020000 -28  # fat-size-spoof: 600B claim, 512B buf -> ENOSPC
+read 16396 03000000 0  # fat-loop: cluster 3 points at itself, but a 17B read stops at size without chasing the chain (documents single-cluster short-circuit)
+ls 16400 04000000 -2  # dir-loop: DOCS cluster points at itself; index-10 listing walks the step cap and ends ENOENT (no hang)

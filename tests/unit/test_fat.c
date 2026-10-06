@@ -79,6 +79,23 @@ static uint32_t lcg(void) {
     return lcg_state;
 }
 
+/* Fresh pristine image from disk (mutant replay base). */
+static uint8_t *reload_base(const char *path, size_t len) {
+    FILE *bf = fopen(path, "rb");
+    uint8_t *mut;
+    if (bf == 0) {
+        return 0;
+    }
+    mut = (uint8_t *)malloc(len);
+    if (mut == 0 || fread(mut, 1, len, bf) != len) {
+        fclose(bf);
+        free(mut);
+        return 0;
+    }
+    fclose(bf);
+    return mut;
+}
+
 int main(int argc, char **argv) {
     uint8_t buf[512];
     uint32_t size = 0;
@@ -287,6 +304,97 @@ int main(int argc, char **argv) {
 
     /* Guest selftest runs the same stack in-guest (FAT-OK). */
     check(fat_selftest() == 0, "selftest", 0, 0);
+
+    /* Mutant corpus replay (tests/corpus/fat32/MUTANTS.txt via
+     * argv[2]): pristine image reloaded from disk per row (immune
+     * to selftest residue), patched, driver re-inited, recorded
+     * rc asserted. init rows end there; stat/read rows require
+     * a clean mount first (a row that breaks the mount is
+     * misclassified: FAIL init-broke). */
+    {
+        const char *mfile =
+            (argc > 2) ? argv[2] : "tests/corpus/fat32/MUTANTS.txt";
+        FILE *mf = fopen(mfile, "r");
+        char line[256];
+        check(mf != 0, "mutants-open", 0, 0);
+        while (mf != 0 && fgets(line, sizeof(line), mf) != 0) {
+            char probe[16];
+            unsigned off = 0;
+            char hex[129];
+            int expect = 0;
+            if (line[0] == '#' || line[0] == '\n' || line[0] == 0) {
+                continue;
+            }
+            if (sscanf(line, "%15s %u %128s %d", probe, &off, hex,
+                       &expect) != 4) {
+                check(0, "mutants-parse", 0, 0);
+                continue;
+            }
+            {
+                FILE *bf = fopen(path, "rb");
+                uint8_t *mut = (uint8_t *)malloc(g_len);
+                uint32_t hl, i;
+                int rc;
+                if (bf == 0 || mut == 0 ||
+                    fread(mut, 1, g_len, bf) != g_len) {
+                    check(0, "mutants-base", off, 0);
+                    if (bf != 0) {
+                        fclose(bf);
+                    }
+                    free(mut);
+                    continue;
+                }
+                fclose(bf);
+                hl = (uint32_t)strlen(hex) / 2u;
+                for (i = 0; i < hl && off + i < g_len; i++) {
+                    unsigned v = 0;
+                    sscanf(hex + 2u * i, "%2x", &v);
+                    mut[off + i] = (uint8_t)v;
+                }
+                g_img = mut;
+                rc = fat_init(img_read, img_write);
+                if (strcmp(probe, "init") == 0) {
+                    check(rc == expect, "mutant-init",
+                          (unsigned long)rc, off);
+                } else {
+                    if (rc != 0) {
+                        check(0, "mutant-init-broke", off,
+                              (unsigned long)rc);
+                    } else if (strcmp(probe, "stat") == 0) {
+                        uint32_t s2 = 0;
+                        int d2 = 0;
+                        rc = fat_stat("/HELLO.TXT", &s2, &d2);
+                        check(rc == expect, "mutant-stat",
+                              (unsigned long)rc, off);
+                    } else if (strcmp(probe, "read") == 0) {
+                        uint32_t g2 = 0;
+                        rc = fat_read_file("/HELLO.TXT", buf,
+                                           sizeof(buf), &g2);
+                        check(rc == expect, "mutant-read",
+                              (unsigned long)rc, off);
+                    } else if (strcmp(probe, "ls") == 0) {
+                        rc = fat_list_dir("/DOCS", 10, name);
+                        check(rc == expect, "mutant-ls",
+                              (unsigned long)rc, off);
+                    } else {
+                        check(0, "mutant-probe", off, 0);
+                    }
+                }
+                free(mut);
+                g_img = reload_base(path, g_len);
+                if (g_img == 0) {
+                    check(0, "mutants-restore", off, 0);
+                    break;
+                }
+                check(fat_init(img_read, img_write) == 0,
+                      "mutants-reinit", off, 0);
+            }
+        }
+        if (mf != 0) {
+            fclose(mf);
+        }
+        printf("corpus: fat32 mutants replayed\n");
+    }
 
     free(g_img);
     if (g_failed) {
