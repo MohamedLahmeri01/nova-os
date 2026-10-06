@@ -2,11 +2,10 @@
 
 All notable changes will be documented here. Format follows Keep a Changelog.
 
-## [Unreleased] — v0.3 hardening (in progress)
+## [Unreleased] — v0.4 hardening (in progress)
 
-- Legal + language hygiene: Apache-2.0 `LICENSE` (ADR-0064,
-  supersedes deferred ADR-0008), C-first record (ADR-0065,
-  supersedes Rust-first ADR-0002), dist carries LICENSE.
+- Legal + language hygiene: Apache-2.0 `LICENSE` (ADR-0064),
+  C-first record (ADR-0065). `dist/` carries LICENSE.
 - Syscall copy model: `copy_from_user`/`copy_to_user`
   centralized, all payload sites converted, T8 refusal
   vectors, TOCTOU closure with load-bearing invariant
@@ -16,7 +15,8 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   AP-handoff words in .text), CPUID NX report, mapping
   isolation verified, ASLR declined with reason (ADR-0067).
 - Scheduler: starvation tripwire (`STARVE-OK`), switch
-  counter, `last_used` audit (ADR-0068). No policy change.
+  counter, workload battery (`SCHEDW-OK`), `last_used`
+  audit (ADR-0068, ADR-0072). No policy change.
 - SMP foundations: LOCK atomics, spinlock + irqsave pair,
   `docs/LOCKING.md`, `smp_cpu_id`, host T22 + guest
   contention proof (`SYNC-OK`); APs parked (ADR-0069).
@@ -26,6 +26,19 @@ All notable changes will be documented here. Format follows Keep a Changelog.
 - Observability: `SYS_STATS` (35) read-only counters +
   shell `stat` + `STATS-OK` proof, `GATES-OK` summary line
   (ADR-0071). Suite 22/22.
+- v0.4 security model + per-argument syscall audit
+  (`docs/SECURITY-MODEL.md`, `docs/SYSCALL-ARGUMENTS.md`).
+- Memory verification: runtime permission grid audit
+  (`MEMMAP-OK`), user-half checks post-heap
+  (ADR-0075). `KERNEL_PDS` single-sourced.
+- Tracing + benchmarks: bounded event ring with panic
+  dump (`TRACE-OK`), 8-workload PERF battery (`PERF-OK`)
+  (ADR-0074).
+- Fuzzing: FS mutant manifests (FAT32/EXT4/NOVA-FS) with
+  driver + fsck replay, UDP/IP shapes + queue flood,
+  shell harness T23 + corpus (strtoi overflow fixed),
+  `CORPUS-OK 7/7`, fuzzing contract (ADR-0073).
+  Suite 23/23 (T23 new).
 
 ## 0.2.0 - 2026-10-06 (second release)
 
