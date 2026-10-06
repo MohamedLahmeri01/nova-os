@@ -1,6 +1,8 @@
-# ADR-0008: License evaluation (NOT RATIFIED)
+# ADR-0008: License evaluation (SUPERSEDED by ADR-0064)
 
-Status: proposed (Phase 0). Date: 2026-09-29. Decision: DEFERRED.
+Status: superseded 2026-10-06 (was: proposed/deferred). Decision history preserved below.
+
+Original status line (historical): proposed (Phase 0). Date: 2026-09-29. Decision: DEFERRED.
 
 ## Context
 

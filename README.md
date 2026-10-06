@@ -79,6 +79,7 @@ automation. Small, reviewed, tested changes only.
 
 ## License
 
-**Not yet licensed — all rights reserved.** You may clone, read, and
-learn from this code, but no reuse grant exists until ADR-0008
-(`docs/adr/ADR-0008-license.md`) is ratified. Apache-2.0 is proposed.
+Apache-2.0 — see [LICENSE](LICENSE). Ratified in
+`docs/adr/ADR-0064-license-ratified.md` (supersedes the deferred
+evaluation in ADR-0008). Contributions are inbound-under-Apache-2.0
+(§5) with no extra paperwork.

@@ -480,7 +480,7 @@ def dist_assemble(outdir, version):
     bins = ["kernel.bin", "init.bin", "hi.bin", "uname.bin"]
     docs = [os.path.join("docs", "ABI.md"),
             os.path.join("sdk", "README.md"),
-            "CHANGELOG.md", "VERSION"]
+            "CHANGELOG.md", "VERSION", "LICENSE"]
     for n in bins:
         if not os.path.isfile(os.path.join(BUILD, n)):
             return 1, f"missing build/{n} (run nova build first)"
@@ -938,7 +938,8 @@ def cmd_test():
                     ok = False
             for want in ["kernel.bin", "init.bin", "hi.bin",
                          "uname.bin", "ABI.md", "README.md",
-                         "CHANGELOG.md", "VERSION", "manifest.txt"]:
+                         "CHANGELOG.md", "VERSION", "LICENSE",
+                         "manifest.txt"]:
                 if not os.path.isfile(os.path.join(tdir, want)):
                     print(f"[fail] T18 dist missing: {want}")
                     ok = False
