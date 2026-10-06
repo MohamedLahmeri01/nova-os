@@ -28,6 +28,7 @@
 #include "gui/comp.h"
 #include "gui/font.h"
 #include "gui/widget.h"
+#include "input/kbd.h"
 #include "input/mouse.h"
 #include "net/sock.h"
 #include "drivers/virtio_net.h"
@@ -403,6 +404,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
     /* IRQ-path pump drill (quiet ring, after all wire flows). */
     if (sock_drill_selftest() != 0) {
         nova_panic("sockdrill-selftest-fail");
+    }
+    /* Blocking keyboard (reader threads exist now). */
+    if (kbd_block_selftest() != 0) {
+        nova_panic("kbdblock-selftest-fail");
     }
     {
         int user_rc = user_selftest();

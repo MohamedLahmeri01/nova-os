@@ -261,8 +261,9 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 15-v tick-driven RX (pump in sched_tick, IF-saving
   lock, ring drill, IRQPUMP-OK gate; ISR hook built then
   reverted), 21/21 (ADR-0061)
-- [ ] Next: more sleep callers (getkey/disk), 0.2.0 release
-  pass (version bump, dist, release notes)
+- [x] 16-i blocking getkey (parked shell, waiter discipline
+  fixed in kbd + sock, KBDBLK-OK gate), 21/21 (ADR-0062)
+- [ ] Next: 0.2.0 release pass (version bump, dist, notes)
 
 
 ## Non-goals for 0.x

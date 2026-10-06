@@ -1,7 +1,8 @@
-/* NOVA OS libc: console I/O (Phase 6).
- * putchar/puts via sys_print; getchar spins on sys_getkey with yield
- * (no blocking primitive yet; hlt is privileged at CPL3, pause+YIELD
- * is the honest wait). No malloc (static buffers; brk comes later).
+/* NOVA OS libc: console I/O (Phase 6, blocking getkey 16-i).
+ * putchar/puts via sys_print; getchar loops on sys_getkey (the
+ * kernel parks idle readers till the IRQ push wakes them, so the
+ * yield below only spins pre-scheduler or under contention).
+ * No malloc (static buffers; brk comes later).
  */
 #ifndef NOVA_LIBC_STDIO_H
 #define NOVA_LIBC_STDIO_H

@@ -5,12 +5,13 @@
  * testable); everything else rides net_udp_send (ARP, routing,
  * and its errors included). Fire-and-forget sends (UDP
  * semantics: validated sends succeed with nobody home).
- * Receive blocks when scheduled (loopback delivery or close
- * wakes the waiter; rebind under a sleeper fails it with
- * EBADF via the bind generation) and spins in early boot
- * (scheduler dead: selftests). One waiter per socket (EBUSY).
- * Single-core: no locking (no IRQ delivery yet; wakeups run
- * in thread context, expiry in IRQ context on owned fields).
+ * Receive blocks when scheduled (loopback delivery, wire
+ * demux, or close wakes the waiter; rebind under a sleeper
+ * fails it with EBADF via the bind generation) and spins in
+ * early boot (scheduler dead: selftests). One waiter per
+ * socket (EBUSY). Check-to-park holds IF=0 (tick delivery
+ * would otherwise strand sleepers: the lost-wakeup); wakers
+ * wake-then-clear (no wake theft).
  */
 #include <stdint.h>
 
@@ -22,6 +23,14 @@
 #include "thread/thread.h"
 #include "syscall/syscall.h"
 #include "time/time.h"
+
+#if defined(__i386__)
+#include "../arch/x86/cpu.h"
+#elif defined(__x86_64__)
+#include "../arch/x86_64/cpu.h"
+#else
+#error "sock: no arch backend for this architecture"
+#endif
 
 #define SOCK_LOOPBACK 0x7F000001u
 
@@ -45,10 +54,10 @@ static int valid_id(uint32_t id) {
     return id < SOCK_MAX && g_socks[id].used;
 }
 
-/* Fill one RX slot + wake its waiter (field cleared before
- * waking: the woken thread never observes a stale waiter).
- * Shared by loopback delivery and the wire demux (one wake
- * path, two arrivals). */
+/* Fill one RX slot + wake its waiter. Wake-then-clear: a
+ * newcomer between the two sees a waiter (EBUSY) instead of
+ * stealing the wake. Shared by loopback delivery and the wire
+ * demux (one wake path, two arrivals). */
 static void sock_slot_deliver(uint32_t i, const uint8_t *payload,
                               uint32_t len) {
     for (uint32_t k = 0; k < len; k++) {
@@ -58,8 +67,8 @@ static void sock_slot_deliver(uint32_t i, const uint8_t *payload,
     g_socks[i].has = 1;
     if (g_socks[i].waiter != 0) {
         struct thread *w = g_socks[i].waiter;
-        g_socks[i].waiter = 0;
         sched_wakeup(w);
+        g_socks[i].waiter = 0;
     }
 }
 
@@ -197,32 +206,60 @@ int sock_recv(uint32_t id, uint8_t *out, uint32_t max,
             }
         }
     }
-    /* Blocking path: park till delivery or deadline. One waiter
-     * per socket (a second sleeper is EBUSY, never stranded).
-     * Woken states: data (copy), close/rebind (EBADF via used +
-     * generation), deadline (EAGAIN). Anything else loops back
-     * to sleep (defensive: no such waker exists today). */
-    if (g_socks[id].waiter != 0) {
-        return -NOVA_EBUSY;
-    }
+    /* Blocking path: park till delivery or deadline. Check +
+     * park hold IF=0 throughout (tick-context delivery between
+     * them would wake nobody and strand us: the lost-wakeup).
+     * One waiter per socket (another parker is EBUSY, never
+     * overwrite: that strands them). Woken states: data (copy),
+     * close/rebind (EBADF via used + generation), deadline
+     * (EAGAIN; a delivery racing expiry still wins: rechecked
+     * below). Anything else loops back to sleep (defensive:
+     * no such waker exists today). */
     {
         uint32_t deadline = g_ticks + timeout;
         uint32_t gen = g_socks[id].gen;
         struct thread *me = sched_current_thread();
         for (;;) {
             int expired;
-            g_socks[id].waiter = me;
-            expired = sched_sleep_until(deadline);
-            g_socks[id].waiter = 0;
+            arch_cli();
             if (!valid_id(id) || g_socks[id].gen != gen) {
+                arch_sti();
                 return -NOVA_EBADF;
             }
             if (g_socks[id].has) {
-                return recv_copy(id, out, max, len_out);
+                int rc = recv_copy(id, out, max, len_out);
+                arch_sti();
+                return rc;
             }
-            if (expired) {
-                return -NOVA_EAGAIN;
+            if (g_socks[id].waiter != 0 &&
+                g_socks[id].waiter != me) {
+                arch_sti();
+                return -NOVA_EBUSY;
             }
+            g_socks[id].waiter = me;
+            expired = sched_sleep_until(deadline);
+            /* Resumed IF=1: woken states recheck at the top
+             * (IF=0 again). Only expiry needs handling here:
+             * clear a stale waiter, revalidate (close raced
+             * us), let a racing delivery win, else EAGAIN. */
+            if (!expired) {
+                continue;
+            }
+            arch_cli();
+            if (g_socks[id].waiter == me) {
+                g_socks[id].waiter = 0;
+            }
+            if (!valid_id(id) || g_socks[id].gen != gen) {
+                arch_sti();
+                return -NOVA_EBADF;
+            }
+            if (g_socks[id].has) {
+                int rc = recv_copy(id, out, max, len_out);
+                arch_sti();
+                return rc;
+            }
+            arch_sti();
+            return -NOVA_EAGAIN;
         }
     }
 }

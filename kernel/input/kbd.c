@@ -1,12 +1,19 @@
-/* NOVA OS PS/2 keyboard driver (Phase 6).
+/* NOVA OS PS/2 keyboard driver (Phase 6, blocking getkey 16-i).
  * IRQ1 pushes Set-1 scancodes through a US-layout translator (shift
  * states, backspace/enter; extended 0xE0 sequences dropped for now)
- * into a 256-byte ring. kbd_getkey returns -EAGAIN when empty;
- * cli/sti guards the head/tail against IRQ races (short, bounded).
+ * into a 256-byte ring. kbd_getkey blocks when scheduled (the IRQ
+ * push wakes the single waiter); -EAGAIN only pre-scheduler, and
+ * -EBUSY when another thread already parks here. cli/sti guards
+ * the head/tail against IRQ races (short, bounded).
  */
 #include <stdint.h>
 
 #include "kbd.h"
+#include "sched/sched.h"
+#include "thread/thread.h"
+#include "process/process.h"
+#include "syscall/syscall.h"
+#include "serial.h"
 
 #if defined(__i386__)
 #include "../arch/x86/io.h"
@@ -27,6 +34,8 @@ static volatile uint32_t g_head;
 static volatile uint32_t g_tail;
 static int g_shift;
 static int g_escaped;
+/* Parked reader (one; woken on push). */
+static struct thread *g_waiter;
 
 static char scancode_to_ascii(uint8_t sc, int shift) {
     switch (sc) {
@@ -109,6 +118,7 @@ void kbd_init(void) {
     g_tail = 0;
     g_shift = 0;
     g_escaped = 0;
+    g_waiter = 0;
 }
 
 static void buf_push(char c) {
@@ -117,10 +127,19 @@ static void buf_push(char c) {
         g_buf[g_tail] = (uint8_t)c;
         g_tail = next;
     }
+    /* A parked reader wakes with the data. Wake-then-clear: a
+     * newcomer between the two sees a waiter (EBUSY) instead of
+     * stealing the wake. IRQ-safe (stores + wakeup only). */
+    if (g_waiter != 0) {
+        struct thread *w = g_waiter;
+        sched_wakeup(w);
+        g_waiter = 0;
+    }
 }
 
-void kbd_irq(void) {
-    uint8_t sc = arch_inb(KBD_DATA);
+/* One scancode through the translator (the IRQ path and the
+ * selftest share it; the IRQ half is just the port read). */
+void kbd_feed(uint8_t sc) {
     if (sc == 0xE0) {
         g_escaped = 1;
         return;
@@ -149,15 +168,160 @@ void kbd_irq(void) {
     }
 }
 
+void kbd_irq(void) {
+    kbd_feed(arch_inb(KBD_DATA));
+}
+
 int32_t kbd_getkey(void) {
     int32_t r;
+    struct thread *me;
+    /* Fast path: key waiting (no sleep, any context). */
     arch_cli();
-    if (g_head == g_tail) {
-        r = KBD_EAGAIN;
-    } else {
+    if (g_head != g_tail) {
         r = g_buf[g_head];
         g_head = (g_head + 1u) % KBD_BUF;
+        arch_sti();
+        return r;
     }
     arch_sti();
-    return r;
+    /* Pre-scheduler: legacy poll (selftests at boot). */
+    if (!sched_can_sleep()) {
+        return KBD_EAGAIN;
+    }
+    /* Blocking path: park till the IRQ push wakes us. Check +
+     * park hold IF=0 throughout (a push between them would
+     * wake nobody and strand us: the lost-wakeup). One waiter:
+     * another parker is EBUSY (never overwrite: that strands
+     * them). The push is the only waker, so anything woken
+     * finds data; the loop is defensive. */
+    me = sched_current_thread();
+    for (;;) {
+        arch_cli();
+        if (g_head != g_tail) {
+            r = g_buf[g_head];
+            g_head = (g_head + 1u) % KBD_BUF;
+            arch_sti();
+            return r;
+        }
+        if (g_waiter != 0 && g_waiter != me) {
+            arch_sti();
+            return -NOVA_EBUSY;
+        }
+        g_waiter = me;
+        sched_sleep(); /* IF=0 in, IF=1 out; recheck under cli */
+    }
+}
+
+/* --- blocking proof (scheduler live): park, wake, EBUSY ---
+ * Worker parks in getkey (empty ring) while main watches
+ * BLOCKED; fed scancodes wake it with exact chars in order.
+ * A second parker then proves EBUSY (main refused, worker
+ * released by a spare key). Prints KBDBLK-OK. */
+
+static volatile int kb_done;
+static volatile int32_t kb_c0;
+static volatile int32_t kb_c1;
+static volatile int32_t kb_c2;
+static struct thread *kb_worker;
+
+static void kbd_reader(void *arg) {
+    (void)arg;
+    kb_c0 = kbd_getkey();
+    kb_c1 = kbd_getkey();
+    kb_done = 1;
+    thread_exit(0);
+}
+
+static void kbd_reader_one(void *arg) {
+    (void)arg;
+    kb_c2 = kbd_getkey();
+    kb_done = 1;
+    thread_exit(0);
+}
+
+static int kbd_wait_blocked(uint32_t t0) {
+    extern volatile uint32_t g_ticks;
+    while (kb_worker->state != THREAD_BLOCKED) {
+        if (g_ticks - t0 > 2000u) {
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    return 0;
+}
+
+int kbd_block_selftest(void) {
+    extern volatile uint32_t g_ticks;
+    struct thread *w;
+    uint32_t t0;
+    int32_t r;
+    kb_done = 0;
+    kb_c0 = -1;
+    kb_c1 = -1;
+    kb_c2 = -1;
+    /* Ring is empty (no keys pressed during boot); scheduler +
+     * timer live (runs after the sleep selftest). */
+    w = thread_create(g_init_process, kbd_reader, 0, 16u);
+    if (w == 0) {
+        serial_puts("KBDBLK-FAIL spawn\n");
+        return -1;
+    }
+    kb_worker = w;
+    sched_yield(); /* worker runs to its parked getkey */
+    /* Parked with nothing queued; fed 'h','i' arrive in order
+     * (Set-1: 0x23, 0x17; ring buffers both before reading). */
+    t0 = g_ticks;
+    if (kbd_wait_blocked(t0) != 0) {
+        serial_puts("KBDBLK-FAIL park\n");
+        return -1;
+    }
+    kbd_feed(0x23u);
+    kbd_feed(0x17u);
+    t0 = g_ticks;
+    while (!kb_done) {
+        if (g_ticks - t0 > 2000u) {
+            serial_puts("KBDBLK-FAIL wake\n");
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    if (kb_c0 != 'h' || kb_c1 != 'i') {
+        serial_puts("KBDBLK-FAIL chars\n");
+        return -1;
+    }
+    /* Second parker: main is refused (EBUSY, never parks), the
+     * worker is released by a spare Enter. */
+    kb_done = 0;
+    w = thread_create(g_init_process, kbd_reader_one, 0, 16u);
+    if (w == 0) {
+        serial_puts("KBDBLK-FAIL spawn2\n");
+        return -1;
+    }
+    kb_worker = w;
+    sched_yield();
+    t0 = g_ticks;
+    if (kbd_wait_blocked(t0) != 0) {
+        serial_puts("KBDBLK-FAIL park2\n");
+        return -1;
+    }
+    r = kbd_getkey();
+    if (r != -NOVA_EBUSY) {
+        serial_puts("KBDBLK-FAIL ebusy\n");
+        return -1;
+    }
+    kbd_feed(0x1Cu); /* Enter */
+    t0 = g_ticks;
+    while (!kb_done) {
+        if (g_ticks - t0 > 2000u) {
+            serial_puts("KBDBLK-FAIL wake2\n");
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    if (kb_c2 != '\n') {
+        serial_puts("KBDBLK-FAIL spare\n");
+        return -1;
+    }
+    serial_puts("KBDBLK-OK\n");
+    return NOVA_ESUCCESS;
 }

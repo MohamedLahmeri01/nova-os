@@ -44,6 +44,10 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   lock, ring drill with `IRQPUMP-OK` gate; a device-ISR
   pump hook was built then reverted for nesting hazards)
   (ADR-0061). Suite 21/21.
+- Phase 16-i blocking `getkey`: parked readers woken by the
+  IRQ push (`KBDBLK-OK` gate), lost-wakeup/wake-theft
+  discipline fixed in both keyboard and socket waiters
+  (ADR-0062). Suite 21/21.
 ## 0.1.0 - 2026-10-05 (first release)
 
 All Phase 0-13d work, suite 20/20 on the constrained VM.
