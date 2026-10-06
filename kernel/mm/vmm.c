@@ -10,9 +10,12 @@
  *   [map_end, 4GB)         unmapped (user half + MMIO live here later)
  * map_end = arena end rounded up to 4MB. Tables (PD+PT) come from the PMM
  * itself; the map is identity, so all code keeps working across the
- * switch. NX is NOT available without PAE: XD enforcement slides to the
- * x86-64 long-mode milestone (see ADR-0011); the .text/.datax link split
- * is already in place for it.
+ * switch. W^X without NX (Phase 0.3-C): kernel .text/.rodata pages are
+ * present read-only (WP makes supervisor writes fault); everything
+ * else is RW data. NX/XD enforcement is impossible without PAE and
+ * slides to the x86-64 long-mode milestone (see ADR-0011); no page is
+ * RWX by intent (execute is implicit-everywhere: the CPU cannot say
+ * no). The .text/.datax link split exists for exactly this.
  *
  * NOTE (ADR-0011): guest PAE PG-enable triple-faults deterministically
  * under VirtualBox 7.2 NEM on this host (9-boot elimination: NXE, XD,
@@ -63,11 +66,30 @@ static void *alloc_zero_table(void) {
 
 int vmm_init(void) {
     uint32_t a, b, c, d;
+    uint32_t text_end_page;
+    /* Linker symbol (stage2.ld `_text_end`; C drops one
+     * underscore under the mingw prefix rule). */
+    extern uint32_t text_end[];
     __asm__ volatile("cli");
     arch_cpuid(1u, &a, &b, &c, &d);
     if ((d & (1u << 3)) == 0) {
         nova_panic("vmm-no-pse");
     }
+    /* NX/XD feature detection (§12: report, never pretend).
+     * Classic paging has no NX bit even when the CPU offers
+     * it, so enforcement stays impossible; the flag is logged
+     * for the long-mode milestone. */
+    text_end_page = ((uint32_t)(uintptr_t)text_end + 0xFFFu) &
+                    ~0xFFFu;
+    serial_puts("CPU-NX=");
+    arch_cpuid(0x80000000u, &a, &b, &c, &d);
+    if (a >= 0x80000001u) {
+        arch_cpuid(0x80000001u, &a, &b, &c, &d);
+        serial_putc(((d & (1u << 20)) != 0) ? '1' : '0');
+    } else {
+        serial_putc('?');
+    }
+    serial_puts(" XD-ENFORCE=none (non-PAE paging)\n");
     uint32_t arena_end = pmm_arena_base() +
                          pmm_total_frames() * NOVA_FRAME_SIZE;
     g_map_end = (arena_end + LARGE_4MB - 1u) & ~(LARGE_4MB - 1u);
@@ -82,6 +104,10 @@ int vmm_init(void) {
                         * guard, BIOS data like EBDA@0x40E readable) */
         } else if (page == NOVA_STACK_GUARD) {
             e = 0; /* stack guard */
+        } else if (page >= NOVA_KERNEL_LOAD && page < text_end_page) {
+            e = page | PTE_P; /* kernel text: present read-only.
+                               * W^X without NX (WP faults supervisor
+                               * writes); execute stays implicit. */
         }
         g_pt0[i] = e;
     }
@@ -164,6 +190,20 @@ int vmm_selftest(void) {    if ((g_pt0[0] & (PTE_P | PTE_RW)) != PTE_P) {
     }
     if ((g_pt0[NOVA_KERNEL_LOAD >> 12] & PTE_P) == 0) {
         return -2; /* kernel text must be present */
+    }
+    /* Kernel text is present read-only (W^X): every page in
+     * [load, text_end) has P set and RW clear. Data stays RW. */
+    {
+        extern uint32_t text_end[];
+        uint32_t tend = ((uint32_t)(uintptr_t)text_end + 0xFFFu) &
+                        ~0xFFFu;
+        for (uint32_t page = NOVA_KERNEL_LOAD; page < tend;
+             page += 0x1000u) {
+            uint32_t e = g_pt0[page >> 12];
+            if ((e & PTE_P) == 0 || (e & PTE_RW) != 0) {
+                return -7; /* text must be present read-only */
+            }
+        }
     }
     if ((g_pt0[NOVA_STACK_GUARD >> 12] & PTE_P) != 0) {
         return -4; /* stack guard must be absent */

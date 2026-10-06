@@ -1,10 +1,11 @@
-/* NOVA OS AP trampoline (Phase 4c).
+/* NOVA OS AP trampoline (Phase 4c, W^X-clean in 0.3-C).
  * Linked into kernel .text; BSP copies [_ap_tramp_start, _ap_tramp_end)
  * to AP_TRAMP_BASE and SIPIs the vector. The 16-bit part uses ONLY
  * numeric literals (see ap_addrs.h): absolute link-VMA relocations
  * would truncate above 64K in 16-bit addressing. Post-far-jump 32-bit
  * code uses normal symbols. Per-AP values (stack, LAPIC base) live in
- * _ap_* slots (32-bit use only).
+ * .data slots (writable: .text is read-only): the copied AP code reads
+ * them at their absolute link VMAs, which smp_boot fills.
  */
 #include "ap_addrs.h"
 
@@ -57,6 +58,7 @@ _ap_prot_addr:
     jmp 1b
 .globl _ap_tramp_end
 _ap_tramp_end:
+.data
 .globl _ap_stack
 _ap_stack:
     .long 0
