@@ -36,7 +36,7 @@ static const char *sh_nextnum(const char *p, int *val);
 static void sh_putstrn(const char *s, uint32_t max);
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle rm rmdir uloop nslookup clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle click rm rmdir uloop nslookup clear exit");
 }
 
 static void sh_putip(uint32_t ip) {
@@ -491,6 +491,34 @@ static void sh_winclose(const char *line) {
     nova_puts("winclose ok");
 }
 
+static void sh_click(const char *line) {
+    const char *p = sh_arg(line);
+    int v[2];
+    int32_t r;
+    for (int k = 0; k < 2; k++) {
+        p = sh_nextnum(p, &v[k]);
+        if (p == 0 || v[k] < 0) {
+            nova_puts("usage: click x y");
+            return;
+        }
+    }
+    while (*p == ' ') {
+        p++;
+    }
+    if (*p != 0) {
+        nova_puts("usage: click x y");
+        return;
+    }
+    r = nova_winclick((uint32_t)v[0], (uint32_t)v[1]);
+    if (r < 0) {
+        nova_puts("click: no window");
+        return;
+    }
+    nova_print("click id=", 9);
+    sh_putdec((uint32_t)r);
+    nova_putchar('\n');
+}
+
 static void sh_wintitle(const char *line) {
     const char *p = sh_arg(line);
     int id = 0;
@@ -822,6 +850,9 @@ static void sh_run(const char *line) {
     } else if (nova_strncmp(line, "wintitle", 8) == 0 &&
                (line[8] == 0 || line[8] == ' ')) {
         sh_wintitle(line);
+    } else if (nova_strncmp(line, "click", 5) == 0 &&
+               (line[5] == 0 || line[5] == ' ')) {
+        sh_click(line);
     } else if (nova_strncmp(line, "rmdir", 5) == 0 &&
                (line[5] == 0 || line[5] == ' ')) {
         sh_rm(line, 1);

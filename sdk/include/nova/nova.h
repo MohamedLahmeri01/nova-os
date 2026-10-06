@@ -43,6 +43,7 @@
 #define SYS_RMDIR 31u
 #define SYS_SOCK 32u
 #define SYS_DNS 33u
+#define SYS_WINCLICK 34u
 
 /* Socket ops mirrored from kernel/net/sock.h. */
 #define SOCK_OP_OPEN 0u
@@ -225,6 +226,10 @@ static inline int32_t nova_wintitle(uint32_t id, const char *text) {
 
 static inline int32_t nova_winclose(uint32_t id) {
     return nova_syscall(SYS_WINCLOSE, id, 0, 0);
+}
+
+static inline int32_t nova_winclick(uint32_t x, uint32_t y) {
+    return nova_syscall(SYS_WINCLICK, x, y, 0);
 }
 
 static inline int32_t nova_sock(uint32_t op, uint32_t a, uint32_t b) {

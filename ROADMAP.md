@@ -244,8 +244,9 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 14e-ii press states (wid_hit edges, pressed-look
   renderer, PRESS-OK gate + demo click feedback), 21/21
   (ADR-0055)
-- [ ] 14e+ candidates: user-space click surface
-  (SYS_CLICK/shell click), blocking RX (wait queues)
+- [x] 14e-iii user-space click (SYS_WINCLICK 34 + shell
+  click, dispatch vectors under WIN-OK), 21/21 (ADR-0056)
+- [ ] Next: blocking RX (wait queues)
 
 
 ## Non-goals for 0.x

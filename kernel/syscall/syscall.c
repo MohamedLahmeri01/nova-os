@@ -1262,6 +1262,14 @@ static int32_t do_winclose(uint32_t id, uint32_t b, uint32_t c) {
     return rc;
 }
 
+/* Click from user space (shell scripts, future apps): raw
+ * screen coords, no validation needed (comp_hit compares,
+ * paint clips). Returns the hit id, or -1 on miss. */
+static int32_t do_winclick(uint32_t x, uint32_t y, uint32_t c) {
+    (void)c;
+    return comp_click(x, y);
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -1303,6 +1311,7 @@ static const struct {
     { SYS_WINSTAT, "winstat", do_winstat },
     { SYS_WINTITLE, "wintitle", do_wintitle },
     { SYS_WINCLOSE, "winclose", do_winclose },
+    { SYS_WINCLICK, "winclick", do_winclick },
 };
 
 void syscall_handler(struct syscall_frame *f) {
@@ -2044,6 +2053,15 @@ int win_selftest(void) {
         serial_puts("WIN-FAIL focus-empty\n");
         return -1;
     }
+    /* Empty pool: click misses (no windows, silent -1). */
+    f.eax = SYS_WINCLICK;
+    f.ebx = 160;
+    f.ecx = 100;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -1) {
+        serial_puts("WIN-FAIL click-empty\n");
+        return -1;
+    }
     /* Bad user memory refuses before anything happens. */
     f.eax = SYS_WINOPEN;
     f.ebx = 0;
@@ -2103,6 +2121,24 @@ int win_selftest(void) {
         st[0].x != 10u || st[0].focused != 1u ||
         st[0].title[0] != 0) {
         serial_puts("WIN-FAIL stat\n");
+        return -1;
+    }
+    /* Click through the syscall: inside (10,150,60,40) hits 0,
+     * the bar zone misses. */
+    f.eax = SYS_WINCLICK;
+    f.ebx = 20;
+    f.ecx = 160;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != 0 || comp_focused() != 0) {
+        serial_puts("WIN-FAIL click-hit\n");
+        return -1;
+    }
+    f.eax = SYS_WINCLICK;
+    f.ebx = 20;
+    f.ecx = 4;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -1 || comp_focused() != 0) {
+        serial_puts("WIN-FAIL click-miss\n");
         return -1;
     }
     f.eax = SYS_WINCLOSE;
