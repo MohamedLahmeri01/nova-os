@@ -10,6 +10,8 @@
 
 #include "serial.h"
 #include "net/sock.h"
+#include "net/net.h"
+#include "drivers/virtio_net.h"
 #include "sched/sched.h"
 #include "thread/thread.h"
 #include "process/process.h"
@@ -192,5 +194,81 @@ int sock_block_selftest(void) {
         return -1;
     }
     serial_puts("SOCKBLK-OK\n");
+    return NOVA_ESUCCESS;
+}
+
+/* --- IRQ-path drill: crafted ring completion, real pump ---
+ * After all wire flows (quiet ring, kernel CR3): bind 5200,
+ * build a wire frame to it, inject a fake completion (the
+ * drill runs the genuine lock + drain + demux path), expect
+ * diverted == 1 with the bytes in the slot. Device progress
+ * is restored, so the ring is exactly as before. */
+
+int sock_drill_selftest(void) {
+    static uint8_t frame[64];
+    uint8_t ip[20];
+    uint8_t u[16];
+    const uint8_t *mymac;
+    static const uint8_t smac[6] = { 0x52, 0x54, 0x00,
+                                     0x12, 0x34, 0x57 };
+    static const uint8_t hello[5] = { 'h', 'e', 'l', 'l', 'o' };
+    int a, ulen, iplen, i;
+    uint32_t got = 0;
+    uint8_t rx[64];
+    if (!virtio_net_ready()) {
+        serial_puts("IRQDRV-SKIP\n");
+        return NOVA_ESUCCESS; /* no NIC: nothing to drill */
+    }
+    mymac = virtio_net_mac();
+    ulen = net_udp_build(u, NET_ADDR_GW, net_self_ip(), 67, 5200,
+                         hello, sizeof(hello));
+    iplen = net_ip_build(ip, NET_ADDR_GW, net_self_ip(),
+                         NET_PROTO_UDP, (uint16_t)ulen);
+    if (ulen != 13 || iplen != 20) {
+        serial_puts("IRQDRV-FAIL build\n");
+        return -1;
+    }
+    for (i = 0; i < 6; i++) {
+        frame[i] = mymac[i];
+        frame[6 + i] = smac[i];
+    }
+    frame[12] = 0x08;
+    frame[13] = 0x00;
+    for (i = 0; i < 20; i++) {
+        frame[14 + i] = ip[i];
+    }
+    for (i = 0; i < 13; i++) {
+        frame[34 + i] = u[i];
+    }
+    a = sock_open(5200);
+    if (a < 0) {
+        serial_puts("IRQDRV-FAIL open\n");
+        return -1;
+    }
+    {
+        int dr = virtio_net_drill(frame, 47u);
+        if (dr != 1) {
+            serial_puts("IRQDRV-FAIL divert rc=");
+            serial_putdec32((uint32_t)dr);
+            serial_putc('\n');
+            return -1;
+        }
+    }
+    if (sock_recv((uint32_t)a, rx, sizeof(rx), 0, &got) != 5 ||
+        got != 5u) {
+        serial_puts("IRQDRV-FAIL recv\n");
+        return -1;
+    }
+    for (i = 0; i < 5; i++) {
+        if (rx[i] != hello[i]) {
+            serial_puts("IRQDRV-FAIL bytes\n");
+            return -1;
+        }
+    }
+    if (sock_close((uint32_t)a) != 0) {
+        serial_puts("IRQDRV-FAIL close\n");
+        return -1;
+    }
+    serial_puts("IRQPUMP-OK\n");
     return NOVA_ESUCCESS;
 }

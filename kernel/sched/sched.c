@@ -18,6 +18,7 @@
 #include "process/caps.h"
 #include "process/rlimit.h"
 #include "mm/addrspace.h"
+#include "net/net.h"
 
 #if defined(__i386__)
 #include "../arch/x86/cpu.h"
@@ -312,6 +313,12 @@ void sched_tick(void) {
     if (cur == 0) {
         return;
     }
+    /* Wire RX in IRQ context (100Hz promptness, no ISR nesting
+     * hazard: this tick runs IF=0 to completion, and the pump
+     * self-locks against thread drains. Socket waiters woken
+     * here preempt at this tick's return. Idle cost is two ring
+     * loads (EAGAIN short-circuits before any MMIO). */
+    net_rx_pump();
     /* Sleep expiry (IRQ context, stores only): wake timed
      * sleepers at/past deadline (signed compare: wrap-safe). */
     t = g_sleep_head;

@@ -27,8 +27,22 @@ int virtio_net_ready(void);
 uint32_t virtio_net_irqvec(void);
 int virtio_irq_expected(void);
 uint32_t virtio_irq_count(void);
-/* ISR entry: ack + count (shared-line strangers don't count). */
+/* ISR entry: ack + count (the ring drain lives in the timer
+ * tick, not here: no ISR nesting hazard). Runs under the
+ * kernel window (MMIO) with IF=0 to completion. */
 void virtio_net_irq(void);
+/* RX subsystem lock (plain cli/sti: holders run IF=0, and the
+ * ISR only runs at IF=1, so lock discipline alone excludes).
+ * Implemented here (only TU that may cli); host stubs no-op. */
+void net_rx_lock(void);
+void net_rx_unlock(void);
+/* TEST DRILL (guest selftests only): fake one completed RX
+ * frame from a posted buffer and run the real pump path
+ * (lock + drain + demux), then restore device progress.
+ * Returns diverted count. Single-threaded quiet window only
+ * (a real device completion mid-drill is recoverable but
+ * loses a frame: see ADR). */
+int virtio_net_drill(const uint8_t *ethframe, uint32_t len);
 /* Transmit one Ethernet frame (<=1514B). Synchronous doorbell. */
 int virtio_net_tx(const uint8_t *frame, uint32_t len);
 /* Poll one received frame into out (<=1514B payload space needed).

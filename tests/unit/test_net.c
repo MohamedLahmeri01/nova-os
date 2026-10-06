@@ -89,6 +89,14 @@ int sock_demux_frame(const uint8_t *frame, uint32_t len) {
     (void)len;
     return 0;
 }
+
+/* No IRQs on the host: the subsystem lock is a no-op (all pump
+ * and queue paths execute single-threaded). */
+void net_rx_lock(void) {
+}
+
+void net_rx_unlock(void) {
+}
 /* Independent checksum oracle (different loop shape). */
 static uint16_t oracle_ck(const uint8_t *d, uint32_t n) {
     uint32_t s = 0;

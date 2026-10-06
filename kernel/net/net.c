@@ -551,7 +551,7 @@ static void net_rxq_drop(void) {
     }
 }
 
-int net_rx_pump(void) {
+int net_rx_pump_locked(void) {
     static uint8_t frame[NET_RXQ_FRAME];
     int diverted = 0;
     for (;;) {
@@ -577,28 +577,50 @@ int net_rx_pump(void) {
     return diverted;
 }
 
+int net_rx_pump(void) {
+    int n;
+    net_rx_lock();
+    n = net_rx_pump_locked();
+    net_rx_unlock();
+    return n;
+}
+
 static int rx_wait(uint8_t *buf, uint32_t max, uint32_t timeout,
                    uint32_t *len_out) {
     uint32_t t0 = g_ticks;
     if (buf == 0 || len_out == 0) {
         return -NOVA_EINVAL;
     }
+    /* Pump self-locks; the serve below takes the lock separately:
+     * an IRQ drain between the two only appends (FIFO order kept),
+     * never interleaves a critical section. */
     for (;;) {
         uint32_t n;
         uint32_t k;
+        int served = 0;
+        int big = 0;
         net_rx_pump();
+        net_rx_lock();
         if (net_rxq_n != 0) {
             n = net_rxq_len[0];
             if (n > max) {
                 /* Consume + refuse (legacy: the ring did this). */
                 net_rxq_drop();
-                return -NOVA_ENOSPC;
+                big = 1;
+            } else {
+                for (k = 0; k < n; k++) {
+                    buf[k] = net_rxq[0][k];
+                }
+                net_rxq_drop();
+                *len_out = n;
+                served = 1;
             }
-            for (k = 0; k < n; k++) {
-                buf[k] = net_rxq[0][k];
-            }
-            net_rxq_drop();
-            *len_out = n;
+        }
+        net_rx_unlock();
+        if (big) {
+            return -NOVA_ENOSPC;
+        }
+        if (served) {
             return NOVA_ESUCCESS;
         }
         if (g_ticks - t0 >= timeout) {

@@ -123,6 +123,14 @@ uint32_t virtio_irq_count(void) {
     return 0;
 }
 
+/* No IRQs on the host: subsystem lock no-ops (pump + queue
+ * run single-threaded here). */
+void net_rx_lock(void) {
+}
+
+void net_rx_unlock(void) {
+}
+
 /* Build a full eth/IP/UDP frame (dst/src MAC + 0800, IP + UDP
  * via the real builders, so checksums validate). Returns the
  * total length. */

@@ -77,15 +77,21 @@ int net_udp_recv(uint8_t *out, uint32_t max, uint16_t sport,
                  uint16_t dport, uint32_t dst_ok, uint32_t timeout,
                  uint32_t *len_out);
 
-/* Single-ingress RX pump (thread context): drain ready ring
- * frames; socket-owned go to slots (counts them), everything
- * else waits in the pending queue for rx_wait. Returns frames
- * diverted to sockets. Legacy rx_wait flows drive the pump, so
- * every boot's DHCP already exercises it. Thread-only for now:
- * the ring drain races an IRQ-side drain (shared last_used),
- * so no IRQ hook until a claim flag lands. */
+/* Single-ingress RX pump: drain ready ring frames;
+ * socket-owned go to slots (counts them), everything else
+ * waits in the pending queue for rx_wait. Self-locking
+ * (subsystem lock: holders run IF=0, so thread and ISR
+ * drains never interleave). Returns frames diverted. */
 int net_rx_pump(void);
-
+/* Locked variant for held-lock callers (ISR, drill): same
+ * drain with no lock of its own. */
+int net_rx_pump_locked(void);
+/* RX subsystem lock (drivers/virtio_net.c implements with
+ * cli/sti; host stubs no-op). Guards ring drain + queue.
+ * The ISR holds it across its pump; threads across
+ * pump + queue serve. */
+void net_rx_lock(void);
+void net_rx_unlock(void);
 /* DNS client (Phase 14b, RFC 1035 A-record subset): query build
  * (RD set, single question), strict reply parse (ID + QR +
  * RCODE + bounds on every field, compression pointers chased

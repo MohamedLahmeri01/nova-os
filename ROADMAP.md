@@ -258,8 +258,11 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 15-iv single-ingress RX (thread pump + pending queue,
   rx_wait reworked, DHCP proves guest path, T21 pump
   vectors), 21/21 (ADR-0060)
-- [ ] Next: IRQ pump hook (ring claim flag, wire-to-waiter
-  wake in IRQ context), more sleep callers (getkey/disk)
+- [x] 15-v tick-driven RX (pump in sched_tick, IF-saving
+  lock, ring drill, IRQPUMP-OK gate; ISR hook built then
+  reverted), 21/21 (ADR-0061)
+- [ ] Next: more sleep callers (getkey/disk), 0.2.0 release
+  pass (version bump, dist, release notes)
 
 
 ## Non-goals for 0.x

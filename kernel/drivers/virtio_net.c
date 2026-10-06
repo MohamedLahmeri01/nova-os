@@ -19,6 +19,7 @@
 #include "panic.h"
 #include "drivers/virtio_net.h"
 #include "drivers/pci.h"
+#include "net/net.h"
 #include "mm/pmm.h"
 #include "mm/vmm.h"
 #include "syscall/syscall.h"
@@ -453,7 +454,11 @@ uint32_t virtio_irq_count(void) {
 
 /* ISR entry (IRQ context, any CR3: the kernel window handles
  * it). Reading ISR acks level-triggered INTx (deasserts before
- * the generic path EOIs, so no storm). */
+ * the generic path EOIs, so no storm). Ack + count only: the
+ * ring drain lives in the timer tick (same 100Hz promptness,
+ * none of the ISR nesting hazards: blind STIs inside this
+ * handler would let a nested IRQ interleave a pump). Wire
+ * frames still reach sockets within a tick (see sched_tick). */
 void virtio_net_irq(void) {
     uint32_t k = mm_enter();
     uint32_t isr = mm_r8(g_isr);
@@ -461,6 +466,90 @@ void virtio_net_irq(void) {
         g_nirq++;
     }
     mm_exit(k);
+}
+
+/* RX subsystem lock: IF-saving cli/sti (unlock restores only
+ * what the matching lock found: an ISR-held lock saves IF=0
+ * and never re-enables mid-handler). Holders run IF=0, and the
+ * ISR only runs at IF=1, so thread and ISR drains never
+ * interleave: no trylock, no skip path. No nesting (locked
+ * variant exists for held-lock callers). */
+static volatile uint32_t g_rx_lock_if;
+
+void net_rx_lock(void) {
+    uint32_t eflags;
+    __asm__ volatile("pushfl; popl %0" : "=r"(eflags) :: "memory");
+    g_rx_lock_if = eflags & 0x200u;
+    __asm__ volatile("cli" ::: "memory");
+}
+
+void net_rx_unlock(void) {
+    if (g_rx_lock_if != 0) {
+        __asm__ volatile("sti" ::: "memory");
+    }
+}
+
+/* TEST DRILL (guest selftests only): fake one completed RX frame
+ * on posted buffer 0 and run the real pump path, then restore
+ * device progress (used idx word + last_used). The drain's
+ * repost side-effects stand (an extra posted buffer is normal
+ * ring operation); the fake used entry is overwritten by the
+ * device's next real completion before anyone re-reads it.
+ * Quiet window only: a real device completion mid-drill loses
+ * a frame (recoverable via retries, but the drill fails loud).
+ * Kernel CR3 required (MMIO doorbell + ring touch, like the
+ * selftests' context). Returns diverted count or -errno. */
+int virtio_net_drill(const uint8_t *ethframe, uint32_t len) {
+    uint16_t saved_idx;
+    uint16_t saved_last;
+    uint16_t slot;
+    uint8_t *slotp;
+    int n;
+    if (!g_ready || ethframe == 0 || len == 0 ||
+        len > ETH_MAX) {
+        return -NOVA_EINVAL;
+    }
+    if (g_rx_frames[0] == 0 || g_rxq.size == 0) {
+        return -NOVA_EIO;
+    }
+    saved_idx = (uint16_t)(g_rxq.used[2] |
+                           ((uint16_t)g_rxq.used[3] << 8));
+    saved_last = g_rxq.last_used;
+    if (saved_idx != saved_last) {
+        return -NOVA_EBUSY; /* ring not quiet: real frames
+                             * pending, drill another time */
+    }
+    /* Whole drill under the lock (craft + bump + pump +
+     * restore, IF=0 throughout): a real device IRQ mid-drill
+     * pends and pumps after, instead of stealing the fake
+     * frame or racing the save/restore. */
+    net_rx_lock();
+    /* Craft onto posted buffer 0 (12B virtio header skipped by
+     * the drain, like device-written frames). */
+    for (uint32_t i = 0; i < len; i++) {
+        g_rx_frames[0][VNET_HDR + i] = ethframe[i];
+    }
+    slot = (uint16_t)(saved_last % g_rxq.size);
+    slotp = g_rxq.used + 4u + (uint32_t)slot * 8u;
+    slotp[0] = 0;
+    slotp[1] = 0; /* id = buffer 0 */
+    slotp[2] = 0;
+    slotp[3] = 0;
+    {
+        uint32_t total = VNET_HDR + len;
+        slotp[4] = (uint8_t)(total & 0xFFu);
+        slotp[5] = (uint8_t)((total >> 8) & 0xFFu);
+        slotp[6] = (uint8_t)((total >> 16) & 0xFFu);
+        slotp[7] = (uint8_t)((total >> 24) & 0xFFu);
+    }
+    g_rxq.used[2] = (uint8_t)((saved_last + 1u) & 0xFFu);
+    g_rxq.used[3] = (uint8_t)(((saved_last + 1u) >> 8) & 0xFFu);
+    n = net_rx_pump_locked();
+    g_rxq.used[2] = (uint8_t)(saved_idx & 0xFFu);
+    g_rxq.used[3] = (uint8_t)((saved_idx >> 8) & 0xFFu);
+    g_rxq.last_used = saved_last;
+    net_rx_unlock();
+    return n;
 }
 
 int virtio_net_tx(const uint8_t *frame, uint32_t len) {

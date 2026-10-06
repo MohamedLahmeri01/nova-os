@@ -39,6 +39,11 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   reworked onto the queue (all legacy flows drive the pump;
   DHCP proves the guest path), T21 pump vectors (ADR-0060).
   Suite 21/21.
+- Phase 15-v tick-driven RX: ring pump in `sched_tick`
+  (wire-to-waiter wake within a tick, IF-saving subsystem
+  lock, ring drill with `IRQPUMP-OK` gate; a device-ISR
+  pump hook was built then reverted for nesting hazards)
+  (ADR-0061). Suite 21/21.
 ## 0.1.0 - 2026-10-05 (first release)
 
 All Phase 0-13d work, suite 20/20 on the constrained VM.

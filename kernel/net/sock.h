@@ -47,6 +47,10 @@ int sock_selftest(void);
  * loopback send, deadline expiry, close-under-waiter EBADF.
  * Prints SOCKBLK-OK. Nonzero on failure (fatal: panic). */
 int sock_block_selftest(void);
+/* IRQ-path drill (quiet ring, after all wire flows): crafted
+ * wire frame to a bound socket through the fake-completion +
+ * real-pump path. Prints IRQPUMP-OK. Nonzero on failure. */
+int sock_drill_selftest(void);
 /* Wire demux: one Ethernet frame toward a bound socket port.
  * Returns 1 delivered, 0 dropped (not IP/UDP, not ours, no
  * socket, oversize), -EINVAL on NULL/short frame. Copies

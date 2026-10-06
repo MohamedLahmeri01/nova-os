@@ -400,6 +400,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (sock_block_selftest() != 0) {
         nova_panic("sockblock-selftest-fail");
     }
+    /* IRQ-path pump drill (quiet ring, after all wire flows). */
+    if (sock_drill_selftest() != 0) {
+        nova_panic("sockdrill-selftest-fail");
+    }
     {
         int user_rc = user_selftest();
         if (user_rc != 0) {
