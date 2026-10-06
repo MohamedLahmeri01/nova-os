@@ -46,7 +46,8 @@
 #define SYS_SOCK 32u
 #define SYS_DNS 33u
 #define SYS_WINCLICK 34u
-#define SYS_MAX 34u
+#define SYS_STATS 35u
+#define SYS_MAX 35u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0
@@ -90,5 +91,8 @@ struct syscall_frame {
 void syscall_init(void);
 void syscall_handler(struct syscall_frame *f);
 void syscall_stats(uint32_t *yld, uint32_t *prt, uint32_t *ext);
+/* Stats dispatch proof (SYS_STATS via real user page).
+ * Prints STATS-OK. Nonzero on failure (fatal: panic). */
+int stats_selftest(void);
 
 #endif /* NOVA_SYSCALL_H */

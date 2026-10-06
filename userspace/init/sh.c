@@ -36,7 +36,7 @@ static const char *sh_nextnum(const char *p, int *val);
 static void sh_putstrn(const char *s, uint32_t max);
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle click rm rmdir uloop nslookup clear exit");
+    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle click rm rmdir uloop nslookup stat clear exit");
 }
 
 static void sh_putip(uint32_t ip) {
@@ -403,6 +403,28 @@ static void sh_focus(void) {
     }
     nova_print("focus id=", 9);
     sh_putdec((uint32_t)r);
+    nova_putchar('\n');
+}
+
+static void sh_stat(void) {
+    static struct nova_stats st;
+    int32_t r = nova_stats(&st);
+    if (r != 0) {
+        nova_puts("stat failed");
+        return;
+    }
+    nova_print("ticks=", 6);
+    sh_putdec(st.ticks);
+    nova_print(" switches=", 10);
+    sh_putdec(st.switches);
+    nova_putchar('\n');
+    nova_print("irqs=", 5);
+    sh_putdec(st.irqs);
+    nova_print(" threads=", 9);
+    sh_putdec(st.threads);
+    nova_putchar('\n');
+    nova_print("pmm_free=", 9);
+    sh_putdec(st.pmm_free);
     nova_putchar('\n');
 }
 
@@ -862,6 +884,8 @@ static void sh_run(const char *line) {
     } else if (nova_strncmp(line, "nslookup", 8) == 0 &&
                (line[8] == 0 || line[8] == ' ')) {
         sh_nslookup(line);
+    } else if (nova_strcmp(line, "stat") == 0) {
+        sh_stat();
     } else if (nova_strncmp(line, "rm", 2) == 0 &&
                (line[2] == 0 || line[2] == ' ')) {
         sh_rm(line, 0);

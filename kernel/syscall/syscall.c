@@ -1277,6 +1277,22 @@ static int32_t do_winclick(uint32_t x, uint32_t y, uint32_t c) {
     return comp_click(x, y);
 }
 
+/* Read-only kernel counters (Phase 0.3-G observability):
+ * uptime, completed switches, handled IRQs, live threads,
+ * free PMM frames. Snapshot into a local struct, one copy
+ * out (never expose kernel addresses; counters only). */
+static int32_t do_stats(uint32_t out, uint32_t b, uint32_t c) {
+    struct nova_stats k;
+    (void)b;
+    (void)c;
+    k.ticks = g_ticks;
+    k.switches = g_sched_switches;
+    k.irqs = g_irq_count;
+    k.threads = thread_count();
+    k.pmm_free = pmm_free_count();
+    return copy_to_user(out, &k, sizeof(k));
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -1319,6 +1335,7 @@ static const struct {
     { SYS_WINTITLE, "wintitle", do_wintitle },
     { SYS_WINCLOSE, "winclose", do_winclose },
     { SYS_WINCLICK, "winclick", do_winclick },
+    { SYS_STATS, "stats", do_stats },
 };
 
 void syscall_handler(struct syscall_frame *f) {
@@ -2160,5 +2177,67 @@ int win_selftest(void) {
         return -1;
     }
     serial_puts("WIN-OK\n");
+    return NOVA_ESUCCESS;
+}
+
+/* Stats dispatch proof (SYS_STATS): NULL refuses (EFAULT), then a
+ * real user page through real dispatch. The scratch addrspace
+ * clones kernel-low (code/data visible), maps one US/RW frame,
+ * and lends its CR3 for two dispatches under cli (no IRQ runs
+ * foreign tables); restored + destroyed after. Deterministic. */
+static int stats_probe_user(void) {
+    struct syscall_frame f;
+    struct addrspace *as;
+    uint32_t frame;
+    uint32_t saved;
+    struct nova_stats *st;
+    as = addrspace_create();
+    frame = pmm_alloc_frame();
+    if (as == 0 || frame == 0) {
+        serial_puts("STATS-FAIL alloc\n");
+        return -1;
+    }
+    if (addrspace_map(as, USER_BASE, frame, 1) != 0) {
+        serial_puts("STATS-FAIL map\n");
+        return -1;
+    }
+    f.ebx = 0;
+    f.ecx = 0;
+    f.edx = 0;
+    f.eax = SYS_STATS;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EFAULT) {
+        serial_puts("STATS-FAIL null\n");
+        return -1;
+    }
+    __asm__ volatile("cli" ::: "memory");
+    saved = arch_read_cr3();
+    arch_write_cr3(as->pd);
+    f.ebx = USER_BASE;
+    f.eax = SYS_STATS;
+    syscall_handler(&f);
+    arch_write_cr3(saved);
+    __asm__ volatile("sti" ::: "memory");
+    if ((int32_t)f.eax != 0) {
+        serial_puts("STATS-FAIL dispatch\n");
+        return -1;
+    }
+    st = (struct nova_stats *)frame;
+    /* Sane counters (threads: at least this boot thread's proc
+     * graph; ticks advanced; frames free). */
+    if (st->threads == 0 || st->pmm_free == 0) {
+        serial_puts("STATS-FAIL values\n");
+        return -1;
+    }
+    pmm_free_frame(frame);
+    addrspace_destroy(as);
+    return 0;
+}
+
+int stats_selftest(void) {
+    if (stats_probe_user() != 0) {
+        return -1;
+    }
+    serial_puts("STATS-OK\n");
     return NOVA_ESUCCESS;
 }

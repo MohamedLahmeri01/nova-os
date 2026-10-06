@@ -418,6 +418,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (sync_contention_selftest() != 0) {
         nova_panic("sync-selftest-fail");
     }
+    /* Stats dispatch (real user page). */
+    if (stats_selftest() != 0) {
+        nova_panic("stats-selftest-fail");
+    }
     {
         int user_rc = user_selftest();
         if (user_rc != 0) {
@@ -453,6 +457,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (spawn_file("/bin/uname") < 0) {
         nova_panic("sdk-proof-fail");
     }
+    /* Formal gate summary (Phase 0.3-G): reaching here means every
+     * selftest above passed (any failure panics first). Machine-
+     * greppable SYSTEM READY line for harnesses and CI. */
+    serial_puts("GATES-OK\n");
 #ifdef NOVA_FAULT_TEST
     serial_puts("INJECT-FAULT\n");
     __asm__ volatile("ud2"); /* deliberate #UD: proves IDT->trap->panic */

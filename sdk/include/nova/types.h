@@ -43,4 +43,14 @@ struct nova_sock_recv {
     uint32_t timeout;
 };
 
+/* Kernel counters snapshot (SYS_STATS, read-only diagnostics):
+ * 20 bytes, 4-aligned. All monotonic except pmm_free. */
+struct nova_stats {
+    uint32_t ticks;
+    uint32_t switches;
+    uint32_t irqs;
+    uint32_t threads;
+    uint32_t pmm_free;
+};
+
 #endif /* NOVA_TYPES_H */
