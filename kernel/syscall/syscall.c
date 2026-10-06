@@ -1,7 +1,9 @@
 /* NOVA OS syscall dispatch + handlers (Phase 5 ABI v1, Phase 7 files).
  * Table-driven (new versions add rows). Every pointer/length goes
- * through validate_usermem; failures return -errno, never panic.
- * Handler costs are bounded (print is cli-guarded, no shared buffer;
+ * through validate_usermem, and every payload movement through
+ * copy_from/to_user (single canonical policy + copies, except the
+ * NUL-scanning copy_user_path); failures return -errno, never
+ * panic. Handler costs are bounded (print snapshots then emits;
  * file I/O chunks through a 512B bounce buffer).
  */
 #include <stdint.h>
@@ -98,19 +100,25 @@ static int32_t do_exit(uint32_t code, uint32_t b, uint32_t c) {
 }
 
 static int32_t do_print(uint32_t ptr, uint32_t len, uint32_t c) {
+    /* Stack snapshot (per-thread: never shared like a static;
+     * 1KB of the 8KB kstack). */
+    uint8_t kbuf[SYSCALL_MAX_PRINT];
     int rc;
     (void)c;
     g_sysc_print++;
     if (len > SYSCALL_MAX_PRINT) {
         return -NOVA_EINVAL;
     }
-    rc = validate_usermem(ptr, len, 0);
+    /* Snapshot first (single-pass user read), then emit: the
+     * serial loop never touches user memory (and holds cli for
+     * fewer, kernel-only stores). */
+    rc = copy_from_user(kbuf, ptr, len);
     if (rc != 0) {
         return rc;
     }
     __asm__ volatile("cli" ::: "memory");
     for (uint32_t i = 0; i < len; i++) {
-        serial_putc((char)*(volatile uint8_t *)(ptr + i));
+        serial_putc((char)kbuf[i]);
     }
     __asm__ volatile("sti" ::: "memory");
     return (int32_t)len;
@@ -540,7 +548,6 @@ static int32_t do_read(uint32_t fd, uint32_t buf, uint32_t len) {
     while (total < len) {
         uint32_t want = len - total;
         uint32_t got = 0;
-        uint32_t i;
         int rc;
         if (want > sizeof(kbuf)) {
             want = sizeof(kbuf);
@@ -552,8 +559,9 @@ static int32_t do_read(uint32_t fd, uint32_t buf, uint32_t len) {
         if (got == 0) {
             break;
         }
-        for (i = 0; i < got; i++) {
-            *(volatile uint8_t *)(buf + total + i) = kbuf[i];
+        rc = copy_to_user(buf + total, kbuf, got);
+        if (rc != 0) {
+            return (total != 0) ? (int32_t)total : rc;
         }
         f->off += got;
         total += got;
@@ -606,14 +614,14 @@ static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
         }
         while (total < len) {
             uint32_t want = len - total;
-            uint32_t i;
             int rc;
             uint32_t end;
             if (want > sizeof(kbuf)) {
                 want = sizeof(kbuf);
             }
-            for (i = 0; i < want; i++) {
-                kbuf[i] = *(volatile uint8_t *)(buf + total + i);
+            rc = copy_from_user(kbuf, buf + total, want);
+            if (rc != 0) {
+                return (total != 0) ? (int32_t)total : rc;
             }
             end = f->off + want;
             if (end > f->node->cap) {
@@ -634,7 +642,7 @@ static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
                     return (total != 0) ? (int32_t)total
                                        : -NOVA_ENOSPC;
                 }
-                for (i = 0; i < f->node->size; i++) {
+                for (uint32_t i = 0; i < f->node->size; i++) {
                     nd[i] = f->node->data[i];
                 }
                 if (f->node->data != 0) {
@@ -651,7 +659,7 @@ static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
             if (rc != 0) {
                 return (total != 0) ? (int32_t)total : rc;
             }
-            for (i = 0; i < want; i++) {
+            for (uint32_t i = 0; i < want; i++) {
                 f->node->data[f->off + i] = kbuf[i];
             }
             if (end > f->node->size) {
@@ -665,13 +673,13 @@ static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
     while (total < len) {
         uint32_t want = len - total;
         uint32_t got = 0;
-        uint32_t i;
         int rc;
         if (want > sizeof(kbuf)) {
             want = sizeof(kbuf);
         }
-        for (i = 0; i < want; i++) {
-            kbuf[i] = *(volatile uint8_t *)(buf + total + i);
+        rc = copy_from_user(kbuf, buf + total, want);
+        if (rc != 0) {
+            return (total != 0) ? (int32_t)total : rc;
         }
         rc = fs_write_node(f->node, f->off, kbuf, want, &got);
         if (rc != 0) {
@@ -699,10 +707,8 @@ static int32_t do_close(uint32_t fd, uint32_t b, uint32_t c) {
 
 /* Copy a NUL-terminated kernel name (+NUL) to the user buffer. */
 static int32_t copy_name_out(uint32_t namebuf, const char *kname, int r) {
-    for (int32_t i = 0; i <= r; i++) {
-        *(volatile char *)(namebuf + (uint32_t)i) = kname[i];
-    }
-    return r;
+    int rc = copy_to_user(namebuf, kname, (uint32_t)r + 1u);
+    return (rc != 0) ? rc : r;
 }
 
 static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
@@ -1061,7 +1067,11 @@ static int32_t do_sock(uint32_t op, uint32_t a, uint32_t b) {
     if (op == SOCK_OP_SEND) {
         struct nova_sock_send k;
         const struct nova_sock_send *u;
-        static uint8_t sbounce[1480];
+        /* Stack bounce (per-thread: the old static buffer let two
+         * concurrent senders interleave payloads; ~1.5KB of the
+         * 8KB kstack, callees below use statics). */
+        uint8_t sbounce[1480];
+        int rc;
         if (need_cap(CAP_NET) != 0) {
             return -NOVA_EPERM;
         }
@@ -1078,19 +1088,16 @@ static int32_t do_sock(uint32_t op, uint32_t a, uint32_t b) {
         if (k.len > SOCK_MTU_PAYLOAD) {
             return -NOVA_EINVAL;
         }
-        if (k.len != 0 &&
-            validate_usermem(k.buf, k.len, 0) != 0) {
-            return -NOVA_EFAULT;
-        }
-        for (uint32_t i = 0; i < k.len; i++) {
-            sbounce[i] = *(volatile uint8_t *)(k.buf + i);
+        rc = copy_from_user(sbounce, k.buf, k.len);
+        if (rc != 0) {
+            return rc;
         }
         return sock_send(a, k.dst, k.dport, sbounce, k.len);
     }
     if (op == SOCK_OP_RECV) {
         struct nova_sock_recv k;
         const struct nova_sock_recv *u;
-        static uint8_t bounce[1536];
+        uint8_t bounce[1536];
         uint32_t got = 0;
         int rc;
         if (need_cap(CAP_NET) != 0) {
@@ -1114,8 +1121,9 @@ static int32_t do_sock(uint32_t op, uint32_t a, uint32_t b) {
         if (rc < 0) {
             return rc;
         }
-        for (uint32_t i = 0; i < got; i++) {
-            *(volatile uint8_t *)(k.buf + i) = bounce[i];
+        rc = copy_to_user(k.buf, bounce, got);
+        if (rc != 0) {
+            return rc;
         }
         return (int32_t)got;
     }
@@ -1240,12 +1248,11 @@ static int32_t do_winstat(uint32_t buf, uint32_t max, uint32_t c) {
 
 static int32_t do_wintitle(uint32_t id, uint32_t str, uint32_t c) {
     char kbuf[16];
+    int rc;
     (void)c;
-    if (validate_usermem(str, sizeof(kbuf), 0) != 0) {
-        return -NOVA_EFAULT;
-    }
-    for (uint32_t i = 0; i < sizeof(kbuf); i++) {
-        kbuf[i] = *(volatile char *)(str + i);
+    rc = copy_from_user(kbuf, str, sizeof(kbuf));
+    if (rc != 0) {
+        return rc;
     }
     kbuf[sizeof(kbuf) - 1u] = 0; /* truncation documented */
     return comp_title(id, kbuf);

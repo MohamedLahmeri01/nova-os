@@ -95,6 +95,20 @@ static void edge(uint32_t ptr, uint32_t len, int write, int expect,
           "errno discipline", (unsigned long)got, 0);
 }
 
+/* Centralized copies: refusal vectors (no user memory is touched
+ * on failure, so these run on host; valid-copy byte checks run
+ * in-guest through every syscall selftest that moves payloads).
+ * Dummy kernel pointers suffice: failures return before any
+ * dereference on either side. */
+static void cedge(int to_user, uint32_t uptr, uint32_t len, int expect,
+                  const char *name) {
+    static uint8_t kbuf[16];
+    int got = to_user ? copy_to_user(uptr, kbuf, len)
+                      : copy_from_user(kbuf, uptr, len);
+    check(got == expect, name, (unsigned long)got,
+          (unsigned long)(uint32_t)expect);
+}
+
 int main(void) {
     edge(0x80000000u, 100, 0, 0, "basic read");
     edge(0x80000000u, 0, 0, 0, "empty ok");
@@ -111,6 +125,27 @@ int main(void) {
     edge(0x80000000u, 4096, 0, 0, "exact page");
     edge(0x80000FFFu, 2, 0, 0, "cross page");
     edge(0x80000000u, 100, 1, 0, "basic write");
+    /* Centralized copies refuse exactly like the validator
+     * (kernel pointers, overflow, over-cap, holes, RO pages,
+     * supervisor pages); zero length never touches memory. */
+    cedge(0, 0x70000000u, 100, -NOVA_EFAULT, "copy from-user addr");
+    cedge(0, 0x00001000u, 100, -NOVA_EFAULT, "copy from low");
+    cedge(0, 0xFFFFFF00u, 0x200u, -NOVA_EFAULT, "copy from wrap");
+    cedge(0, 0x80000000u, 5000, -NOVA_EINVAL, "copy from cap");
+    cedge(0, 0x80100000u, 100, -NOVA_EFAULT, "copy from hole");
+    cedge(0, 0x80300000u, 100, -NOVA_EFAULT, "copy from sup");
+    cedge(0, 0x70000000u, 0, 0, "copy from empty");
+    cedge(1, 0x70000000u, 100, -NOVA_EFAULT, "copy to-user addr");
+    cedge(1, 0xFFFFFF00u, 0x200u, -NOVA_EFAULT, "copy to wrap");
+    cedge(1, 0x80000000u, 5000, -NOVA_EINVAL, "copy to cap");
+    cedge(1, 0x80200000u, 100, -NOVA_EFAULT, "copy to ro");
+    cedge(1, 0x70000000u, 0, 0, "copy to empty");
+    /* NULL kernel side with nonzero length refuses before any
+     * dereference on either side (safe to assert on host). */
+    check(copy_from_user(0, 0x80000000u, 5) == -NOVA_EINVAL,
+          "copy from null-dst", 0, 0);
+    check(copy_to_user(0x80000000u, 0, 5) == -NOVA_EINVAL,
+          "copy to null-src", 0, 0);
     srand(20251001);
     for (int i = 0; i < 20000; i++) {
         uint32_t ptr;
