@@ -34,14 +34,13 @@ uint32_t net_netmask(void) {
 static void eth_build(uint8_t *out, const uint8_t *dst,
                       const uint8_t *src, uint16_t type,
                       const uint8_t *payload, uint32_t len);
-static int eth_parse(const uint8_t *frame, uint32_t len,
-                     const uint8_t *mymac, uint16_t *type_out);
+int eth_parse(const uint8_t *frame, uint32_t len,
+              const uint8_t *mymac, uint16_t *type_out);
 static int arp_resolve(uint32_t ip, uint8_t *mac_out);
 static int rx_wait(uint8_t *buf, uint32_t max, uint32_t timeout,
                    uint32_t *len_out);
 
 #define ETH_TYPE_ARP 0x0806u
-#define ETH_TYPE_IP 0x0800u
 #define ARP_OP_REQ 1u
 #define ARP_OP_REP 2u
 
@@ -443,7 +442,7 @@ static void eth_build(uint8_t *out, const uint8_t *dst,
 
 /* Parse one RX frame: returns payload offset or -errno; drops
  * anything malformed, non-ARP/IP, or not for us (quietly). */
-static int eth_parse(const uint8_t *frame, uint32_t len,
+int eth_parse(const uint8_t *frame, uint32_t len,
                      const uint8_t *mymac, uint16_t *type_out) {
     uint32_t i;
     int mine = 1;
@@ -609,8 +608,6 @@ static int arp_resolve(uint32_t ip, uint8_t *mac_out) {
  * synchronous countdowns, ports filter inbound. Checksums use the
  * IPv4 pseudo-header; a zero RX checksum means absent (RFC 768).
  */
-
-#define NET_ADDR_BCAST 0xFFFFFFFFu
 
 static uint32_t cksum_add(uint32_t sum, const uint8_t *p, uint32_t n) {
     uint32_t i = 0;

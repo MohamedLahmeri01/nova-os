@@ -16,6 +16,8 @@
 #define NET_PORT_DHCP_CLIENT 68u
 #define NET_PORT_DHCP_SERVER 67u
 #define NET_ADDR_LOOPBACK 0x7F000001u /* 127.0.0.1, host order */
+#define NET_ADDR_BCAST 0xFFFFFFFFu
+#define ETH_TYPE_IP 0x0800u
 /* VBox NAT defaults = initial runtime config (DHCP overwrites). */
 #define NET_ADDR_SELF 0x0A00020Fu    /* 10.0.2.15 */
 #define NET_ADDR_GW 0x0A000202u      /* 10.0.2.2 */
@@ -28,6 +30,12 @@ uint32_t net_netmask(void);
 
 /* Ones-complement checksum (RFC 1071) over len bytes. */
 uint16_t net_checksum(const uint8_t *data, uint32_t len);
+
+/* Parse one RX frame: payload offset or -errno; drops malformed,
+ * non-ARP/IP, or not-for-us (quietly). Shared with the socket
+ * wire demux (single parser, two consumers). */
+int eth_parse(const uint8_t *frame, uint32_t len,
+              const uint8_t *mymac, uint16_t *type_out);
 
 /* Build an IPv4 header (20B, no options) into out. Returns the
  * header length (20) or negative -errno. */

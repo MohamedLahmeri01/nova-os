@@ -1,14 +1,8 @@
-/* NOVA OS socket host test (Phase 14a, T21).
- * Host-side: the REAL kernel/net/sock.c; loopback never touches
- * virtio (net_* stubbed, never called on loopback paths), ticks
- * frozen (timeouts are immediate). No scheduler on host
- * (can_sleep is 0: the early-boot spin path executes, which is
- * exactly what the guest pre-scheduler selftest proves too).
- * The blocking proof needs real threads + timer: guest-only
- * (kernel/net/sock_block.c, SOCKBLK-OK).
- * Bind matrix, loopback round-trips, error discipline,
- * close/reuse, randomized open/send/recv/close fuzz for
- * crash-freedom. VERDICT line.
+/* NOVA OS socket host test (Phase 14a, T21; demux T22-vectors).
+ * Host-side: the REAL kernel/net/sock.c + kernel/net/net.c
+ * (builders/parsers real; virtio stubbed dormant, ticks frozen).
+ * Bind matrix, loopback round-trips, wire-demux frame matrix,
+ * error discipline, close/reuse, randomized fuzz. VERDICT line.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +10,7 @@
 #include <string.h>
 
 #include "net/sock.h"
+#include "net/net.h"
 #include "thread/thread.h"
 #include "syscall/syscall.h"
 
@@ -76,20 +71,68 @@ struct thread *sched_current_thread(void) {
     return 0;
 }
 
-uint32_t net_self_ip(void) {
-    return 0x0A00020Fu;
+/* No NIC on the host: wire TX refuses before ARP (ready=0),
+ * RX never fires; the demux vectors feed crafted frames
+ * directly (no ring involved). */
+int virtio_net_ready(void) {
+    return 0;
 }
 
-int net_udp_send(uint32_t src, uint32_t dst, uint16_t sport,
-                 uint16_t dport, const uint8_t *payload,
-                 uint32_t len) {
-    (void)src;
-    (void)dst;
-    (void)sport;
-    (void)dport;
-    (void)payload;
-    (void)len;
+/* Fixed test MAC (the demux reads it as "ours"). */
+static const uint8_t t_mac_self[6] = { 0x52, 0x54, 0x00,
+                                       0x12, 0x34, 0x56 };
+static const uint8_t t_mac_src[6] = { 0x52, 0x54, 0x00,
+                                      0x12, 0x34, 0x57 };
+
+const uint8_t *virtio_net_mac(void) {
+    return t_mac_self;
+}
+
+int virtio_net_tx(const uint8_t *f, uint32_t l) {
+    (void)f;
+    (void)l;
     return -NOVA_EIO;
+}
+
+int virtio_net_rx(uint8_t *o, uint32_t m) {
+    (void)o;
+    (void)m;
+    return -NOVA_EAGAIN;
+}
+
+int virtio_irq_expected(void) {
+    return 0;
+}
+
+uint32_t virtio_irq_count(void) {
+    return 0;
+}
+
+/* Build a full eth/IP/UDP frame (dst/src MAC + 0800, IP + UDP
+ * via the real builders, so checksums validate). Returns the
+ * total length. */
+static uint32_t build_frame(uint8_t *f, const uint8_t *dmac,
+                            uint32_t srcip, uint32_t dstip,
+                            uint16_t sport, uint16_t dport,
+                            const uint8_t *pl, uint32_t plen) {
+    uint8_t ip[20];
+    uint8_t u[72];
+    int ulen;
+    int iplen;
+    int i;
+    ulen = net_udp_build(u, srcip, dstip, sport, dport, pl,
+                         plen);
+    iplen = net_ip_build(ip, srcip, dstip, 17u, (uint32_t)ulen);
+    for (i = 0; i < 6; i++) {
+        f[i] = dmac[i];
+        f[6 + i] = t_mac_src[i];
+    }
+    f[12] = 0x08;
+    f[13] = 0x00;
+    memcpy(f + 14, ip, 20);
+    memcpy(f + 34, u, (uint32_t)ulen);
+    (void)iplen;
+    return 34u + (uint32_t)ulen;
 }
 
 static uint32_t lcg_state = 0x50C4E7u;
@@ -135,14 +178,132 @@ int main(void) {
                     SOCK_MTU_PAYLOAD + 1u) == -NOVA_EINVAL,
           "huge", 0, 0);
 
-    /* Off-loopback would wire out (stub refuses: unreached). */
-    check(sock_send(a, 0x0A000202u, 67, hello, 5) == -NOVA_EIO,
-          "wire-stub", 0, 0);
+    /* Off-loopback reaches the real TX path, which refuses
+     * without a NIC (ready=0, before ARP). */
+    check(sock_send(a, 0x0A000202u, 67, hello, 5) == -NOVA_EINVAL,
+          "wire-nonic", 0, 0);
 
     /* Close frees; ids and ports recycle. */
     check(sock_close(a) == 0 && sock_close(b) == 0, "close", 0,
           0);
     check(sock_open(5000) >= 0, "rebind", 0, 0);
+
+    /* Wire demux: crafted eth/IP/UDP frames through the real
+     * parsers (ports 5200+, clear of the fuzz range). */
+    {
+        uint8_t f[64];
+        uint8_t big[1600];
+        uint8_t u[8 + 1473];
+        uint8_t ip[20];
+        static const uint8_t bcast[6] = { 0xFF, 0xFF, 0xFF,
+                                          0xFF, 0xFF, 0xFF };
+        static const uint8_t other[6] = { 0x52, 0x54, 0x00,
+                                         0x12, 0x34, 0x58 };
+        uint32_t fl;
+        int c = sock_open(5200);
+        int i;
+        check(c >= 0, "dmx-open", (unsigned long)c, 0);
+        /* Exact hit: delivered, readable via the fast path. */
+        fl = build_frame(f, t_mac_self, 0x0A000202u, 0x0A00020Fu,
+                         67, 5200, hello, 5);
+        check(sock_demux_frame(f, fl) == 1, "dmx-hit", 0, 0);
+        check(sock_recv(c, rx, sizeof(rx), 10, &got) == 5 &&
+                  got == 5u && memcmp(rx, hello, 5) == 0,
+              "dmx-recv", got, 0);
+        /* Wrong port: dropped, socket stays empty. */
+        fl = build_frame(f, t_mac_self, 0x0A000202u, 0x0A00020Fu,
+                         67, 5201, hello, 5);
+        check(sock_demux_frame(f, fl) == 0, "dmx-port", 0, 0);
+        check(sock_recv(c, rx, sizeof(rx), 0, &got) ==
+                  -NOVA_EAGAIN,
+              "dmx-empty", 0, 0);
+        /* Broadcast MAC + self IP: delivered. */
+        fl = build_frame(f, bcast, 0x0A000202u, 0x0A00020Fu,
+                         67, 5200, hello, 5);
+        check(sock_demux_frame(f, fl) == 1, "dmx-bcast", 0,
+              0);
+        check(sock_recv(c, rx, sizeof(rx), 10, &got) == 5,
+              "dmx-bcast-recv", got, 0);
+        /* Non-IP ethertype: dropped. */
+        fl = build_frame(f, t_mac_self, 0x0A000202u, 0x0A00020Fu,
+                         67, 5200, hello, 5);
+        f[13] = 0x06;
+        check(sock_demux_frame(f, fl) == 0, "dmx-arp", 0, 0);
+        /* Foreign MAC / foreign IP: dropped. */
+        fl = build_frame(f, other, 0x0A000202u, 0x0A00020Fu,
+                         67, 5200, hello, 5);
+        check(sock_demux_frame(f, fl) == 0, "dmx-mac", 0, 0);
+        fl = build_frame(f, t_mac_self, 0x0A000202u, 0x0A000203u,
+                         67, 5200, hello, 5);
+        check(sock_demux_frame(f, fl) == 0, "dmx-ip", 0, 0);
+        /* Short / NULL: malformed. */
+        check(sock_demux_frame(f, 10) == -NOVA_EINVAL,
+              "dmx-short", 0, 0);
+        check(sock_demux_frame(0, 47) == -NOVA_EINVAL,
+              "dmx-null", 0, 0);
+        /* Oversize datagram (1473B payload, checksum absent =
+         * accepted per RFC 768, but no slot fits): dropped,
+         * never truncated. The IP header is hand-built: the
+         * builder MTU-caps, but a jumbo parses fine. */
+        for (i = 0; i < 8; i++) {
+            u[i] = 0;
+        }
+        u[0] = 0;
+        u[1] = 67;
+        u[2] = 0x14;
+        u[3] = 0x50;
+        u[4] = 0x05;
+        u[5] = 0xC9; /* ulen 1481 */
+        u[6] = 0;
+        u[7] = 0; /* checksum absent */
+        for (i = 0; i < 1473; i++) {
+            u[8 + i] = 0x41;
+        }
+        {
+            uint16_t ipc;
+            ip[0] = 0x45;
+            ip[1] = 0x00;
+            ip[2] = 0x05;
+            ip[3] = 0xDD; /* total 1501 */
+            ip[4] = 0x12;
+            ip[5] = 0x34;
+            ip[6] = 0x40;
+            ip[7] = 0x00; /* DF, offset 0 */
+            ip[8] = 64;
+            ip[9] = 17;
+            ip[10] = 0;
+            ip[11] = 0;
+            ip[12] = 0x0A;
+            ip[13] = 0x00;
+            ip[14] = 0x02;
+            ip[15] = 0x02; /* src 10.0.2.2 */
+            ip[16] = 0x0A;
+            ip[17] = 0x00;
+            ip[18] = 0x02;
+            ip[19] = 0x0F; /* dst 10.0.2.15 */
+            ipc = net_checksum(ip, 20);
+            ip[10] = (uint8_t)(ipc >> 8);
+            ip[11] = (uint8_t)(ipc & 0xFFu);
+            for (i = 0; i < 6; i++) {
+                big[i] = t_mac_self[i];
+                big[6 + i] = t_mac_src[i];
+            }
+            big[12] = 0x08;
+            big[13] = 0x00;
+            memcpy(big + 14, ip, 20);
+            memcpy(big + 34, u, 1481u);
+        }
+        check(sock_demux_frame(big, 34u + 1481u) == 0,
+              "dmx-huge", 0, 0);
+        check(sock_recv(c, rx, sizeof(rx), 0, &got) ==
+                  -NOVA_EAGAIN,
+              "dmx-huge-empty", 0, 0);
+        /* Unbound after close: dropped. */
+        check(sock_close(c) == 0, "dmx-close", 0, 0);
+        fl = build_frame(f, t_mac_self, 0x0A000202u, 0x0A00020Fu,
+                         67, 5200, hello, 5);
+        check(sock_demux_frame(f, fl) == 0, "dmx-gone", 0, 0);
+    }
 
     /* Randomized open/send/recv/close fuzz (crash-freedom +
      * errno discipline; frozen ticks make recv instant). */

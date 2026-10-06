@@ -47,5 +47,12 @@ int sock_selftest(void);
  * loopback send, deadline expiry, close-under-waiter EBADF.
  * Prints SOCKBLK-OK. Nonzero on failure (fatal: panic). */
 int sock_block_selftest(void);
+/* Wire demux: one Ethernet frame toward a bound socket port.
+ * Returns 1 delivered, 0 dropped (not IP/UDP, not ours, no
+ * socket, oversize), -EINVAL on NULL/short frame. Copies
+ * straight into the slot (no scratch: IRQ-safe by
+ * construction for the future IRQ pump). Untrusted bytes in,
+ * validated bytes out (existing eth/IP/UDP parsers). */
+int sock_demux_frame(const uint8_t *frame, uint32_t len);
 
 #endif /* NOVA_SOCK_H */

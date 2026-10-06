@@ -997,7 +997,7 @@ def cmd_test():
             print("[pass] T20 host mouse test"); passed += 1
         else:
             print("[fail] T20 host mouse test"); failed += 1
-    # T21: host socket test (sock.c loopback + fuzz + selftest)
+    # T21: host socket test (sock.c + net.c builders/parsers real)
     print("[info] T21 compiling + running host socket test...")
     sock_exe = os.path.join(BUILD, "test_sock.exe")
     cmd = ["gcc", "-O2", "-Wall", "-Wextra",
@@ -1005,6 +1005,7 @@ def cmd_test():
            "-I", os.path.join(ROOT, "sdk", "include"),
            os.path.join(ROOT, "tests", "unit", "test_sock.c"),
            os.path.join(ROOT, "kernel", "net", "sock.c"),
+           os.path.join(ROOT, "kernel", "net", "net.c"),
            "-o", sock_exe]
     r = run(cmd, timeout=120)
     if r.returncode != 0:

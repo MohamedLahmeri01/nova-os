@@ -17,6 +17,7 @@
 #include "serial.h"
 #include "net/net.h"
 #include "net/sock.h"
+#include "drivers/virtio_net.h"
 #include "sched/sched.h"
 #include "thread/thread.h"
 #include "syscall/syscall.h"
@@ -42,6 +43,24 @@ static uint32_t g_sock_gen; /* 0 = never bound (skipped on wrap) */
 
 static int valid_id(uint32_t id) {
     return id < SOCK_MAX && g_socks[id].used;
+}
+
+/* Fill one RX slot + wake its waiter (field cleared before
+ * waking: the woken thread never observes a stale waiter).
+ * Shared by loopback delivery and the wire demux (one wake
+ * path, two arrivals). */
+static void sock_slot_deliver(uint32_t i, const uint8_t *payload,
+                              uint32_t len) {
+    for (uint32_t k = 0; k < len; k++) {
+        g_socks[i].rx[k] = payload[k];
+    }
+    g_socks[i].rxlen = len;
+    g_socks[i].has = 1;
+    if (g_socks[i].waiter != 0) {
+        struct thread *w = g_socks[i].waiter;
+        g_socks[i].waiter = 0;
+        sched_wakeup(w);
+    }
 }
 
 int sock_open(uint16_t port) {
@@ -120,21 +139,10 @@ int sock_send(uint32_t id, uint32_t dst, uint16_t dport,
     }
     sport = g_socks[id].port;
     if (dst == SOCK_LOOPBACK || dst == net_self_ip()) {
-        /* Loopback delivery (no wire, no ARP, no waiting). A
-         * parked receiver wakes with the data (field cleared
-         * before waking: it can never observe a stale waiter). */
+        /* Loopback delivery (no wire, no ARP, no waiting). */
         for (uint32_t i = 0; i < SOCK_MAX; i++) {
             if (g_socks[i].used && g_socks[i].port == dport) {
-                for (uint32_t k = 0; k < len; k++) {
-                    g_socks[i].rx[k] = payload[k];
-                }
-                g_socks[i].rxlen = len;
-                g_socks[i].has = 1;
-                if (g_socks[i].waiter != 0) {
-                    struct thread *w = g_socks[i].waiter;
-                    g_socks[i].waiter = 0;
-                    sched_wakeup(w);
-                }
+                sock_slot_deliver(i, payload, len);
                 break;
             }
         }
@@ -217,6 +225,54 @@ int sock_recv(uint32_t id, uint8_t *out, uint32_t max,
             }
         }
     }
+}
+
+int sock_demux_frame(const uint8_t *frame, uint32_t len) {
+    const uint8_t *mymac;
+    uint16_t type = 0;
+    uint8_t proto = 0;
+    uint32_t src = 0, dst = 0;
+    uint16_t sport = 0, dport = 0;
+    int off;
+    uint32_t uoff, ulen, n;
+    if (frame == 0 || len < 14u) {
+        return -NOVA_EINVAL;
+    }
+    mymac = virtio_net_mac();
+    /* Ethernet: ours or broadcast, IP only (ARP etc. drop). */
+    if (eth_parse(frame, len, mymac, &type) < 0 ||
+        type != ETH_TYPE_IP) {
+        return 0;
+    }
+    /* IP: UDP only, addressed to us or broadcast (parse
+     * validates version/checksum/fragments; offsets safe). */
+    off = net_ip_parse(frame + 14, len - 14u, &proto, &src, &dst);
+    if (off < 0 || proto != NET_PROTO_UDP) {
+        return 0;
+    }
+    if (dst != net_self_ip() && dst != NET_ADDR_BCAST) {
+        return 0;
+    }
+    /* UDP: strict parse (length + checksum); payload bounds come
+     * from the validated length field, like net_udp_recv. */
+    uoff = 14u + (uint32_t)off;
+    if (net_udp_parse(frame + uoff, len - uoff, src, dst, &sport,
+                      &dport) != 8) {
+        return 0;
+    }
+    (void)sport;
+    ulen = ((uint32_t)frame[uoff + 4u] << 8) | frame[uoff + 5u];
+    n = ulen - 8u; /* parse guarantees ulen >= 8 and in-bounds */
+    if (n > SOCK_MTU_PAYLOAD) {
+        return 0; /* no slot fits: drop (never truncate) */
+    }
+    for (uint32_t i = 0; i < SOCK_MAX; i++) {
+        if (g_socks[i].used && g_socks[i].port == dport) {
+            sock_slot_deliver(i, frame + uoff + 8u, n);
+            return 1;
+        }
+    }
+    return 0; /* no socket owns this port */
 }
 
 int sock_selftest(void) {

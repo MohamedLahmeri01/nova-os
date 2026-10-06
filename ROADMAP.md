@@ -252,8 +252,11 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 15-ii blocking sock_recv (park/wake/expire, waiter +
   generation, guest-only proof file, SOCKBLK-OK gate),
   21/21 (ADR-0058)
-- [ ] Next: wire-RX socket demux (IRQ-context delivery
-  wake), more sleep callers (getkey/disk)
+- [x] 15-iii wire demux (port-match frames to slots, shared
+  wake path, host T21 frame matrix, no gate: unwired),
+  21/21 (ADR-0059)
+- [ ] Next: ring pump + IRQ hook (legacy-flow quiesce first),
+  more sleep callers (getkey/disk)
 
 
 ## Non-goals for 0.x

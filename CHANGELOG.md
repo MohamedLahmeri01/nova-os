@@ -29,6 +29,11 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   tiers, per-socket waiter + bind generation, guest-only
   threaded proof (`SOCKBLK-OK` gate: wake-with-data, expiry,
   close-under-waiter EBADF) (ADR-0058). Suite 21/21.
+- Phase 15-iii wire demux: `sock_demux_frame` port-matches
+  Ethernet frames into socket slots over the shared wake
+  path, proven by a host T21 frame matrix (T21 now links
+  the real net.c); unwired, so no guest gate yet (ADR-0059).
+  Suite 21/21.
 ## 0.1.0 - 2026-10-05 (first release)
 
 All Phase 0-13d work, suite 20/20 on the constrained VM.
