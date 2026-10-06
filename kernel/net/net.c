@@ -9,6 +9,7 @@
 #include "serial.h"
 #include "panic.h"
 #include "net/net.h"
+#include "net/sock.h"
 #include "drivers/virtio_net.h"
 #include "syscall/syscall.h"
 #include "time/time.h"
@@ -524,21 +525,80 @@ static int arp_check(const uint8_t *pkt, uint32_t len,
     return NOVA_ESUCCESS;
 }
 
-/* Poll one RX frame with a tick timeout (ETIMEDOUT on silence). */
+/* Poll one RX frame with a tick timeout (ETIMEDOUT on silence).
+ * Single ingress: the pump moves ring frames to socket slots or
+ * the pending queue; this waits on the queue head (FIFO order and
+ * consume-on-toobig match the old direct-ring behavior exactly).
+ * Queue depth 4 covers request/reply flows; floods drop newest. */
+#define NET_RXQ_N 4u
+#define NET_RXQ_FRAME 1600u
+
+static uint8_t net_rxq[NET_RXQ_N][NET_RXQ_FRAME];
+static uint32_t net_rxq_len[NET_RXQ_N];
+static uint32_t net_rxq_n;
+
+/* Drop the queue head (consumed or too big: legacy consumed
+ * oversize ring frames the same way). */
+static void net_rxq_drop(void) {
+    for (uint32_t k = 0; k + 1u < net_rxq_n; k++) {
+        net_rxq_len[k] = net_rxq_len[k + 1u];
+        for (uint32_t j = 0; j < net_rxq_len[k]; j++) {
+            net_rxq[k][j] = net_rxq[k + 1u][j];
+        }
+    }
+    if (net_rxq_n != 0) {
+        net_rxq_n--;
+    }
+}
+
+int net_rx_pump(void) {
+    static uint8_t frame[NET_RXQ_FRAME];
+    int diverted = 0;
+    for (;;) {
+        int rc = virtio_net_rx(frame, sizeof(frame));
+        if (rc == -NOVA_EAGAIN) {
+            break;
+        }
+        if (rc < 0) {
+            break; /* ring error ends the drain (count kept) */
+        }
+        if (sock_demux_frame(frame, (uint32_t)rc) == 1) {
+            diverted++;
+        } else if (net_rxq_n < NET_RXQ_N) {
+            uint32_t n = (uint32_t)rc;
+            for (uint32_t k = 0; k < n; k++) {
+                net_rxq[net_rxq_n][k] = frame[k];
+            }
+            net_rxq_len[net_rxq_n] = n;
+            net_rxq_n++;
+        }
+        /* Else: queue full, newest drops (documented). */
+    }
+    return diverted;
+}
+
 static int rx_wait(uint8_t *buf, uint32_t max, uint32_t timeout,
                    uint32_t *len_out) {
     uint32_t t0 = g_ticks;
-    int r;
     if (buf == 0 || len_out == 0) {
         return -NOVA_EINVAL;
     }
     for (;;) {
-        r = virtio_net_rx(buf, max);
-        if (r != -NOVA_EAGAIN) {
-            if (r < 0) {
-                return r;
+        uint32_t n;
+        uint32_t k;
+        net_rx_pump();
+        if (net_rxq_n != 0) {
+            n = net_rxq_len[0];
+            if (n > max) {
+                /* Consume + refuse (legacy: the ring did this). */
+                net_rxq_drop();
+                return -NOVA_ENOSPC;
             }
-            *len_out = (uint32_t)r;
+            for (k = 0; k < n; k++) {
+                buf[k] = net_rxq[0][k];
+            }
+            net_rxq_drop();
+            *len_out = n;
             return NOVA_ESUCCESS;
         }
         if (g_ticks - t0 >= timeout) {

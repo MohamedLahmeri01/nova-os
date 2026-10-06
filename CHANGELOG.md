@@ -34,6 +34,11 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   path, proven by a host T21 frame matrix (T21 now links
   the real net.c); unwired, so no guest gate yet (ADR-0059).
   Suite 21/21.
+- Phase 15-iv single-ingress RX: `net_rx_pump` drains the
+  ring into socket slots or a pending queue, `rx_wait`
+  reworked onto the queue (all legacy flows drive the pump;
+  DHCP proves the guest path), T21 pump vectors (ADR-0060).
+  Suite 21/21.
 ## 0.1.0 - 2026-10-05 (first release)
 
 All Phase 0-13d work, suite 20/20 on the constrained VM.

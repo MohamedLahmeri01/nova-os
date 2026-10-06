@@ -81,6 +81,14 @@ int virtio_irq_expected(void) {
 uint32_t virtio_irq_count(void) {
     return 0;
 }
+
+/* No sockets on this rig (net.c links alone): the pump's demux
+ * call lands here (unreached: this test never pumps). */
+int sock_demux_frame(const uint8_t *frame, uint32_t len) {
+    (void)frame;
+    (void)len;
+    return 0;
+}
 /* Independent checksum oracle (different loop shape). */
 static uint16_t oracle_ck(const uint8_t *d, uint32_t n) {
     uint32_t s = 0;

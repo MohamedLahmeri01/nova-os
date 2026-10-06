@@ -71,11 +71,11 @@ struct thread *sched_current_thread(void) {
     return 0;
 }
 
-/* No NIC on the host: wire TX refuses before ARP (ready=0),
- * RX never fires; the demux vectors feed crafted frames
- * directly (no ring involved). */
+/* NIC claimed present (TX/RX still stubbed): the legacy
+ * filtered recv gates on ready, while TX refuses at the
+ * doorbell and RX feeds only the programmed frames. */
 int virtio_net_ready(void) {
-    return 0;
+    return 1;
 }
 
 /* Fixed test MAC (the demux reads it as "ours"). */
@@ -94,10 +94,25 @@ int virtio_net_tx(const uint8_t *f, uint32_t l) {
     return -NOVA_EIO;
 }
 
+/* Programmable ring: queued frames drain in order, then
+ * silence (lets the pump test drive ring -> slots + queue). */
+static const uint8_t *rx_feed[8];
+static uint32_t rx_feed_len[8];
+static int rx_feed_n;
+static int rx_feed_i;
+
 int virtio_net_rx(uint8_t *o, uint32_t m) {
-    (void)o;
-    (void)m;
-    return -NOVA_EAGAIN;
+    uint32_t n;
+    if (rx_feed_i >= rx_feed_n) {
+        return -NOVA_EAGAIN;
+    }
+    n = rx_feed_len[rx_feed_i];
+    if (n > m) {
+        return -NOVA_ENOSPC;
+    }
+    memcpy(o, rx_feed[rx_feed_i], n);
+    rx_feed_i++;
+    return (int)n;
 }
 
 int virtio_irq_expected(void) {
@@ -178,9 +193,9 @@ int main(void) {
                     SOCK_MTU_PAYLOAD + 1u) == -NOVA_EINVAL,
           "huge", 0, 0);
 
-    /* Off-loopback reaches the real TX path, which refuses
-     * without a NIC (ready=0, before ARP). */
-    check(sock_send(a, 0x0A000202u, 67, hello, 5) == -NOVA_EINVAL,
+    /* Off-loopback reaches the real TX path, which fails at
+     * the stub doorbell (ARP request never leaves). */
+    check(sock_send(a, 0x0A000202u, 67, hello, 5) == -NOVA_EIO,
           "wire-nonic", 0, 0);
 
     /* Close frees; ids and ports recycle. */
@@ -303,6 +318,42 @@ int main(void) {
         fl = build_frame(f, t_mac_self, 0x0A000202u, 0x0A00020Fu,
                          67, 5200, hello, 5);
         check(sock_demux_frame(f, fl) == 0, "dmx-gone", 0, 0);
+    }
+
+    /* Ring pump: one drain routes the socket frame to its slot
+     * (counted) and parks the other in the pending queue, where
+     * the legacy filtered recv finds it. */
+    {
+        static uint8_t fa[64];
+        static uint8_t fb[64];
+        static const uint8_t world[5] = { 'W', 'o', 'r', 'l',
+                                          'd' };
+        uint8_t uo[64];
+        uint32_t fla, flb, ulen = 0;
+        int p = sock_open(5200);
+        check(p >= 0, "pump-open", (unsigned long)p, 0);
+        fla = build_frame(fa, t_mac_self, 0x0A000202u,
+                          0x0A00020Fu, 67, 5200, hello, 5);
+        flb = build_frame(fb, t_mac_self, 0x0A000202u,
+                          0x0A00020Fu, 4000, 67, world, 5);
+        rx_feed[0] = fa;
+        rx_feed_len[0] = fla;
+        rx_feed[1] = fb;
+        rx_feed_len[1] = flb;
+        rx_feed_n = 2;
+        rx_feed_i = 0;
+        check(net_rx_pump() == 1, "pump-divert", 0, 0);
+        check(net_rx_pump() == 0, "pump-drained", 0, 0);
+        check(sock_recv(p, rx, sizeof(rx), 10, &got) == 5 &&
+                  got == 5u && memcmp(rx, hello, 5) == 0,
+              "pump-slot", got, 0);
+        /* Queued frame: legacy filtered recv reads it back
+         * (frozen ticks are safe: the queue hits first try). */
+        check(net_udp_recv(uo, sizeof(uo), 0, 67, 0x0A00020Fu,
+                           100, &ulen) == 0 && ulen == 5u &&
+                  memcmp(uo, world, 5) == 0,
+              "pump-queue", ulen, 0);
+        check(sock_close(p) == 0, "pump-close", 0, 0);
     }
 
     /* Randomized open/send/recv/close fuzz (crash-freedom +

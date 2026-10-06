@@ -77,6 +77,15 @@ int net_udp_recv(uint8_t *out, uint32_t max, uint16_t sport,
                  uint16_t dport, uint32_t dst_ok, uint32_t timeout,
                  uint32_t *len_out);
 
+/* Single-ingress RX pump (thread context): drain ready ring
+ * frames; socket-owned go to slots (counts them), everything
+ * else waits in the pending queue for rx_wait. Returns frames
+ * diverted to sockets. Legacy rx_wait flows drive the pump, so
+ * every boot's DHCP already exercises it. Thread-only for now:
+ * the ring drain races an IRQ-side drain (shared last_used),
+ * so no IRQ hook until a claim flag lands. */
+int net_rx_pump(void);
+
 /* DNS client (Phase 14b, RFC 1035 A-record subset): query build
  * (RD set, single question), strict reply parse (ID + QR +
  * RCODE + bounds on every field, compression pointers chased

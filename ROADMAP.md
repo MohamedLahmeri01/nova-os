@@ -255,8 +255,11 @@ Capabilities, sandboxing, resource limits, secure handles.
 - [x] 15-iii wire demux (port-match frames to slots, shared
   wake path, host T21 frame matrix, no gate: unwired),
   21/21 (ADR-0059)
-- [ ] Next: ring pump + IRQ hook (legacy-flow quiesce first),
-  more sleep callers (getkey/disk)
+- [x] 15-iv single-ingress RX (thread pump + pending queue,
+  rx_wait reworked, DHCP proves guest path, T21 pump
+  vectors), 21/21 (ADR-0060)
+- [ ] Next: IRQ pump hook (ring claim flag, wire-to-waiter
+  wake in IRQ context), more sleep callers (getkey/disk)
 
 
 ## Non-goals for 0.x
