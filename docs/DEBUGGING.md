@@ -96,3 +96,5 @@ wiring/dispatch/timing, not the algorithm -- bisect there.
 | Missing marker in fault image only | Spawned-thread marker in panic gates? | 0039 |
 | Suite red after syscall addition | `docs/ABI.md` regenerated (`nova abi`)? | 0039 |
 | Print shows values the code just overwrote | Combined call-in-`check()`? Split call, then assert: gcc hoists print loads above mutating calls (ADR-0045 proved it in disassembly) | 0045 |
+| Boot halts silently after paging, no panic | Allocation before `kheap_init`? vmm-stage code must not kmalloc (MEMMAP audit split for exactly this) | 0075 |
+| New gate missing from run-vbox pass | Marker added to both gate lists? run-vbox and panic-test lists are separate literals | 0054 |
