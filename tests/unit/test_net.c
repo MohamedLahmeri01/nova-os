@@ -516,17 +516,17 @@ int main(int argc, char **argv) {
             int is_dns;
             int expect;
         } items[] = {
-            { "dhcp-offer.bin", 0, 0 },
-            { "dhcp-xid.bin", 0, -NOVA_EINVAL },
-            { "dhcp-magic.bin", 0, -NOVA_EINVAL },
-            { "dhcp-short.bin", 0, -NOVA_EINVAL },
-            { "dhcp-chaddr.bin", 0, -NOVA_EINVAL },
-            { "dhcp-wireaddr.bin", 0, -NOVA_EINVAL },
-            { "dns-ok.bin", 1, 0 },
-            { "dns-id.bin", 1, -NOVA_EINVAL },
-            { "dns-nxdomain.bin", 1, -NOVA_ENOENT },
-            { "dns-trunc.bin", 1, -NOVA_EINVAL },
-            { "dns-cname.bin", 1, -NOVA_ENOENT },
+            { "dhcp/dhcp-offer.bin", 0, 0 },
+            { "dhcp/dhcp-xid.bin", 0, -NOVA_EINVAL },
+            { "dhcp/dhcp-magic.bin", 0, -NOVA_EINVAL },
+            { "dhcp/dhcp-short.bin", 0, -NOVA_EINVAL },
+            { "dhcp/dhcp-chaddr.bin", 0, -NOVA_EINVAL },
+            { "dhcp/dhcp-wireaddr.bin", 0, -NOVA_EINVAL },
+            { "dns/dns-ok.bin", 1, 0 },
+            { "dns/dns-id.bin", 1, -NOVA_EINVAL },
+            { "dns/dns-nxdomain.bin", 1, -NOVA_ENOENT },
+            { "dns/dns-trunc.bin", 1, -NOVA_EINVAL },
+            { "dns/dns-cname.bin", 1, -NOVA_ENOENT },
         };
         char path[256];
         uint32_t i;

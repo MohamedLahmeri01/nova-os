@@ -557,6 +557,9 @@ def cmd_test():
     """Host tests T1-T4 plus VBox-gated boot test T5 (with SKIP semantics)."""
     print("== nova test ==")
     passed, failed, skipped = 0, 0, 0
+    # Corpus phases (each replay prints its own line; all seven
+    # must pass for the CORPUS-OK summary at the end).
+    corpus_hits = 0
     # T1: skeleton dirs exist
     if all(os.path.isdir(os.path.join(ROOT, d)) for d in REQUIRED_DIRS):
         print("[pass] T1 skeleton directories present"); passed += 1
@@ -721,10 +724,13 @@ def cmd_test():
             print(f"[fail] T10 fat test compile:\n{(r.stderr or '')[:1500]}")
             failed += 1
         else:
-            r = run([fat_exe, fat_raw], timeout=120)
+            r = run([fat_exe, fat_raw,
+                     os.path.join(ROOT, "tests", "corpus", "fat32",
+                                  "MUTANTS.txt")], timeout=120)
             print((r.stdout or "") + (r.stderr or ""))
             if r.returncode == 0:
                 print("[pass] T10 host fat test"); passed += 1
+                corpus_hits += 1
             else:
                 print("[fail] T10 host fat test"); failed += 1
     # T11: host EXT4 test (ext4.c vs the generated mkext4 image)
@@ -747,10 +753,13 @@ def cmd_test():
             print(f"[fail] T11 ext test compile:\n{(r.stderr or '')[:1500]}")
             failed += 1
         else:
-            r = run([ext_exe, ext_raw], timeout=120)
+            r = run([ext_exe, ext_raw,
+                     os.path.join(ROOT, "tests", "corpus", "ext4",
+                                  "MUTANTS.txt")], timeout=120)
             print((r.stdout or "") + (r.stderr or ""))
             if r.returncode == 0:
                 print("[pass] T11 host ext test"); passed += 1
+                corpus_hits += 1
             else:
                 print("[fail] T11 host ext test"); failed += 1
     # T12: host NOVA-FS test (nova.c + ramfs/file routing vs the
@@ -776,13 +785,16 @@ def cmd_test():
             print(f"[fail] T12 nova test compile:\n{(r.stderr or '')[:1500]}")
             failed += 1
         else:
-            r = run([nova_exe, nova_raw], timeout=120)
+            r = run([nova_exe, nova_raw,
+                     os.path.join(ROOT, "tests", "corpus", "nova_fs",
+                                  "MUTANTS.txt")], timeout=120)
             print((r.stdout or "") + (r.stderr or ""))
             if r.returncode == 0:
                 print("[pass] T12 host nova test"); passed += 1
+                corpus_hits += 1
             else:
                 print("[fail] T12 host nova test"); failed += 1
-    # T13: host fsck (novafsck.py on pristine + mutation classes)
+    # T13: host fsck (novafsck.py on pristine + manifest mutants)
     print("[info] T13 running host fsck checks...")
     fsck_py = os.path.join(ROOT, "tools", "novafsck.py")
     r = run([sys.executable, fsck_py, nova_raw], timeout=120)
@@ -792,24 +804,28 @@ def cmd_test():
     else:
         import shutil
         mut_ok = True
-        # Each mutant class must be DETECTED (nonzero exit).
+        # Mutants come from the checked-in manifest (shared with
+        # T12's driver-level replay): offset, hex bytes, nonzero
+        # exit means detected. Base fixture regenerated above.
         muts = []
         base = None
         with open(nova_raw, "rb") as f:
             base = bytearray(f.read())
         cases = []
-        d = bytearray(base)
-        d[67 * 4096 + 384 + 10] ^= 0xFF
-        cases.append(("ino-cksum", bytes(d)))
-        d = bytearray(base)
-        d[68 * 4096 + 4] = 0x07
-        cases.append(("dir-reclen", bytes(d)))
-        d = bytearray(base)
-        d[65 * 4096 + 69 // 8] &= ~(1 << (69 % 8))
-        cases.append(("bitmap", bytes(d)))
-        d = bytearray(base)
-        d[1024] ^= 0xFF
-        cases.append(("sb-copy", bytes(d)))
+        with open(os.path.join(ROOT, "tests", "corpus", "nova_fs",
+                               "MUTANTS.txt")) as mf:
+            for line in mf:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) < 4 or parts[0] != "fsck":
+                    continue
+                off = int(parts[1])
+                blob = bytes.fromhex(parts[2])
+                d = bytearray(base)
+                d[off:off + len(blob)] = blob
+                cases.append((f"fsck@{off}", bytes(d)))
         for name, img in cases:
             mp = os.path.join(BUILD, f"novafsck-{name}.raw")
             with open(mp, "wb") as f:
@@ -824,7 +840,8 @@ def cmd_test():
             if os.path.exists(mp):
                 os.remove(mp)
         if mut_ok:
-            print("[pass] T13 host fsck (pristine + 4 mutants)")
+            print("[pass] T13 host fsck (pristine + manifest mutants)")
+            corpus_hits += 1
             passed += 1
         else:
             failed += 1
@@ -847,6 +864,7 @@ def cmd_test():
         print((r.stdout or "") + (r.stderr or ""))
         if r.returncode == 0:
             print("[pass] T14 host net test"); passed += 1
+            corpus_hits += 1
         else:
             print("[fail] T14 host net test"); failed += 1
     # T15: host capability test (caps.c: allow/drop matrix + fuzz)
@@ -1018,10 +1036,12 @@ def cmd_test():
         print(f"[fail] T21 socket test compile:\n{(r.stderr or '')[:1500]}")
         failed += 1
     else:
-        r = run([sock_exe], timeout=120)
+        r = run([sock_exe, os.path.join(ROOT, "tests", "corpus",
+                                        "udp")], timeout=120)
         print((r.stdout or "") + (r.stderr or ""))
         if r.returncode == 0:
             print("[pass] T21 host socket test"); passed += 1
+            corpus_hits += 1
         else:
             print("[fail] T21 host socket test"); failed += 1
     # T22: host spinlock contract test (sync.c atomics + lock discipline)
@@ -1067,8 +1087,16 @@ def cmd_test():
         print((r.stdout or "") + (r.stderr or ""))
         if r.returncode == 0:
             print("[pass] T23 host shell test"); passed += 1
+            corpus_hits += 1
         else:
             print("[fail] T23 host shell test"); failed += 1
+    # Corpus summary: all seven replay phases must pass. A SKIP
+    # is never a pass (missing phase fails the count openly).
+    if corpus_hits == 7:
+        print("[ok] CORPUS-OK (7/7 replay phases green)")
+    else:
+        print(f"[fail] CORPUS incomplete: {corpus_hits}/7 phases")
+        failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
     return 0 if failed == 0 else 1
 

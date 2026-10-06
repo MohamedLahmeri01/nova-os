@@ -165,11 +165,13 @@ static uint32_t lcg(void) {
     return lcg_state;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     uint8_t rx[64];
     uint32_t got = 0;
     static const uint8_t hello[5] = { 'h', 'e', 'l', 'l', 'o' };
     int a, b;
+    /* Corpus dir from argv[1] (nova.py passes it absolute). */
+    const char *cdir = (argc > 1) ? argv[1] : "tests/corpus/udp";
 
     /* Guest selftest first (clean-pool expectations; drains
      * fully; never blocks so frozen ticks are fine). */
@@ -362,6 +364,100 @@ int main(void) {
                   memcmp(uo, world, 5) == 0,
               "pump-queue", ulen, 0);
         check(sock_close(p) == 0, "pump-close", 0, 0);
+    }
+
+    /* Wire-shape corpus replay (tests/corpus udp seed files):
+     * every malformed shape drops (0) without crashing; the one
+     * bound shape delivers its bytes (validates the generator's
+     * checksums end to end, not just the drop paths). */
+    {
+        static const struct {
+            const char *name;
+            int expect;
+        } items[] = {
+            { "udp-ok.bin", 0 }, { "ip-badver.bin", 0 },
+            { "ip-mf.bin", 0 }, { "ip-ttl0.bin", 0 },
+            { "ip-trunc.bin", 0 }, { "ip-badproto.bin", 0 },
+            { "udp-short.bin", 0 }, { "udp-badcksum.bin", 0 },
+            { "udp-huge.bin", 0 }, { "udp-hit.bin", 1 },
+        };
+        char path[256];
+        uint32_t i;
+        int h = sock_open(5200);
+        check(h >= 0, "shape-open", (unsigned long)h, 0);
+        for (i = 0; i < sizeof(items) / sizeof(items[0]); i++) {
+            FILE *f;
+            static uint8_t frame[1600];
+            size_t n = 0;
+            size_t dl = strlen(cdir);
+            size_t nl = strlen(items[i].name);
+            int rc;
+            if (dl + nl + 2u > sizeof(path)) {
+                check(0, "shape-path", i, 0);
+                continue;
+            }
+            memcpy(path, cdir, dl);
+            path[dl] = '/';
+            memcpy(path + dl + 1u, items[i].name, nl);
+            path[dl + 1u + nl] = 0;
+            f = fopen(path, "rb");
+            if (f == 0) {
+                check(0, "shape-open", i, 0);
+                continue;
+            }
+            n = fread(frame, 1, sizeof(frame), f);
+            fclose(f);
+            rc = sock_demux_frame(frame, (uint32_t)n);
+            check(rc == items[i].expect, "shape-demux",
+                  (unsigned long)i, (unsigned long)rc);
+            if (items[i].expect == 1) {
+                check(sock_recv(h, rx, sizeof(rx), 0, &got) == 2 &&
+                          got == 2u && rx[0] == 'H' && rx[1] == 'i',
+                      "shape-hit", got, 0);
+            }
+        }
+        check(sock_close(h) == 0, "shape-close", 0, 0);
+        /* Bound shape leaves no residue (queue untouched). */
+        check(sock_recv(h, rx, sizeof(rx), 0, &got) == -NOVA_EBADF,
+              "shape-drain", 0, 0);
+        printf("corpus: 10 wire shapes replayed\n");
+    }
+
+    /* Queue flood: 6 non-socket frames, depth-4 queue keeps the
+     * first 4 in order and drops the newest 2 (documented). */
+    {
+        static uint8_t f[6][64];
+        uint8_t uo[64];
+        uint32_t ulen = 0;
+        int k;
+        for (k = 0; k < 6; k++) {
+            uint8_t tag[2] = { 'Q', (uint8_t)('0' + k) };
+            uint32_t fl = build_frame(f[k], t_mac_self,
+                                      0x0A000202u, 0x0A00020Fu,
+                                      (uint16_t)(4000u + k), 67,
+                                      tag, 2);
+            rx_feed[k] = f[k];
+            rx_feed_len[k] = fl;
+        }
+        rx_feed_n = 6;
+        rx_feed_i = 0;
+        check(net_rx_pump() == 0, "flood-divert", 0, 0);
+        for (k = 0; k < 4; k++) {
+            ulen = 0;
+            check(net_udp_recv(uo, sizeof(uo), 0, 67, 0x0A00020Fu,
+                               100, &ulen) == 0 && ulen == 2u &&
+                      uo[0] == 'Q' &&
+                      uo[1] == (uint8_t)('0' + k),
+                  "flood-order", (unsigned long)k, ulen);
+        }
+        ulen = 0;
+        /* Empty queue on frozen ticks: timeout 0 fails at once
+         * (any nonzero timeout would spin forever: ticks never
+         * advance on host). */
+        check(net_udp_recv(uo, sizeof(uo), 0, 67, 0x0A00020Fu,
+                           0, &ulen) == -NOVA_ETIMEDOUT,
+              "flood-empty", 0, 0);
+        printf("queue: flood order + drop-newest verified\n");
     }
 
     /* Randomized open/send/recv/close fuzz (crash-freedom +
