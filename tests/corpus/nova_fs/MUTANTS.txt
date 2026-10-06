@@ -1,0 +1,18 @@
+# NOVA-FS mutant manifest (base: build/nova.raw from tools/mknova.py).
+# Format: probe offset hex expect  # comment
+#   probe: init | stat | read (driver level, test_nova) or
+#          fsck (novafsck.py tool level, T13). Each consumer skips
+#          foreign probes.
+#   offset/hex: absolute replacement bytes (deterministic fixture).
+#   expect: exact rc for driver rows (0 or negative errno);
+#           nonzero-means-detected for fsck rows (tool exits 0/1).
+# stat/read probe /HELLO.TXT. Expectations predicted from driver
+# checks, confirmed by run; on mismatch investigate, don't edit blind.
+fsck 274826 2C 1  # ino-cksum: HELLO inode crc breaks -> detected
+read 274826 2C -5  # ino-cksum at driver level: stat never loads inodes (dir data suffices), the verifying loader fires on read -> EIO
+fsck 278532 07 1  # dir-reclen: rec_len 7 impossible -> detected
+stat 278532 07 -5  # dir-reclen at driver level (predict EIO)
+fsck 266248 DF 1  # bitmap: data bit cleared -> detected (fsck owns bitmaps; no driver op consults them, so no driver row by design)
+fsck 1024 B1 1  # sb-copy: copy 0 dead -> detected (copy 1 saves mount)
+init 1024 B1 0  # sb-copy: mount survives via copy 1
+stat 1024 B1 0  # sb-copy: reads still work (discrimination row)
