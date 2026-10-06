@@ -131,6 +131,14 @@ void net_rx_lock(void) {
 void net_rx_unlock(void) {
 }
 
+/* No event consumer on host (no panic dump, no selftest):
+ * delivery emits are dropped. Guest proves the ring. */
+void trace_emit(uint16_t kind, uint16_t id, uint32_t arg) {
+    (void)kind;
+    (void)id;
+    (void)arg;
+}
+
 /* Build a full eth/IP/UDP frame (dst/src MAC + 0800, IP + UDP
  * via the real builders, so checksums validate). Returns the
  * total length. */
