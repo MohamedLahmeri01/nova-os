@@ -25,7 +25,6 @@
 #define PTE_P (1u << 0)
 #define PTE_RW (1u << 1)
 #define PTE_US (1u << 2)
-#define KERNEL_PDS 256u /* PD entries cloned (identity low 1GB) */
 
 struct addrspace *addrspace_create(void) {
     struct addrspace *as;
