@@ -779,7 +779,12 @@ static void sh_ping(const char *line) {
             int val = 0;
             int n = 0;
             while (*p >= '0' && *p <= '9') {
-                val = val * 10 + (*p - '0');
+                /* Saturate the accumulator (Phase J): overlong
+                 * runs must refuse via n/val checks below, never
+                 * via signed overflow (UB even when harmless). */
+                if (n < 9) {
+                    val = val * 10 + (*p - '0');
+                }
                 n++;
                 p++;
             }

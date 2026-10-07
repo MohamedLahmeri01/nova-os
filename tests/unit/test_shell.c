@@ -25,8 +25,9 @@
  * touching memory, driving every builtin down parse/error paths.
  */
 
-/* Bounded output capture (PRINT writes only). */
-static uint8_t cap_buf[65536];
+/* Bounded output capture (PRINT writes only). Sized for the
+ * whole battery (per-line bound enforced separately). */
+static uint8_t cap_buf[262144];
 static uint32_t cap_n;
 static int cap_overflow;
 static int stub_calls;
@@ -73,6 +74,26 @@ static void runline(const char *line, const char *name) {
     check(cap_n - before < 4096u, name, cap_n - before, 0);
 }
 
+/* Output-content probe (state-reset evidence: a valid command
+ * after garbage must still produce its full text). */
+static int cap_contains(uint32_t from, const char *needle) {
+    uint32_t nl = 0;
+    uint32_t i;
+    while (needle[nl] != 0) {
+        nl++;
+    }
+    for (i = from; i + nl <= cap_n; i++) {
+        uint32_t k = 0;
+        while (k < nl && cap_buf[i + k] == (uint8_t)needle[k]) {
+            k++;
+        }
+        if (k == nl) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     const char *cdir = (argc > 1) ? argv[1] : "tests/corpus/shell";
     static const char *files[] = {
@@ -84,6 +105,8 @@ int main(int argc, char **argv) {
         "shell-11-chmod-bad.txt", "shell-12-chmod-ok.txt",
         "shell-13-quote.txt", "shell-14-click-neg.txt",
         "shell-15-nslookup-empty.txt", "shell-16-put-deep.txt",
+        "shell-17-ping-huge.txt", "shell-18-exit-args.txt",
+        "shell-19-plus-num.txt", "shell-20-ctrl.txt",
     };
     uint32_t i;
     uint32_t lcg = 0x5EED01u;
@@ -129,6 +152,72 @@ int main(int argc, char **argv) {
         runline(a300, "a300");
     }
     runline("winopen 9999999999 0 0 0 0", "huge-num");
+    runline("ping 9999999999", "ping-huge");
+    runline("ping 1.2.3.99999", "ping-oct-huge");
+
+    /* Dispatch confusion: prefixes/suffixes must resolve
+     * deterministically (exact match or prefix+boundary;
+     * never another command, never a crash). */
+    runline("r", "pfx-r");
+    runline("ru", "pfx-ru");
+    runline("rmdi", "pfx-rmdi");
+    runline("winsx", "pfx-winsx");
+    runline("statx", "pfx-statx");
+    runline("exit now", "exit-args");
+    runline("ticks1", "ticks-suffix");
+    runline("clear x", "clear-args");
+    runline("help me", "help-args");
+    runline("echox", "echo-nospace");
+
+    /* Argument count/shape (every builtin with args). */
+    runline("winopen 1 2 3", "winopen-short");
+    runline("winopen 1 2 3 4 5 6", "winopen-long");
+    runline("winclose", "winclose-empty");
+    runline("wintitle 1", "wintitle-short");
+    runline("click 1", "click-short");
+    runline("click 1 2 3", "click-long");
+    runline("chmod 644", "chmod-short");
+    runline("chmod 644444 /x", "chmod-longmode");
+    runline("put onlypath", "put-short");
+    runline("rt -1", "rt-neg");
+    runline("rt abc", "rt-alpha");
+    runline("rt 9999999999", "rt-huge");
+    runline("dropcap xyz", "dropcap-bad");
+    runline("rlimit bogus 1", "rlimit-bad");
+    runline("rlimit ticks -5", "rlimit-neg");
+    runline("setuid", "setuid-empty");
+    runline("setuid +1", "setuid-plus");
+    runline("uloop", "uloop-empty");
+    runline("uloop abc text", "uloop-alpha");
+    runline("run", "run-empty");
+    runline("cat", "cat-empty");
+    runline("mkdir", "mkdir-empty");
+    runline("rm", "rm-empty");
+    runline("rmdir", "rmdir-empty");
+    runline("chroot", "chroot-empty");
+    runline("nslookup", "nslookup-empty");
+
+    /* Numeric edge: plus-sign, 12-digit cap, INT_MAX. */
+    runline("winopen 2147483647 0 0 0 0", "num-intmax");
+    runline("winopen 123456789012 0 0 0 0", "num-12digit");
+    runline("click +1 +2", "num-plus");
+
+    /* State reset: garbage, overflow, then a valid command
+     * must still produce its full text (no parser poisoning). */
+    {
+        uint32_t mark;
+        runline("???!@#$%^&*()", "reset-garbage");
+        runline("winopen 1 2 3 4 5 6 7 8 9 10 11 12", "reset-long");
+        mark = cap_n;
+        runline("help", "reset-help");
+        check(cap_contains(mark, "commands:"), "reset-content",
+              0, 0);
+        runline("", "reset-empty");
+        mark = cap_n;
+        runline("ticks", "reset-ticks");
+        check(cap_contains(mark, "ticks="), "reset-ticks-out",
+              0, 0);
+    }
 
     /* Checked-in corpus replay (one line per file). */
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
@@ -160,7 +249,7 @@ int main(int argc, char **argv) {
         }
         runline(line, files[i]);
     }
-    printf("corpus: 16 shell lines replayed\n");
+    printf("corpus: 20 shell lines replayed\n");
 
     /* PRNG soup (bytes 1..255, lengths 0..200): dispatch must
      * always return with bounded output. Fixed seed. */
@@ -181,6 +270,26 @@ int main(int argc, char **argv) {
         }
     }
     printf("fuzz: 3000 shell lines dispatched\n");
+    /* Full-range bytes incl. embedded NULs (0..255): lines
+     * truncate at the first NUL by construction; every
+     * prefix must still terminate with bounded output. */
+    for (i = 0; i < 1000u; i++) {
+        char line[201];
+        uint32_t len = 0;
+        uint32_t seed = lcg;
+        lcg = lcg * 1664525u + 1013904223u;
+        len = seed % 201u;
+        for (uint32_t k = 0; k < len; k++) {
+            lcg = lcg * 1664525u + 1013904223u;
+            line[k] = (char)((lcg >> 7) % 256u);
+        }
+        line[len] = 0;
+        runline(line, "fuzz-fullrange");
+        if (g_failed) {
+            break;
+        }
+    }
+    printf("fuzz: 1000 full-range lines dispatched\n");
     check(cap_overflow == 0, "output-bounded", cap_n, 0);
     if (g_failed) {
         printf("VERDICT: shell BROKEN\n");

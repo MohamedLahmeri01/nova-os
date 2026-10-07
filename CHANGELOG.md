@@ -76,6 +76,12 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   `NETSTRESS-OK` battery (flood/churn/late/rebind/pair),
   +7 corpus seeds, 2000-frame demux flood,
   `docs/NETWORK-ROBUSTNESS.md`, ADR-0080. Suite 23/23.
+- v0.5 shell robustness (Phase J): ping octet saturation
+  (signed-overflow UB removed), dispatch-confusion +
+  arg-count + numeric batteries, full-range-byte fuzz,
+  state-reset content proofs, +4 corpus seeds,
+  `docs/SHELL-ROBUSTNESS.md`. No grammar/features added.
+  Suite 23/23.
 - v0.5 scheduler observability (Phase G): state-model +
   measurement audit (`docs/SCHEDULER-OBSERVABILITY.md`);
   added wake-resume proof + 200-query cost bound
