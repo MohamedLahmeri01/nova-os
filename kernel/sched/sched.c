@@ -1066,6 +1066,7 @@ int sched_workload_selftest(void) {
  * any tick rate); ranges allow +2 for park-path ticks. */
 static volatile uint32_t rt_d_done, rt_d_saved, rt_d_id;
 static volatile uint32_t rt_l_early, rt_h_done;
+static volatile uint32_t rt_release, rt_woke_n;
 static struct thread *rt_ta, *rt_tb, *rt_tc, *rt_th, *rt_tl;
 static struct process *rt_p;
 
@@ -1079,6 +1080,15 @@ static void rt_spinner(void *arg) {
     while (rt_runtime(me) < 60u) {
     }
     sched_sleep();
+    /* Every post-wake resumption counts (release wake
+     * included: the check below runs after the count). */
+    for (;;) {
+        rt_woke_n++;
+        if (rt_release) {
+            break;
+        }
+        sched_sleep();
+    }
     thread_exit(0);
 }
 
@@ -1106,6 +1116,13 @@ static void rt_hog(void *arg) {
     }
     rt_h_done = 1;
     sched_sleep();
+    for (;;) {
+        rt_woke_n++;
+        if (rt_release) {
+            break;
+        }
+        sched_sleep();
+    }
     thread_exit(0);
 }
 
@@ -1118,6 +1135,13 @@ static void rt_low(void *arg) {
     while (rt_runtime(me) < 10u) {
     }
     sched_sleep();
+    for (;;) {
+        rt_woke_n++;
+        if (rt_release) {
+            break;
+        }
+        sched_sleep();
+    }
     thread_exit(0);
 }
 
@@ -1161,6 +1185,8 @@ int sched_runtime_selftest(void) {
     rt_d_done = 0;
     rt_l_early = 0;
     rt_h_done = 0;
+    rt_release = 0;
+    rt_woke_n = 0;
     rt_p = process_create();
     if (rt_p == 0) {
         serial_puts("RUNTIME-FAIL alloc-proc\n");
@@ -1292,6 +1318,40 @@ int sched_runtime_selftest(void) {
         serial_puts("RUNTIME-FAIL abi-parked\n");
         goto abi_fail_cr3;
     }
+    /* Query cost (§21): 200 self-queries timed on the PIT
+     * (expect sub-tick; bound generous against VM stalls).
+     * NOTE: this overwrites the scratch with self records, so
+     * the exact-bytes proof below re-fetches A first. */
+    {
+        uint32_t q0 = g_ticks;
+        uint32_t i;
+        for (i = 0; i < 200u; i++) {
+            f.ebx = 0;
+            f.eax = SYS_RUNTIME;
+            syscall_handler(&f);
+            if ((int32_t)f.eax != 0) {
+                serial_puts("RUNTIME-FAIL abi-qloop\n");
+                goto abi_fail_cr3;
+            }
+        }
+        serial_puts("RUNTIME query200 ticks=");
+        serial_putdec32(g_ticks - q0);
+        serial_putc('\n');
+        if (g_ticks - q0 > 2u) {
+            serial_puts("RUNTIME-FAIL abi-qcost\n");
+            goto abi_fail_cr3;
+        }
+    }
+    /* Exact 16B write (re-fetch A after the query loop above;
+     * tid echoes at bytes 0..3; canary past byte 15 holds). */
+    f.ebx = rt_ta->id;
+    f.ecx = USER_BASE;
+    f.eax = SYS_RUNTIME;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != 0) {
+        serial_puts("RUNTIME-FAIL abi-refetch\n");
+        goto abi_fail_cr3;
+    }
     /* Exact 16B write (last fetch was A: tid echoes at
      * bytes 0..3; canary past byte 15 holds). */
     if (*(uint32_t *)k1 != rt_ta->id) {
@@ -1391,7 +1451,27 @@ int sched_runtime_selftest(void) {
     }
     pmm_free_frame(f1);
     addrspace_destroy(as);
+    /* Wake-resume: A executes again after wake (woke count
+     * proves post-wake execution), re-parks, runtime
+     * non-decreasing (re-accrual is current==accrual,
+     * proven in Phase F; here only monotonicity is
+     * asserted to avoid tick-window flakiness). */
+    sched_wakeup(rt_ta);
+    t0 = g_ticks;
+    while (rt_woke_n < 1u || rt_ta->state != THREAD_BLOCKED) {
+        if (g_ticks - t0 > 8000u) {
+            serial_puts("RUNTIME-FAIL resume\n");
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    if (rt_runtime(rt_ta) < ra) {
+        serial_puts("RUNTIME-FAIL resume-accrue\n");
+        return -1;
+    }
+    serial_puts("RUNTIME resumed+woke\n");
     /* Release all parked workers; they exit. */
+    rt_release = 1;
     sched_wakeup(rt_ta);
     sched_wakeup(rt_tb);
     sched_wakeup(rt_tc);
@@ -1404,6 +1484,10 @@ int sched_runtime_selftest(void) {
             return -1;
         }
         __asm__ volatile("hlt");
+    }
+    if (rt_woke_n != 5u) {
+        serial_puts("RUNTIME-FAIL woke-count\n");
+        return -1;
     }
     serial_puts("RUNTIME-OK\n");
     return 0;

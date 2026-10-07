@@ -109,4 +109,6 @@ time, minimum-wait direction, wrap-safe comparisons.
 persistence, 60-tick spinners, sleep-charge cap, 30-tick
 freeze, exact aggregation, 31-vs-1 preemption, full ABI
 adversarial (NULL/RO/kernel/wrap/cross/unknown/exited/
-exact-bytes), worker release + reap accounting.
+exact-bytes), wake-resume proof (Phase G: woke count +
+monotonic re-accrual), 200-query cost bound (Phase G:
+0 ticks), worker release + reap accounting.

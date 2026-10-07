@@ -65,6 +65,12 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   read-only query + shell `rt`, adversarial ABI battery,
   `RUNTIME-OK` proof (`docs/RUNTIME-ACCOUNTING.md`).
   No scheduler policy change. Suite 23/23.
+- v0.5 scheduler observability (Phase G): state-model +
+  measurement audit (`docs/SCHEDULER-OBSERVABILITY.md`);
+  added wake-resume proof + 200-query cost bound
+  (`query200 ticks=0`) to the runtime battery; shell `rt`
+  prints `runtime_ticks=` explicitly. No policy, slice,
+  timer, trace, or ABI changes. Suite 23/23.
 
 ## 0.2.0 - 2026-10-06 (second release)
 

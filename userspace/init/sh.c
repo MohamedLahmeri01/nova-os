@@ -614,9 +614,9 @@ static void sh_rt(const char *line) {
     }
     nova_print("tid=", 4);
     sh_putdec(r.tid);
-    nova_print(" runtime=", 9);
+    nova_print(" runtime_ticks=", 15);
     sh_putdec(r.runtime);
-    nova_print(" ticks state=", 13);
+    nova_print(" state=", 7);
     sh_putdec(r.state);
     nova_print(" prio=", 6);
     sh_putdec(r.prio);
