@@ -93,6 +93,14 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   (`query200 ticks=0`) to the runtime battery; shell `rt`
   prints `runtime_ticks=` explicitly. No policy, slice,
   timer, trace, or ABI changes. Suite 23/23.
+- v0.5 integration + release readiness (Phase L): IF-
+  discipline fixes (MMIO window + `sched_wakeup`/
+  `sched_can_sleep` save/restore — blind sti dropped
+  IF=0 under rx_lock-held drains and mid-ISR),
+  `THREX-OK` pool-exhaustion proof, `XSUB-OK` cross-
+  subsystem mix, doc corrections (`LOCKING.md`,
+  `SECURITY-MODEL.md` incl. W7 CLOSED, `net.h`).
+  Release verdict in `docs/NOVA-V0.5-PHASE-L-REPORT.md`.
 
 ## 0.2.0 - 2026-10-06 (second release)
 

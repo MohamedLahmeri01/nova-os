@@ -461,6 +461,14 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (bench_selftest() != 0) {
         nova_panic("bench-selftest-fail");
     }
+    /* Thread-pool exhaustion (cap refuses, drain, recovery). */
+    if (threx_selftest() != 0) {
+        nova_panic("threx-selftest-fail");
+    }
+    /* Cross-subsystem mix (fs + sock + pump + trace + runtime). */
+    if (xsub_selftest() != 0) {
+        nova_panic("xsub-selftest-fail");
+    }
     {
         int user_rc = user_selftest();
         if (user_rc != 0) {

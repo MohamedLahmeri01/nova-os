@@ -17,6 +17,7 @@
 #include "process/process.h"
 #include "sync/sync.h"
 #include "net/sock.h"
+#include "net/net.h"
 #include "fs/fs.h"
 #include "trace/trace.h"
 
@@ -370,5 +371,234 @@ int bench_selftest(void) {
         perf_line("call", 1000000u, t1 - t0);
     }
     serial_puts("PERF-OK\n");
+    return NOVA_ESUCCESS;
+}
+
+/* --- thread-pool exhaustion (Phase L): fill to THREAD_MAX,
+ * prove the cap refuses, drain, prove recovery. The fill runs
+ * cli'd: ticks would otherwise preempt the creator and recycle
+ * the pool through exits (no sleep/hlt/switch inside the fill,
+ * so cli is safe here). */
+static volatile uint32_t tx_done;
+
+static void threx_worker(void *arg) {
+    (void)arg;
+    arch_atomic_add_u32(&tx_done, 1u);
+    thread_exit(0);
+}
+
+int threx_selftest(void) {
+    extern volatile uint32_t g_ticks;
+    uint32_t before = thread_count();
+    uint32_t created = 0;
+    uint32_t t0;
+    tx_done = 0;
+    __asm__ volatile("cli" ::: "memory");
+    for (;;) {
+        struct thread *t = thread_create(g_init_process, threx_worker,
+                                         0, 16u);
+        if (t == 0) {
+            break;
+        }
+        created++;
+        if (created > THREAD_MAX) {
+            __asm__ volatile("sti" ::: "memory");
+            serial_puts("THREX-FAIL overfill\n");
+            return -1;
+        }
+    }
+    __asm__ volatile("sti" ::: "memory");
+    if (created == 0) {
+        serial_puts("THREX-FAIL no-slot\n");
+        return -1;
+    }
+    if (before + created != THREAD_MAX) {
+        serial_puts("THREX-FAIL count\n");
+        return -1;
+    }
+    /* Drain: every worker runs once and exits. */
+    t0 = g_ticks;
+    while (tx_done != created) {
+        if (g_ticks - t0 > 8000u) {
+            serial_puts("THREX-FAIL drain\n");
+            return -1;
+        }
+        sched_yield();
+    }
+    thread_reap_graveyard();
+    if (thread_count() != before) {
+        serial_puts("THREX-FAIL leak\n");
+        return -1;
+    }
+    /* Recovery: the freed pool takes a thread again. */
+    tx_done = 0;
+    if (thread_create(g_init_process, threx_worker, 0, 16u) == 0) {
+        serial_puts("THREX-FAIL recovery\n");
+        return -1;
+    }
+    t0 = g_ticks;
+    while (tx_done != 1u) {
+        if (g_ticks - t0 > 8000u) {
+            serial_puts("THREX-FAIL rejoin\n");
+            return -1;
+        }
+        sched_yield();
+    }
+    thread_reap_graveyard();
+    if (thread_count() != before) {
+        serial_puts("THREX-FAIL releak\n");
+        return -1;
+    }
+    serial_puts("THREX-OK burst=");
+    serial_putdec32(created);
+    serial_putc('\n');
+    return NOVA_ESUCCESS;
+}
+
+/* --- cross-subsystem integration (Phase L, Scenarios A–F core):
+ * one RR pair interleaving fs content + fd lifecycle + sock
+ * churn + RX pump + trace + runtime queries for 40 rounds,
+ * byte-exact throughout. Any interleave must preserve every
+ * assertion: that is the whole-system claim. */
+#define XSUB_ROUNDS 40u
+
+static volatile uint32_t xs_done;
+static volatile uint32_t xs_fail;
+
+static void xsub_worker(void *arg) {
+    uint32_t i;
+    (void)arg;
+    for (i = 0; i < XSUB_ROUNDS; i++) {
+        int id = sock_open(0);
+        if (id < 0) {
+            /* Pool is 8, both threads hold <= 1: EMFILE here
+             * is a real defect, not pressure. */
+            xs_fail = 1;
+            thread_exit(1);
+        }
+        if (sock_close((uint32_t)id) != 0) {
+            xs_fail = 1;
+            thread_exit(1);
+        }
+        sched_yield();
+    }
+    xs_done = 1;
+    thread_exit(0);
+}
+
+int xsub_selftest(void) {
+    extern volatile uint32_t g_ticks;
+    static uint8_t xw[64], xr[64];
+    struct fs_node *n;
+    struct thread *me = sched_current_thread();
+    uint32_t rt0 = 0, rt1 = 0, pr = 0;
+    int st = 0;
+    uint32_t t0;
+    uint32_t i, k;
+    xs_done = 0;
+    xs_fail = 0;
+    if (me == 0) {
+        serial_puts("XSUB-FAIL no-thread\n");
+        return -1;
+    }
+    if (fs_create("/xsub", &n) != 0) {
+        serial_puts("XSUB-FAIL create\n");
+        return -1;
+    }
+    if (sched_thread_stat(me->id, &rt0, &st, &pr) != 1) {
+        serial_puts("XSUB-FAIL stat0\n");
+        return -1;
+    }
+    /* Same-prio companion: RR forces true interleaving. */
+    if (thread_create(g_init_process, xsub_worker, 0, me->prio) ==
+        0) {
+        serial_puts("XSUB-FAIL spawn\n");
+        return -1;
+    }
+    for (i = 0; i < XSUB_ROUNDS; i++) {
+        uint32_t nw = 0, nr = 0;
+        struct fs_file *f;
+        int fd, id;
+        for (k = 0; k < sizeof(xw); k++) {
+            xw[k] = (uint8_t)(i + k);
+        }
+        if (fs_write_node(n, 0, xw, sizeof(xw), &nw) != 0 ||
+            nw != sizeof(xw)) {
+            serial_puts("XSUB-FAIL write\n");
+            return -1;
+        }
+        if (fs_read_node(n, 0, xr, sizeof(xr), &nr) != 0 ||
+            nr != sizeof(xr)) {
+            serial_puts("XSUB-FAIL read\n");
+            return -1;
+        }
+        for (k = 0; k < sizeof(xr); k++) {
+            if (xr[k] != (uint8_t)(i + k)) {
+                serial_puts("XSUB-FAIL content\n");
+                return -1;
+            }
+        }
+        f = fs_file_alloc(n, FS_O_RDWR);
+        if (f == 0) {
+            serial_puts("XSUB-FAIL alloc\n");
+            return -1;
+        }
+        fd = fs_fd_alloc(g_init_process, f);
+        if (fd < 0) {
+            fs_file_free(f);
+            serial_puts("XSUB-FAIL fd\n");
+            return -1;
+        }
+        /* Drop frees the description (ref balanced). */
+        if (fs_fd_drop(g_init_process, (uint32_t)fd) != 0) {
+            serial_puts("XSUB-FAIL drop\n");
+            return -1;
+        }
+        id = sock_open(0);
+        if (id < 0) {
+            serial_puts("XSUB-FAIL sock\n");
+            return -1;
+        }
+        if (sock_close((uint32_t)id) != 0) {
+            serial_puts("XSUB-FAIL close\n");
+            return -1;
+        }
+        /* Live-device drain inside the mix (MMIO window +
+         * rx_lock under scheduler preemption). */
+        if (net_rx_pump() < 0) {
+            serial_puts("XSUB-FAIL pump\n");
+            return -1;
+        }
+        sched_yield();
+    }
+    t0 = g_ticks;
+    while (xs_done == 0) {
+        if (g_ticks - t0 > 8000u) {
+            serial_puts("XSUB-FAIL join\n");
+            return -1;
+        }
+        sched_yield();
+    }
+    if (xs_fail != 0) {
+        serial_puts("XSUB-FAIL worker\n");
+        return -1;
+    }
+    thread_reap_graveyard();
+    if (sched_thread_stat(me->id, &rt1, &st, &pr) != 1 ||
+        rt1 < rt0) {
+        serial_puts("XSUB-FAIL stat1\n");
+        return -1;
+    }
+    if (trace_count() > 256u) {
+        serial_puts("XSUB-FAIL tracecap\n");
+        return -1;
+    }
+    if (fs_unlink("/xsub") != 0) {
+        serial_puts("XSUB-FAIL unlink\n");
+        return -1;
+    }
+    serial_puts("XSUB-OK rounds=");
+    serial_putdec32(XSUB_ROUNDS);
+    serial_putc('\n');
     return NOVA_ESUCCESS;
 }

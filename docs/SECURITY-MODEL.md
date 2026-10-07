@@ -73,14 +73,14 @@ Format per boundary: trust · validation · lifetime · permissions · failure �
 - Lifetime: refcounts + unlinked flag; fds per-process, EBADF on misuse; jail roots held.
 - Permissions: triplets + root bypass, checked at open/create/mkdir/readdir, fail-closed order.
 - Failure: errno (ENOENT/EACCES/EROFS/ENOSPC/ENOTEMPTY/EBUSY); fsck for NOVA-FS.
-- Concurrency: single-threaded FS users; no locking (SMP debt).
+- Concurrency: VFS big lock (irqsave, per FS syscall, ADR-0079); direct-fs_* callers stay single-threaded (review rule).
 - Weaknesses: W4 (parser depth — see §5), no symlinks yet (absent, not vulnerable), TOCTOU on paths accepted (lookup-at-open semantics).
 
 ### userspace → networking
 - Trust: NONE. Ports/lengths validated; payloads MTU-capped; single-slot overwrite (no queue to flood); waiter EBUSY (no pile-up).
 - Lifetime: sockets per global pool with generations; close/rebind fail waiters EBADF.
 - Failure: errno (EADDRINUSE/EBADF/EAGAIN/EINVAL/EIO/EHOSTUNREACH).
-- Concurrency: waiter matrix proven (lost/theft/close races gated).
+- Concurrency: socket-pool lock (irqsave, rx→sock the only nesting, ADR-0080); waiter matrix proven (lost/theft/close races gated).
 - Weaknesses: no per-socket quotas (flood = overwrite, accepted); no firewall.
 
 ### device → driver
@@ -98,8 +98,8 @@ Format per boundary: trust · validation · lifetime · permissions · failure �
 - Weaknesses: W4.
 
 ### network packet → protocol parser
-- Trust: NONE. Length-first parsing, checksums, grammar, jump caps; corpus replay gates 11 shapes.
-- Weaknesses: packet-shape fuzz beyond crafted vectors is open (Phase L).
+- Trust: NONE. Length-first parsing, checksums, grammar, jump caps; corpus replay gates 13 shapes + 15 parser seeds (see NETWORK-ROBUSTNESS §13).
+- Weaknesses: packet-shape fuzz beyond crafted vectors remains open (accepted: breadth, not soundness — Phase L reran all vectors green, no new failure class).
 
 ## 4. What is explicitly NOT claimed
 
@@ -131,27 +131,24 @@ W3  ring-0 drivers unisolated — OPEN (unchanged). No v0.5
     trusted. Bounds-checking (rings, BARs, ATA status)
     is the only control.
 W4  parser depth — MITIGATED (was: open). Corpus grown:
-    11 wire seeds + 10 shapes + queue flood (net), FS
-    manifests (7+7+9 rows, driver + fsck), shell T23
-    (16 lines + 3k soup, strtoi UB fixed). Remaining:
-    packet-shape breadth, concurrent-FS (needs locks
-    first), shell syntax that doesn't exist yet.
+    13 wire shapes + 15 parser seeds + 2000-frame demux
+    flood (net), FS manifests (7+7+9 rows, driver + fsck),
+    shell T23 (20 lines + 3k soup + 1k full-range, strtoi
+    UB fixed). Remaining: packet-shape breadth, shell
+    syntax that doesn't exist yet. (Concurrent-FS left
+    this list in Phase H: locks landed, FSSTRESS-OK.)
 W5  DMA without IOMMU — OPEN (unchanged, out of scope
     with reason: VBox-only threat, BMIDE uses kernel
     pages, no userspace DMA buffers exist).
 W6  PIC shared lines, no MSI — OPEN (unchanged). Routing
     trusted; cascade history says stay vigilant; MSI is
     future work with the APIC milestone.
-W7  trace/stats disclosure surface — DEFERRED (new).
-    No userspace reader exists yet (panic dump goes to
-    serial only — physical-console privilege, no new
-    exposure). Trigger: the fetch ABI (v0.5 Phase C)
-    must project fields (counters, tids, ports), never
-    memcpy structs: thread/process structs carry kernel
-    addresses (sp, stack_base, cr3, user_stack) and the
-    FAULT event carries the faulting address (possibly
-    a kernel address a user probed). Requirements
-    recorded in Phase A report; Phase C enforces.
+W7  trace/stats disclosure surface — CLOSED by Phase C/D
+    (fetch ABI projects fields, never memcpys structs;
+    TRACEFETCH-OK + TRACEFETCH-ADV-OK) and re-verified in
+    Phase K/L (DIAGNOSTICS §11 disclosure policy; serial-
+    only full dumps). Residual: fuzzy-stats snapshot is
+    approximate by design (not a disclosure).
 W8  FS concurrent use unsound — CLOSED by Phase H
     (ADR-0079, VFS big lock + FSSTRESS-OK). Refcounts,
     buffers, offsets, driver caches now mutate under one

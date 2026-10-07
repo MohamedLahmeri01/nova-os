@@ -80,16 +80,18 @@ int net_udp_recv(uint8_t *out, uint32_t max, uint16_t sport,
 /* Single-ingress RX pump: drain ready ring frames;
  * socket-owned go to slots (counts them), everything else
  * waits in the pending queue for rx_wait. Self-locking
- * (subsystem lock: holders run IF=0, so thread and ISR
- * drains never interleave). Returns frames diverted. */
+ * (subsystem lock: holders run IF=0 for the whole drain;
+ * the device ISR acks + counts only and never drains, so
+ * thread and ISR work never interleave on the ring).
+ * Returns frames diverted. */
 int net_rx_pump(void);
-/* Locked variant for held-lock callers (ISR, drill): same
+/* Locked variant for held-lock callers (drill): same
  * drain with no lock of its own. */
 int net_rx_pump_locked(void);
 /* RX subsystem lock (drivers/virtio_net.c implements with
  * cli/sti; host stubs no-op). Guards ring drain + queue.
- * The ISR holds it across its pump; threads across
- * pump + queue serve. */
+ * Threads hold it across pump + queue serve (Phase L: the
+ * MMIO window is IF-saving, so IF=0 truly holds). */
 void net_rx_lock(void);
 void net_rx_unlock(void);
 /* DNS client (Phase 14b, RFC 1035 A-record subset): query build

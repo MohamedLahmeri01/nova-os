@@ -96,8 +96,11 @@ by policy, not by accident.
 Trace emit IF-save (any context); fetch snapshot IF,
 copy after; panic runs cli'd; stats fuzzy-ok, runtime
 cli-exact; FS/net locks never held across sleep;
-diagnostics take no locks except the subsystem lock
-they report under (no new lock order: rx→sock only).
+MMIO window + sched wakeup are IF-saving (Phase L:
+blind sti there used to drop IF=0 under rx_lock-held
+drains and mid-ISR); diagnostics take no locks except
+the subsystem lock they report under (no new lock
+order: rx→sock only).
 
 ## 13. Failure-injection policy
 

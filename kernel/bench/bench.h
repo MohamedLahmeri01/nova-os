@@ -16,5 +16,12 @@
 /* Run the battery (scheduler + heap + threads live).
  * Prints PERF lines + PERF-OK. Nonzero on failure. */
 int bench_selftest(void);
+/* Thread-pool exhaustion: fill to THREAD_MAX, cap refuses,
+ * drain, recovery. Prints THREX-OK. Nonzero on failure. */
+int threx_selftest(void);
+/* Cross-subsystem mix (fs + fd + sock + pump + trace +
+ * runtime, RR pair, 40 rounds, byte-exact). Prints XSUB-OK.
+ * Nonzero on failure. */
+int xsub_selftest(void);
 
 #endif /* NOVA_BENCH_H */

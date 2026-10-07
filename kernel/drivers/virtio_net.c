@@ -118,18 +118,26 @@ static void mm_w32(uint32_t o, uint32_t v) {
 }
 
 /* Kernel-CR3 window for MMIO (user PDs must never map the device).
- * Balanced cli/sti; safe from any context (init or syscall). */
-static uint32_t mm_enter(void) {
+ * IF save/restore (Phase L): the old blind sti re-enabled
+ * interrupts under rx_lock-held pump drains and mid-ISR (the
+ * drill's "IF=0 throughout" claim was false past the first
+ * window). was_on is caller stack state, never global. */
+static uint32_t mm_enter(uint32_t *was_on) {
     uint32_t cur;
+    uint32_t eflags;
+    __asm__ volatile("pushfl; popl %0" : "=r"(eflags)::"memory");
+    *was_on = eflags & 0x200u;
     __asm__ volatile("cli" ::: "memory");
     cur = arch_read_cr3();
     arch_write_cr3(vmm_kernel_pd());
     return cur;
 }
 
-static void mm_exit(uint32_t cur) {
+static void mm_exit(uint32_t cur, uint32_t was_on) {
     arch_write_cr3(cur);
-    __asm__ volatile("sti" ::: "memory");
+    if (was_on != 0) {
+        __asm__ volatile("sti" ::: "memory");
+    }
 }
 
 static void desc_set(uint8_t *d, uint32_t addr, uint32_t len,
@@ -155,9 +163,10 @@ static void desc_set(uint8_t *d, uint32_t addr, uint32_t len,
 }
 
 static void notify_q(uint16_t q) {
-    uint32_t k = mm_enter();
+    uint32_t w = 0;
+    uint32_t k = mm_enter(&w);
     mm_w16(g_notify + g_notify_off[q] * g_notify_mul, q);
-    mm_exit(k);
+    mm_exit(k, w);
 }
 
 static void rx_post(uint16_t d, uint8_t *frame) {
@@ -246,12 +255,13 @@ static int find_caps(const struct pci_dev *dev) {
 /* Init one queue via common cfg (size, 64-bit addrs, enable). */
 static int queue_init(struct vring *q, uint8_t *fa, uint8_t *fb,
                       uint16_t idx) {
-    uint32_t k = mm_enter();
+    uint32_t w = 0;
+    uint32_t k = mm_enter(&w);
     uint16_t n;
     mm_w16(g_common + 22u, idx);
     n = mm_r16(g_common + 24u);
     if (n == 0) {
-        mm_exit(k);
+        mm_exit(k, w);
         return -NOVA_EIO;
     }
     if (n > VQ_SIZE) {
@@ -286,7 +296,7 @@ static int queue_init(struct vring *q, uint8_t *fa, uint8_t *fb,
     mm_w32(g_common + 52u, 0);
     mm_w16(g_common + 28u, 1);
     g_notify_off[idx] = mm_r16(g_common + 30u);
-    mm_exit(k);
+    mm_exit(k, w);
     return NOVA_ESUCCESS;
 }
 
@@ -294,13 +304,14 @@ int virtio_net_init(void) {
     const struct pci_dev *dev = pci_find(0x1AF4u, 0x1000u);
     uint32_t flo, fhi;
     uint32_t k;
+    uint32_t w = 0;
     if (dev == 0) {
         return -NOVA_ENODEV;
     }
     if (find_caps(dev) != 0) {
         return -NOVA_EIO;
     }
-    k = mm_enter();
+    k = mm_enter(&w);
     mm_w8(g_common + 20u, 0);
     mm_w8(g_common + 20u, VST_ACK | VST_DRIVER);
     serial_puts("VIRTIO-ST ");
@@ -323,15 +334,15 @@ int virtio_net_init(void) {
     mm_w8(g_common + 20u, VST_ACK | VST_DRIVER | VST_FEAT_OK);
     if ((mm_r8(g_common + 20u) & VST_FEAT_OK) == 0) {
         mm_w8(g_common + 20u, VST_FAILED);
-        mm_exit(k);
+        mm_exit(k, w);
         return -NOVA_EIO;
     }
     if (mm_r16(g_common + 16u) < 2u) {
         mm_w8(g_common + 20u, VST_FAILED);
-        mm_exit(k);
+        mm_exit(k, w);
         return -NOVA_EIO; /* need RX + TX queues */
     }
-    mm_exit(k);
+    mm_exit(k, w);
     /* Queues: RX=0 (desc+avail, used), TX=1. Frames are PMM pages
      * (4K-aligned, <4GB, identity = phys). */
     {
@@ -359,24 +370,24 @@ int virtio_net_init(void) {
         }
     }
     /* MAC from device config (6B at offset 0). */
-    k = mm_enter();
+    k = mm_enter(&w);
     for (uint32_t i = 0; i < 6u; i++) {
         g_mac[i] = mm_r8(g_devcfg + i);
     }
-    mm_exit(k);
+    mm_exit(k, w);
     if ((g_mac[0] & 1u) != 0) {
-        k = mm_enter();
+        k = mm_enter(&w);
         mm_w8(g_common + 20u, VST_FAILED);
-        mm_exit(k);
+        mm_exit(k, w);
         return -NOVA_EIO;
     }
-    k = mm_enter();
+    k = mm_enter(&w);
     mm_w8(g_common + 20u,
           (uint8_t)(VST_ACK | VST_DRIVER | VST_FEAT_OK | VST_OK));
     serial_puts("VIRTIO-ST2 ");
     serial_puthex32(mm_r8(g_common + 20u));
     serial_putc('\n');
-    mm_exit(k);
+    mm_exit(k, w);
     /* Interrupt routing (Phase 14c): PCI Line/Pin decide. A live
      * line unmasks its PIC bit (read-modify-write: timer, kbd,
      * and the dormant mouse mask stay); anything else (no pin,
@@ -462,20 +473,25 @@ uint32_t virtio_irq_count(void) {
  * handler would let a nested IRQ interleave a pump). Wire
  * frames still reach sockets within a tick (see sched_tick). */
 void virtio_net_irq(void) {
-    uint32_t k = mm_enter();
+    uint32_t w = 0;
+    uint32_t k = mm_enter(&w);
     uint32_t isr = mm_r8(g_isr);
     if (isr != 0) {
         g_nirq++;
     }
-    mm_exit(k);
+    mm_exit(k, w);
 }
 
 /* RX subsystem lock: IF-saving cli/sti (unlock restores only
  * what the matching lock found: an ISR-held lock saves IF=0
- * and never re-enables mid-handler). Holders run IF=0, and the
- * ISR only runs at IF=1, so thread and ISR drains never
- * interleave: no trylock, no skip path. No nesting (locked
- * variant exists for held-lock callers). */
+ * and never re-enables mid-handler). Holders run IF=0 for the
+ * whole drain: the ISR acks + counts only (no ring touch, no
+ * pump — IRQ drain was reverted, ADR-0061), so a live RX IRQ
+ * mid-drain pends and is acked after instead of interleaving
+ * ring work. The MMIO window is IF-saving too (Phase L: its
+ * old blind sti dropped this protection past the first
+ * touch). No nesting (locked variant exists for held-lock
+ * callers). */
 static volatile uint32_t g_rx_lock_if;
 
 void net_rx_lock(void) {
@@ -558,6 +574,7 @@ int virtio_net_tx(const uint8_t *frame, uint32_t len) {
     uint16_t d;
     uint16_t aidx;
     uint32_t k;
+    uint32_t w = 0;
     if (!g_ready || frame == 0 || len == 0 || len > ETH_MAX) {
         return -NOVA_EINVAL;
     }
@@ -590,11 +607,11 @@ int virtio_net_tx(const uint8_t *frame, uint32_t len) {
     aidx++;
     g_txq.avail[2] = (uint8_t)(aidx & 0xFFu);
     g_txq.avail[3] = (uint8_t)(aidx >> 8);
-    k = mm_enter();
+    k = mm_enter(&w);
     mm_w16(g_notify + g_notify_off[VQ_TX] * g_notify_mul, VQ_TX);
     /* Ack ISR (clears the device condition; INTx stays handled). */
     (void)mm_r8(g_isr);
-    mm_exit(k);
+    mm_exit(k, w);
     return NOVA_ESUCCESS;
 }
 
@@ -602,6 +619,7 @@ int virtio_net_rx(uint8_t *out, uint32_t max) {
     uint16_t used_idx;
     uint32_t n;
     uint32_t k;
+    uint32_t w = 0;
     if (!g_ready || out == 0) {
         return -NOVA_EINVAL;
     }
@@ -640,9 +658,9 @@ int virtio_net_rx(uint8_t *out, uint32_t max) {
         rx_post((uint16_t)id, frame);
         g_rxq.last_used++;
     }
-    k = mm_enter();
+    k = mm_enter(&w);
     (void)mm_r8(g_isr);
-    mm_exit(k);
+    mm_exit(k, w);
     return (int)n;
 }
 

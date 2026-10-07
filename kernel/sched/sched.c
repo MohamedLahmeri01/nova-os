@@ -219,18 +219,29 @@ static void sleep_wake(struct thread *t, int timedout) {
 }
 
 void sched_wakeup(struct thread *t) {
+    uint32_t eflags;
+    /* IF save/restore (Phase L): the old blind sti re-enabled
+     * interrupts under IF=0 callers — the kbd ISR push path and
+     * the pump demux delivery path both arrive cli'd. */
+    __asm__ volatile("pushfl; popl %0" : "=r"(eflags)::"memory");
     __asm__ volatile("cli" ::: "memory");
     if (t != 0 && t->state == THREAD_BLOCKED) {
         sleep_wake(t, 0);
     }
-    __asm__ volatile("sti" ::: "memory");
+    if ((eflags & 0x200u) != 0) {
+        __asm__ volatile("sti" ::: "memory");
+    }
 }
 
 int sched_can_sleep(void) {
     int ok;
+    uint32_t eflags;
+    __asm__ volatile("pushfl; popl %0" : "=r"(eflags)::"memory");
     __asm__ volatile("cli" ::: "memory");
     ok = g_started && g_current != 0;
-    __asm__ volatile("sti" ::: "memory");
+    if ((eflags & 0x200u) != 0) {
+        __asm__ volatile("sti" ::: "memory");
+    }
     return ok;
 }
 
