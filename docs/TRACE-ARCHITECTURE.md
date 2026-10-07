@@ -1,23 +1,29 @@
 # NOVA Trace Architecture (v0.5 Phase B — audit, not implementation)
 
 Status: CURRENT describes code at v0.5 baseline (commit
-`1df490c`); REQUIRED states what Phase C must enforce;
-FUTURE marks SMP-era work. Nothing here changes behavior.
+`1df490c`); Phase C deltas are marked inline (commit
+`3ef7970`: 16B records, seq, SYS_TRACEFETCH 36).
+REQUIRED states what Phase C must enforce; FUTURE marks
+SMP-era work. Nothing here changes behavior.
 
 ## 1. Current implementation
 
 `kernel/trace/trace.{h,c}`: one static ring, 256 slots ×
-12B (3KB `.bss`), kinds 1–7, IF-save emit, subsequence
-selftest (`TRACE-OK`), panic tail dump (last 12). Seven
-emit sites total (verified by grep — no others exist):
+16B (4KB `.bss`, Phase C: +4B seq), kinds 1–7, IF-save emit,
+subsequence selftest (`TRACE-OK`), panic tail dump (last 12,
+Phase C: prints seq). Seven emit sites total (verified by
+grep — no others exist):
 thread create ×2 + exit (`thread.c`), sleep park + wake
 (`sched.c`, the wake fires from tick-IRQ expiry too),
 page fault (`irq.c`, vec 14 only), socket divert
 (`sock.c`). `trace_init` in `pm_main` (no cli — safe in
 practice: no emitter can fire that early; noted wart,
-not a bug). No fetch ABI, no other readers (panic +
-selftest only; ring internals touched solely via the
-API — verified: no bypass readers in-tree).
+not a bug). Readers (Phase C): panic dump + `SYS_TRACEFETCH`
+(36, projected 20B records, newest-N snapshot; see
+`sdk/include/nova/types.h`) + selftests (`TRACE-OK`,
+`TRACEFETCH-OK` + Phase D battery `TRACEFETCH-ADV-OK`).
+Ring internals touched solely via the API — verified:
+no bypass readers in-tree.
 
 ## 2. Record layout
 
@@ -29,13 +35,17 @@ offset  size  field  meaning today
                       7 MARK(free use)
 6       2     id     meaning per kind (see above; tids are small ints)
 8       4     arg    meaning per kind (see above)
-total 12B, naturally aligned, ZERO padding bytes, all fields
+12      4     seq    per-emit sequence, `g_seq` monotonic from boot,
+                    never reset (Phase C; u32 wrap defined mod 2^32)
+total 16B, naturally aligned, ZERO padding bytes, all fields
 always written (no uninitialized bytes — verified by read).
 ```
 
 Corrections to earlier summaries: tid IS present (CREATE/
 EXIT/SLEEP/WAKE ids); pid is absent everywhere; there is
-no cpu_id and no sequence number.
+no cpu_id. Phase C adds the sequence number (see layout);
+user records are separate 20B projections, never the raw
+ring struct.
 
 ## 3. Producer model
 
@@ -111,13 +121,16 @@ Phase B; the requirement is recorded for the SMP ADR.
 - Partial: reads index oldest-first over held slots.
 - Full: overwrite-oldest, count stays 256.
 - After wrap: newest 256 survive; evicted records are
-  gone without a trace (pun intended).
-- Loss is NOT detectable and the lost count is NOT
-  knowable: no sequence numbers exist. A consumer
-  cannot distinguish loss from gaps. Any future ABI
-  that promises loss detection needs per-emit sequence
-  numbers (a Phase C requirement, not a current
-  property — do not read this file as claiming it).
+  gone from the ring — BUT loss IS detectable since Phase C:
+  retained seqs are contiguous (+1) while the gap to any
+  previously observed seq measures exactly the records lost
+  (proven by the Phase D 600-emit battery: first retained
+  seq == base + evicted count).
+- Loss is detectable and the lost count IS knowable via
+  sequence gaps (Phase C seqnos; see §2). A consumer holding
+  the last seen seq subtracts to get the loss. Wrap of the
+  u32 seq itself is defined (mod 2^32, gap-ambiguous past
+  4B events; effectively never).
 
 ## 9. Security classification
 
@@ -177,7 +190,10 @@ change must update the dump + selftest readers together —
 flagged here so Phase C/D doesn't silently break them).
 Panic output goes to serial only (physical console).
 Selftest asserts marker subsequences (interleave-proof),
-NULL/empty refusals, count discipline, and wrap cap.
+NULL/empty refusals, count discipline, and wrap cap
+(Phase C adds: fetch projection/shape/seq battery
+`TRACEFETCH-OK`; Phase D adds: argument/boundary/wrap/
+IF-discipline battery `TRACEFETCH-ADV-OK`).
 
 ## 13. Open questions (for Phase C, not blockers)
 

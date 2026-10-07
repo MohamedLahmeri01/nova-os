@@ -46,6 +46,12 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   `SYSCALL_MAX_RANGE` 4096->8192 (full fetch is 5120B);
   fixed en route: trace_read seq copy, bench eax IN+OUT
   restore (also dispatch-floor bench). Suite 23/23.
+- v0.5 trace fetch verification (Phase D): adversarial
+  battery `TRACEFETCH-ADV-OK` (arg classes, boundaries,
+  zero-length, refetch identity, same-tick order, 600-emit
+  loss proof, RO/partial mappings, IF discipline,
+  fault-class matrix); fixed en route: handler blind
+  sti -> save/restore. Suite 23/23.
 
 ## 0.2.0 - 2026-10-06 (second release)
 

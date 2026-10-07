@@ -1300,13 +1300,17 @@ static int32_t do_stats(uint32_t out, uint32_t b, uint32_t c) {
  * gate is a 3-line change if policy ever requires it).
  * Semantics: count==0 returns 0 touching nothing (not even
  * validation); max > TRACEFETCH_MAX refuses EINVAL; empty
- * ring returns 0; short rings return what's held (newest
- * first in time, oldest-first in the buffer); misses of all
- * kinds return -errno, never partial garbage. */
+ * ring + valid buffer returns 0 (short-read rule below);
+ * empty ring + bad buffer still refuses EFAULT (the validated
+ * range max*20 is nonempty even though nothing is held);
+ * short rings return what's held (newest-N window,
+ * oldest-first); misses of all kinds return -errno, never
+ * partial garbage. IF discipline: save/restore (never blind
+ * sti: callers may hold IF=0). */
 static struct nova_trace_rec trace_snap[TRACEFETCH_MAX];
 
 static int32_t do_tracefetch(uint32_t buf, uint32_t max, uint32_t c) {
-    uint32_t n, take, i;
+    uint32_t n, take, i, irqf;
     (void)c;
     if (max == 0) {
         return 0;
@@ -1320,10 +1324,11 @@ static int32_t do_tracefetch(uint32_t buf, uint32_t max, uint32_t c) {
                           1) != 0) {
         return -NOVA_EFAULT;
     }
-    /* Snapshot under IF: coherent cut, no torn set. The copy
-     * below runs IF=1 (never hold interrupt-disable across
-     * user copies). */
-    arch_cli();
+    /* Snapshot under IF (save/restore, never blind cli/sti:
+     * callers may hold IF=0 across the call — boot selftests
+     * and benches do, with foreign tables loaded. The copy
+     * below runs with the caller's IF. */
+    irqf = arch_irq_save();
     n = trace_count();
     take = (n < max) ? n : max;
     for (i = 0; i < take; i++) {
@@ -1333,7 +1338,7 @@ static int32_t do_tracefetch(uint32_t buf, uint32_t max, uint32_t c) {
         trace_read(n - take + i, &e);
         trace_project(&e, &trace_snap[i]);
     }
-    arch_sti();
+    arch_irq_restore(irqf);
     {
         int rc = copy_to_user(buf, trace_snap,
                               take * (uint32_t)sizeof(trace_snap[0]));

@@ -117,6 +117,9 @@ int main(void) {
     edge(0xFFFFFFFFu, 100, 0, -NOVA_EFAULT, "top");
     edge(0xFFFFFF00u, 0x200u, 0, -NOVA_EFAULT, "wrap");
     edge(0x80000000u, 9000, 0, -NOVA_EINVAL, "over cap");
+    edge(0x80000000u, 8192, 0, 0, "two-page exact");
+    edge(0x80000000u, 8193, 0, -NOVA_EINVAL, "just over cap");
+    edge(0x800FF000u, 0x2000, 0, -NOVA_EFAULT, "span hole 2pg");
     edge(0x80100000u, 100, 0, -NOVA_EFAULT, "hole");
     edge(0x800FF00u, 0x200u, 0, -NOVA_EFAULT, "span into hole");
     edge(0x80200000u, 100, 0, 0, "ro read ok");
