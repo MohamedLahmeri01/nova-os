@@ -32,6 +32,7 @@ static void sh_putdec(uint32_t v) {
 
 static const char *sh_arg(const char *line);
 static void sh_denied(const char *what);
+static void sh_err(const char *what, int32_t rc);
 static const char *sh_nextnum(const char *p, int *val);
 static void sh_putstrn(const char *s, uint32_t max);
 
@@ -50,8 +51,9 @@ static void sh_putip(uint32_t ip) {
 
 static void sh_ip(void) {
     uint32_t self = 0, gw = 0, mask = 0;
-    if (nova_netinfo(&self, &gw, &mask) != 0) {
-        nova_puts("netinfo failed");
+    int32_t r = nova_netinfo(&self, &gw, &mask);
+    if (r != 0) {
+        sh_err("netinfo", r);
         return;
     }
     nova_print("ip=", 3);
@@ -66,7 +68,7 @@ static void sh_ip(void) {
 static void sh_dhcp(void) {
     int32_t r = nova_dhcp();
     if (r != 0) {
-        nova_puts("dhcp failed");
+        sh_err("dhcp", r);
         return;
     }
     sh_ip();
@@ -75,7 +77,7 @@ static void sh_dhcp(void) {
 static void sh_caps(void) {
     int32_t r = nova_caps(CAP_OP_GET, 0);
     if (r < 0) {
-        nova_puts("caps failed");
+        sh_err("caps", r);
         return;
     }
     nova_print("caps=", 5);
@@ -107,7 +109,7 @@ static void sh_dropcap(const char *line) {
     }
     r = nova_caps(CAP_OP_DROP, mask);
     if (r < 0) {
-        nova_puts("dropcap failed");
+        sh_err("dropcap", r);
         return;
     }
     sh_caps();
@@ -180,7 +182,7 @@ static void sh_id(void) {
     int32_t u = nova_cred(CRED_OP_GETUID, 0);
     int32_t g = nova_cred(CRED_OP_GETGID, 0);
     if (u < 0 || g < 0) {
-        nova_puts("id failed");
+        sh_err("id", u < 0 ? u : g);
         return;
     }
     nova_print("uid=", 4);
@@ -251,7 +253,7 @@ static void sh_chmod(const char *line) {
         return;
     }
     if (r != 0) {
-        nova_puts("chmod failed");
+        sh_err("chmod", r);
         return;
     }
     nova_puts("chmod ok");
@@ -268,7 +270,7 @@ static void sh_chroot(const char *line) {
     }
     r = nova_chroot(path);
     if (r != 0) {
-        nova_puts("chroot failed");
+        sh_err("chroot", r);
         return;
     }
     nova_puts("chroot ok");
@@ -287,7 +289,7 @@ static void sh_rm(const char *line, int dir) {
         return;
     }
     if (r != 0) {
-        nova_puts(dir ? "rmdir failed" : "rm failed");
+        sh_err(dir ? "rmdir" : "rm", r);
         return;
     }
     nova_puts("ok");
@@ -318,7 +320,7 @@ static void sh_uloop(const char *line) {
     }
     id = nova_sock(SOCK_OP_OPEN, (uint32_t)port, 0);
     if (id < 0) {
-        nova_puts("uloop failed");
+        sh_err("uloop", id);
         return;
     }
     sargs.dst = 0x7F000001u;
@@ -330,7 +332,7 @@ static void sh_uloop(const char *line) {
     r = nova_sock(SOCK_OP_SEND, (uint32_t)id, (uint32_t)&sargs);
     if (r != 0) {
         nova_sock(SOCK_OP_CLOSE, (uint32_t)id, 0);
-        nova_puts("uloop failed");
+        sh_err("uloop", r);
         return;
     }
     rargs.buf = (uint32_t)rxb;
@@ -339,7 +341,7 @@ static void sh_uloop(const char *line) {
     r = nova_sock(SOCK_OP_RECV, (uint32_t)id, (uint32_t)&rargs);
     nova_sock(SOCK_OP_CLOSE, (uint32_t)id, 0);
     if (r < 0) {
-        nova_puts("uloop failed");
+        sh_err("uloop", r);
         return;
     }
     nova_print("got ", 4);
@@ -357,7 +359,7 @@ static void sh_nslookup(const char *line) {
     }
     r = nova_dns(name, &ip);
     if (r != 0) {
-        nova_puts("nslookup failed");
+        sh_err("nslookup", r);
         return;
     }
     sh_putstrn(name, 64);
@@ -410,7 +412,7 @@ static void sh_stat(void) {
     static struct nova_stats st;
     int32_t r = nova_stats(&st);
     if (r != 0) {
-        nova_puts("stat failed");
+        sh_err("stat", r);
         return;
     }
     nova_print("ticks=", 6);
@@ -433,7 +435,7 @@ static void sh_wins(void) {
     int32_t n = nova_winstat(ws, 8);
     int32_t i;
     if (n < 0) {
-        nova_puts("wins failed");
+        sh_err("wins", n);
         return;
     }
     if (n == 0) {
@@ -488,7 +490,7 @@ static void sh_winopen(const char *line) {
     args._pad[2] = 0;
     r = nova_winopen(&args);
     if (r < 0) {
-        nova_puts("winopen failed");
+        sh_err("winopen", r);
         return;
     }
     nova_print("win id=", 7);
@@ -507,7 +509,7 @@ static void sh_winclose(const char *line) {
     }
     r = nova_winclose((uint32_t)id);
     if (r != 0) {
-        nova_puts("winclose failed");
+        sh_err("winclose", r);
         return;
     }
     nova_puts("winclose ok");
@@ -559,7 +561,7 @@ static void sh_wintitle(const char *line) {
     }
     r = nova_wintitle((uint32_t)id, p);
     if (r != 0) {
-        nova_puts("wintitle failed");
+        sh_err("wintitle", r);
         return;
     }
     nova_puts("wintitle ok");
@@ -575,8 +577,9 @@ static void sh_echo(const char *line) {
 
 static void sh_mem(void) {
     uint32_t total = 0, freep = 0;
-    if (nova_meminfo(&total, &freep) != 0) {
-        nova_puts("meminfo failed");
+    int32_t r = nova_meminfo(&total, &freep);
+    if (r != 0) {
+        sh_err("meminfo", r);
         return;
     }
     nova_print("frames total=", 13);
@@ -645,6 +648,17 @@ static void sh_denied(const char *what) {
     nova_puts(": denied");
 }
 
+/* Opaque-failure reporter (Phase K): prints the errno number
+ * so shell errors stay classifiable (EACCES denials keep
+ * their friendlier text above; specific cases likewise). */
+static void sh_err(const char *what, int32_t rc) {
+    uint32_t e = (uint32_t)(rc < 0 ? -rc : rc);
+    nova_print(what, nova_strlen(what));
+    nova_print(" failed E", 9);
+    sh_putdec(e);
+    nova_putchar('\n');
+}
+
 static void sh_ls(const char *line) {
     const char *path = sh_arg(line);
     char name[32];
@@ -661,7 +675,7 @@ static void sh_ls(const char *line) {
             if (rc == -NOVA_EACCES) {
                 sh_denied("ls");
             } else {
-                nova_puts("ls failed");
+                sh_err("ls", rc);
             }
             return;
         }
@@ -685,8 +699,10 @@ static void sh_cat(const char *line) {
     if (fd < 0) {
         if (fd == -NOVA_EACCES) {
             sh_denied("cat");
-        } else {
+        } else if (fd == -2) { /* -ENOENT (no SDK macro; cf. sh_ls) */
             nova_puts("cat: no such file");
+        } else {
+            sh_err("cat", fd);
         }
         return;
     }
@@ -711,7 +727,7 @@ static void sh_mkdir(const char *line) {
     if (r == -NOVA_EACCES) {
         sh_denied("mkdir");
     } else if (r != 0) {
-        nova_puts("mkdir failed");
+        sh_err("mkdir", r);
     }
 }
 
@@ -739,13 +755,18 @@ static void sh_put(const char *line) {
         if (fd == -NOVA_EACCES) {
             sh_denied("put");
         } else {
-            nova_puts("put: open failed");
+            sh_err("put: open", fd);
         }
         return;
     }
     n = nova_strlen(text);
-    if (nova_write(fd, text, n) != (int32_t)n) {
-        nova_puts("put: write failed");
+    {
+        int32_t w = nova_write(fd, text, n);
+        if (w < 0) {
+            sh_err("put: write", w);
+        } else if (w != (int32_t)n) {
+            nova_puts("put: short write");
+        }
     }
     nova_close(fd);
 }
@@ -757,7 +778,7 @@ static void sh_fsck(const char *line) {
     if (r == 0) {
         nova_puts("fsck ok");
     } else if (r < 0) {
-        nova_puts("fsck failed");
+        sh_err("fsck", r);
     } else {
         nova_print("fsck problems=", 15);
         sh_putdec((uint32_t)r);
@@ -810,7 +831,7 @@ static void sh_ping(const char *line) {
         if (r == -NOVA_EHOSTUNREACH) {
             nova_puts("no route to host");
         } else if (r < 0) {
-            nova_puts("ping failed");
+            sh_err("ping", r);
         } else {
             nova_print("reply seq=", 10);
             sh_putdec(seq);
@@ -830,7 +851,7 @@ static void sh_exec(const char *line) {
     }
     pid = nova_exec(path);
     if (pid < 0) {
-        nova_puts("run failed");
+        sh_err("run", pid);
         return;
     }
     nova_print("child pid=", 10);

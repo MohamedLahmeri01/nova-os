@@ -82,6 +82,11 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   state-reset content proofs, +4 corpus seeds,
   `docs/SHELL-ROBUSTNESS.md`. No grammar/features added.
   Suite 23/23.
+- v0.5 diagnostic integration (Phase K): trap tick + PF
+  class decode, panic ticks/tid/pid correlation lines,
+  shell errno texts (`failed E<num>`), `docs/DIAGNOSTICS.md`
+  contract (15 items). No ABI/policy/timer changes.
+  Suite 23/23.
 - v0.5 scheduler observability (Phase G): state-model +
   measurement audit (`docs/SCHEDULER-OBSERVABILITY.md`);
   added wake-resume proof + 200-query cost bound

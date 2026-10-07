@@ -9,6 +9,10 @@
 #include "serial.h"
 #include "panic.h"
 #include "trace/trace.h"
+#include "time/time.h"
+#include "thread/thread.h"
+#include "process/process.h"
+#include "sched/sched.h"
 
 #define PANIC_MAX_FRAMES 8u
 #define STACK_LO 0x5000u
@@ -41,6 +45,38 @@ __attribute__((noreturn)) void nova_panic(const char *reason) {
     serial_puts(reason);
     serial_putc('\n');
     serial_puts("cpu=0\n");
+    /* Correlation identity (Phase K): tick binds this to the
+     * trace tail below; tid/pid say who was running. IDs
+     * only, never pointers (same rule as SYS_RUNTIME).
+     * Serial-only physical-console privilege, like the
+     * register dump that follows. */
+    serial_puts("ticks=");
+    serial_putdec32(g_ticks);
+    serial_putc('\n');
+    {
+        struct thread *cur = sched_current_thread();
+        int32_t tid = -1;
+        int32_t pid = -1;
+        if (cur != 0) {
+            tid = (int32_t)cur->id;
+            if (cur->proc != 0) {
+                pid = (int32_t)cur->proc->pid;
+            }
+        }
+        if (tid < 0) {
+            serial_puts("tid=-1");
+        } else {
+            serial_puts("tid=");
+            serial_putdec32((uint32_t)tid);
+        }
+        if (pid < 0) {
+            serial_puts(" pid=-1\n");
+        } else {
+            serial_puts(" pid=");
+            serial_putdec32((uint32_t)pid);
+            serial_putc('\n');
+        }
+    }
     serial_puts("eip=0x");
     serial_puthex32(eip);
     serial_puts(" eflags=0x");

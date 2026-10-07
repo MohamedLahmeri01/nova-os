@@ -99,6 +99,10 @@ void trap_handler(trap_frame_t *f) {
     serial_puts(name);
     serial_puts(") err=0x");
     serial_puthex32(f->err);
+    /* Tick binds the fault to its trace neighbors (Phase K:
+     * the tail carries ticks, not wall time). */
+    serial_puts(" tick=");
+    serial_putdec32(g_ticks);
     serial_puts(" eip=0x");
     serial_puthex32(f->eip);
     serial_puts(" cs=0x");
@@ -106,7 +110,9 @@ void trap_handler(trap_frame_t *f) {
     serial_puts(" eflags=0x");
     serial_puthex32(f->eflags);
     serial_putc('\n');
-    /* TEMP-DIAG: full reg dump (is ESI intact? which regs?). */
+    /* Full register state (serial-only physical-console
+     * privilege, like the panic dump; retained post-debug
+     * for fault forensics, not temporary). */
     serial_puts(" regs=0x");
     serial_puthex32(f->edi);
     serial_puts(" 0x");
@@ -123,8 +129,16 @@ void trap_handler(trap_frame_t *f) {
     serial_puthex32(f->eax);
     serial_putc('\n');
     if (f->vec == 14) {
+        uint32_t err = f->err;
         serial_puts(" pf-addr=0x");
         serial_puthex32(arch_read_cr2());
+        /* Fault class from the error code (no addresses):
+         * user/supervisor × write/read × protection/not-present.
+         * Same classes the trace projection reports. */
+        serial_puts(" pf=");
+        serial_putc((err & 4u) ? 'U' : 'S');
+        serial_putc((err & 2u) ? 'W' : 'R');
+        serial_putc((err & 1u) ? 'P' : 'N');
         serial_putc('\n');
     }
     {
