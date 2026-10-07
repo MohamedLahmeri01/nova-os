@@ -30,6 +30,11 @@ struct thread {
     int state;
     uint32_t stack_base; /* 0 for the boot thread (not PMM-owned) */
     uint32_t slice_used;
+    /* Phase F runtime: delivered scheduler ticks received while
+     * this thread was current (u32, 0 at creation, frozen at
+     * exit; IRQ work charges the preempted thread — see
+     * docs/RUNTIME-ACCOUNTING.md). */
+    uint32_t runtime_ticks;
     uint8_t prio; /* 0..31, higher preempts (strict); RR within level */
     uint8_t is_user; /* scheduled user thread (trampoline entry) */
     struct thread *next; /* runqueue link (policy-owned);

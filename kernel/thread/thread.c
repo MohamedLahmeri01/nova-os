@@ -84,6 +84,7 @@ struct thread *thread_create(struct process *p, thread_fn_t fn, void *arg,
     t->state = THREAD_READY;
     t->stack_base = stack;
     t->slice_used = 0;
+    t->runtime_ticks = 0;
     t->prio = (prio >= 32u) ? 31u : prio;
     t->is_user = 0;
     t->next = 0;
@@ -149,6 +150,7 @@ struct thread *thread_create_user(struct process *p, uint32_t eip,
     t->state = THREAD_READY;
     t->stack_base = stack;
     t->slice_used = 0;
+    t->runtime_ticks = 0;
     t->prio = (prio >= 32u) ? 31u : prio;
     t->is_user = 1;
     t->next = 0;

@@ -51,6 +51,8 @@ W=single validated store, F=kernel fill (no user reread),
 36 tracefetch buf:O recs, max:I scalar             range+pages(w)+256cap  H       256×20     none (projected: fault->class;
                                                                                                           newest-N window oldest-first;
                                                                                                           max0/empty->0, short->held)
+37 runtime    tid:I scalar, out:O struct              range+pages(w)          H       16         none (counters: tid/runtime/state/prio;
+                                                                                                          tid0=self, unknown->ENOENT)
 (P = NUL terminator)
 ```
 

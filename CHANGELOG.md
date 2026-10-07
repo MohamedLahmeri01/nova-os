@@ -59,6 +59,12 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   trap cost, no freq leaves); decision DEFER, PIT stays
   authoritative (ADR-0078, `docs/TIMEBASE.md`). No code
   changes. Suite 23/23.
+- v0.5 runtime accounting (Phase F): per-thread
+  `runtime_ticks` on the delivered-tick path (3 insns),
+  exact process aggregation invariant, `SYS_RUNTIME` (37)
+  read-only query + shell `rt`, adversarial ABI battery,
+  `RUNTIME-OK` proof (`docs/RUNTIME-ACCOUNTING.md`).
+  No scheduler policy change. Suite 23/23.
 
 ## 0.2.0 - 2026-10-06 (second release)
 

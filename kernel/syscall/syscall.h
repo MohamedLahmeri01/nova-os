@@ -48,7 +48,8 @@
 #define SYS_WINCLICK 34u
 #define SYS_STATS 35u
 #define SYS_TRACEFETCH 36u
-#define SYS_MAX 36u
+#define SYS_RUNTIME 37u
+#define SYS_MAX 37u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0

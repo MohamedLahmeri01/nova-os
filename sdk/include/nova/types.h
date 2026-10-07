@@ -83,4 +83,20 @@ struct nova_stats {
     uint32_t pmm_free;
 };
 
+/* Per-thread runtime query (SYS_RUNTIME, read-only diagnostics):
+ * 16 bytes, 4-aligned, fully initialized. tid echoes the queried
+ * id; runtime counts delivered scheduler ticks while the thread
+ * was current (see docs/RUNTIME-ACCOUNTING.md); state is
+ * 0 READY / 1 RUNNING / 3 BLOCKED (2 ZOMBIE never reported:
+ * exited threads refuse ENOENT); prio is the 0..31 level. */
+struct nova_runtime {
+    uint32_t tid;
+    uint32_t runtime;
+    uint32_t state;
+    uint32_t prio;
+};
+
+_Static_assert(sizeof(struct nova_runtime) == 16,
+               "runtime rec size");
+
 #endif /* NOVA_TYPES_H */

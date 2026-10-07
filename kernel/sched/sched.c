@@ -21,6 +21,8 @@
 #include "mm/addrspace.h"
 #include "net/net.h"
 #include "trace/trace.h"
+#include "syscall/syscall.h"
+#include "nova/types.h"
 
 #if defined(__i386__)
 #include "../arch/x86/cpu.h"
@@ -284,6 +286,7 @@ struct thread *sched_adopt_boot(void) {
     t->state = THREAD_RUNNING;
     t->stack_base = 0;
     t->slice_used = 0;
+    t->runtime_ticks = 0;
     t->prio = 0; /* boot/idle thread: runs only when nothing else can */
     t->is_user = 0;
     t->next = 0;
@@ -312,6 +315,54 @@ struct thread *sched_adopt_boot(void) {
 
 struct thread *sched_current_thread(void) {
     return g_current;
+}
+
+int sched_thread_stat(uint32_t id, uint32_t *runtime, int *state,
+                      uint32_t *prio) {
+    struct thread *t;
+    uint32_t p;
+    int found = 0;
+    uint32_t rt = 0;
+    int st = 0;
+    uint32_t pr = 0;
+    if (runtime == 0 || state == 0 || prio == 0) {
+        return 0;
+    }
+    __asm__ volatile("cli" ::: "memory");
+    if (g_current != 0 && g_current->id == id) {
+        rt = g_current->runtime_ticks;
+        st = g_current->state;
+        pr = g_current->prio;
+        found = 1;
+    }
+    for (p = 0; p < SCHED_LEVELS && !found; p++) {
+        for (t = g_prio_head[p]; t != 0; t = t->next) {
+            if (t->id == id) {
+                rt = t->runtime_ticks;
+                st = t->state;
+                pr = t->prio;
+                found = 1;
+                break;
+            }
+        }
+    }
+    for (t = g_sleep_head; t != 0 && !found; t = t->next) {
+        if (t->id == id) {
+            rt = t->runtime_ticks;
+            st = t->state;
+            pr = t->prio;
+            found = 1;
+            break;
+        }
+    }
+    __asm__ volatile("sti" ::: "memory");
+    if (!found) {
+        return 0;
+    }
+    *runtime = rt;
+    *state = st;
+    *prio = pr;
+    return 1;
 }
 
 void sched_tick(void) {
@@ -344,10 +395,14 @@ void sched_tick(void) {
     }
     /* CPU accounting (Phase 13b): whoever runs burns their
      * process's ticks (kernel threads included; only user
-     * threads are ever killed for it). */
+     * threads are ever killed for it). Phase F: the thread
+     * itself accrues the same delivered tick (per-thread
+     * runtime; IRQ work charges the preempted thread —
+     * unattributable at tick granularity, documented). */
     if (cur->proc != 0) {
         cur->proc->ticks_used++;
     }
+    cur->runtime_ticks++;
     if (++cur->slice_used >= SCHED_SLICE_TICKS) {
         cur->slice_used = 0;
         sched_need_resched = 1;
@@ -1000,4 +1055,364 @@ int sched_workload_selftest(void) {
     serial_putc('\n');
     serial_puts("SCHEDW-OK\n");
     return 0;
+}
+
+/* --- Phase F runtime accounting selftest ---
+ * Per-thread delivered-tick accounting + SYS_RUNTIME ABI.
+ * Fresh process P isolates arithmetic: P.ticks_used must
+ * EXACTLY equal the sum of its threads' final runtimes
+ * (same increment site; exited threads persist in P).
+ * Workers gate on their own runtime (deterministic under
+ * any tick rate); ranges allow +2 for park-path ticks. */
+static volatile uint32_t rt_d_done, rt_d_saved, rt_d_id;
+static volatile uint32_t rt_l_early, rt_h_done;
+static struct thread *rt_ta, *rt_tb, *rt_tc, *rt_th, *rt_tl;
+static struct process *rt_p;
+
+static uint32_t rt_runtime(struct thread *t) {
+    return *(volatile uint32_t *)&t->runtime_ticks;
+}
+
+static void rt_spinner(void *arg) {
+    struct thread *me = thread_current();
+    (void)arg;
+    while (rt_runtime(me) < 60u) {
+    }
+    sched_sleep();
+    thread_exit(0);
+}
+
+static void rt_sleeper(void *arg) {
+    (void)arg;
+    sched_sleep_until(g_ticks + 500u);
+    thread_exit(0);
+}
+
+static void rt_exiter(void *arg) {
+    struct thread *me = thread_current();
+    (void)arg;
+    while (rt_runtime(me) < 20u) {
+    }
+    rt_d_saved = rt_runtime(me);
+    rt_d_id = me->id;
+    rt_d_done = 1;
+    thread_exit(0);
+}
+
+static void rt_hog(void *arg) {
+    struct thread *me = thread_current();
+    (void)arg;
+    while (rt_runtime(me) < 30u) {
+    }
+    rt_h_done = 1;
+    sched_sleep();
+    thread_exit(0);
+}
+
+static void rt_low(void *arg) {
+    struct thread *me = thread_current();
+    (void)arg;
+    if (!rt_h_done) {
+        rt_l_early = 1;
+    }
+    while (rt_runtime(me) < 10u) {
+    }
+    sched_sleep();
+    thread_exit(0);
+}
+
+static int rt_wait_parked(struct thread *t, const char *tag) {
+    uint32_t t0 = g_ticks;
+    while (t->state != THREAD_BLOCKED) {
+        if (g_ticks - t0 > 8000u) {
+            serial_puts("RUNTIME-FAIL park-");
+            serial_puts(tag);
+            serial_putc('\n');
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    return 0;
+}
+
+static int rt_wait_flag(volatile uint32_t *flag, const char *tag) {
+    uint32_t t0 = g_ticks;
+    while (!*flag) {
+        if (g_ticks - t0 > 8000u) {
+            serial_puts("RUNTIME-FAIL flag-");
+            serial_puts(tag);
+            serial_putc('\n');
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    return 0;
+}
+
+int sched_runtime_selftest(void) {
+    uint32_t base, t0, ra, rb, rc0, rh, rl;
+    struct thread *me = thread_current();
+    struct syscall_frame f;
+    struct addrspace *as;
+    uint32_t f1, f2, saved;
+    uint8_t *k1;
+    struct nova_runtime *ku;
+    base = thread_count();
+    rt_d_done = 0;
+    rt_l_early = 0;
+    rt_h_done = 0;
+    rt_p = process_create();
+    if (rt_p == 0) {
+        serial_puts("RUNTIME-FAIL alloc-proc\n");
+        return -1;
+    }
+    /* D: exit persistence (share stays in P). */
+    if (thread_create(rt_p, rt_exiter, 0, 16u) == 0) {
+        serial_puts("RUNTIME-FAIL spawn-d\n");
+        return -1;
+    }
+    if (rt_wait_flag(&rt_d_done, "d") != 0) {
+        return -1;
+    }
+    if (rt_d_saved < 20u || rt_d_saved > 22u) {
+        serial_puts("RUNTIME-FAIL d-range\n");
+        return -1;
+    }
+    /* A/B spinners + C long sleeper (fresh process P). */
+    rt_ta = thread_create(rt_p, rt_spinner, 0, 16u);
+    rt_tb = thread_create(rt_p, rt_spinner, 0, 16u);
+    rt_tc = thread_create(rt_p, rt_sleeper, 0, 16u);
+    if (rt_ta == 0 || rt_tb == 0 || rt_tc == 0) {
+        serial_puts("RUNTIME-FAIL spawn-abc\n");
+        return -1;
+    }
+    if (rt_wait_parked(rt_ta, "a") != 0 ||
+        rt_wait_parked(rt_tb, "b") != 0 ||
+        rt_wait_parked(rt_tc, "c") != 0) {
+        return -1;
+    }
+    ra = rt_runtime(rt_ta);
+    rb = rt_runtime(rt_tb);
+    rc0 = rt_runtime(rt_tc);
+    if (ra < 60u || ra > 62u || rb < 60u || rb > 62u) {
+        serial_puts("RUNTIME-FAIL spin-range\n");
+        return -1;
+    }
+    if (rc0 > 5u) {
+        serial_puts("RUNTIME-FAIL sleep-charge\n");
+        return -1;
+    }
+    /* Parked threads frozen while 30 ticks elapse. */
+    t0 = g_ticks;
+    while (g_ticks - t0 < 30u) {
+        __asm__ volatile("hlt");
+    }
+    if (rt_runtime(rt_ta) != ra || rt_runtime(rt_tb) != rb ||
+        rt_runtime(rt_tc) != rc0) {
+        serial_puts("RUNTIME-FAIL frozen\n");
+        return -1;
+    }
+    /* Exact aggregation (all of P alive or persisted). */
+    if (rt_p->ticks_used != ra + rb + rc0 + rt_d_saved) {
+        serial_puts("RUNTIME-FAIL aggr\n");
+        return -1;
+    }
+    serial_puts("RUNTIME proc=");
+    serial_putdec32(rt_p->ticks_used);
+    serial_puts(" sum=");
+    serial_putdec32(ra + rb + rc0 + rt_d_saved);
+    serial_putc('\n');
+    /* H/L strict priority: L never runs before H parks. */
+    rt_th = thread_create(rt_p, rt_hog, 0, 31u);
+    rt_tl = thread_create(rt_p, rt_low, 0, 1u);
+    if (rt_th == 0 || rt_tl == 0) {
+        serial_puts("RUNTIME-FAIL spawn-hl\n");
+        return -1;
+    }
+    if (rt_wait_parked(rt_th, "h") != 0 ||
+        rt_wait_parked(rt_tl, "l") != 0) {
+        return -1;
+    }
+    rh = rt_runtime(rt_th);
+    rl = rt_runtime(rt_tl);
+    if (rh < 30u || rh > 32u || rl < 10u || rl > 12u ||
+        rt_l_early) {
+        serial_puts("RUNTIME-FAIL prio\n");
+        return -1;
+    }
+    serial_puts("RUNTIME hog=");
+    serial_putdec32(rh);
+    serial_puts(" low=");
+    serial_putdec32(rl);
+    serial_puts(" early=");
+    serial_putdec32(rt_l_early);
+    serial_putc('\n');
+    /* ABI block: one RW page + one RO view of another frame. */
+    as = addrspace_create();
+    f1 = pmm_alloc_frame();
+    f2 = pmm_alloc_frame();
+    if (as == 0 || f1 == 0 || f2 == 0) {
+        serial_puts("RUNTIME-FAIL abi-alloc\n");
+        return -1;
+    }
+    if (addrspace_map(as, USER_BASE, f1, 1) != 0) {
+        serial_puts("RUNTIME-FAIL abi-map\n");
+        goto abi_fail;
+    }
+    k1 = (uint8_t *)f1;
+    ku = (struct nova_runtime *)USER_BASE;
+    for (uint32_t i = 0; i < 48u; i++) {
+        k1[i] = 0x5Au;
+    }
+    __asm__ volatile("cli" ::: "memory");
+    saved = arch_read_cr3();
+    arch_write_cr3(as->pd);
+    f.edx = 0;
+    /* Self (tid 0): caller identity + monotonic runtime. */
+    {
+        uint32_t before = rt_runtime(me);
+        f.ebx = 0;
+        f.ecx = USER_BASE;
+        f.eax = SYS_RUNTIME;
+        syscall_handler(&f);
+        if ((int32_t)f.eax != 0 || ku->tid != me->id ||
+            ku->runtime < before || ku->state != THREAD_RUNNING ||
+            ku->prio != me->prio) {
+            serial_puts("RUNTIME-FAIL abi-self\n");
+            goto abi_fail_cr3;
+        }
+    }
+    /* Parked thread A: frozen values, BLOCKED state. */
+    f.ebx = rt_ta->id;
+    f.eax = SYS_RUNTIME;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != 0 || ku->tid != rt_ta->id ||
+        ku->runtime != ra || ku->state != THREAD_BLOCKED ||
+        ku->prio != 16u) {
+        serial_puts("RUNTIME-FAIL abi-parked\n");
+        goto abi_fail_cr3;
+    }
+    /* Exact 16B write (last fetch was A: tid echoes at
+     * bytes 0..3; canary past byte 15 holds). */
+    if (*(uint32_t *)k1 != rt_ta->id) {
+        serial_puts("RUNTIME-FAIL abi-bytes\n");
+        goto abi_fail_cr3;
+    }
+    for (uint32_t i = 16u; i < 48u; i++) {
+        if (k1[i] != 0x5Au) {
+            serial_puts("RUNTIME-FAIL abi-canary\n");
+            goto abi_fail_cr3;
+        }
+    }
+    arch_write_cr3(saved);
+    __asm__ volatile("sti" ::: "memory");
+    /* Refusals on kernel tables (no touch by construction).
+     * do_runtime(tid=ebx, out=ecx): EFAULT cases use a valid
+     * self tid with a bad out pointer. */
+    f.ebx = 0;
+    f.ecx = 0;
+    f.eax = SYS_RUNTIME;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EFAULT) {
+        serial_puts("RUNTIME-FAIL abi-null\n");
+        goto abi_fail;
+    }
+    f.ecx = 0x1000u;
+    f.eax = SYS_RUNTIME;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EFAULT) {
+        serial_puts("RUNTIME-FAIL abi-kern\n");
+        goto abi_fail;
+    }
+    f.ecx = 0xFFFFFFF0u;
+    f.eax = SYS_RUNTIME;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EFAULT) {
+        serial_puts("RUNTIME-FAIL abi-wrap\n");
+        goto abi_fail;
+    }
+    f.ecx = USER_BASE + 4096u - 8u;
+    f.eax = SYS_RUNTIME;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EFAULT) {
+        serial_puts("RUNTIME-FAIL abi-cross\n");
+        goto abi_fail;
+    }
+    f.ebx = 0x00DEAD00u;
+    f.ecx = USER_BASE;
+    f.eax = SYS_RUNTIME;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_ENOENT) {
+        serial_puts("RUNTIME-FAIL abi-unknown\n");
+        goto abi_fail;
+    }
+    f.ebx = rt_d_id;
+    f.eax = SYS_RUNTIME;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_ENOENT) {
+        serial_puts("RUNTIME-FAIL abi-exited\n");
+        goto abi_fail;
+    }
+    /* RO view refuses, frame untouched. */
+    pmm_free_frame(f2);
+    f2 = 0;
+    {
+        struct addrspace *as2 = addrspace_create();
+        uint32_t fr = pmm_alloc_frame();
+        if (as2 == 0 || fr == 0) {
+            serial_puts("RUNTIME-FAIL abi-ro-alloc\n");
+            goto abi_fail;
+        }
+        if (addrspace_map(as2, USER_BASE, fr, 0) != 0) {
+            serial_puts("RUNTIME-FAIL abi-ro-map\n");
+            pmm_free_frame(fr);
+            addrspace_destroy(as2);
+            goto abi_fail;
+        }
+        *(uint8_t *)fr = 0x77u;
+        __asm__ volatile("cli" ::: "memory");
+        saved = arch_read_cr3();
+        arch_write_cr3(as2->pd);
+        f.ebx = 0;
+        f.ecx = USER_BASE;
+        f.eax = SYS_RUNTIME;
+        syscall_handler(&f);
+        arch_write_cr3(saved);
+        __asm__ volatile("sti" ::: "memory");
+        if ((int32_t)f.eax != -NOVA_EFAULT ||
+            *(uint8_t *)fr != 0x77u) {
+            serial_puts("RUNTIME-FAIL abi-ro\n");
+            pmm_free_frame(fr);
+            addrspace_destroy(as2);
+            goto abi_fail;
+        }
+        pmm_free_frame(fr);
+        addrspace_destroy(as2);
+    }
+    pmm_free_frame(f1);
+    addrspace_destroy(as);
+    /* Release all parked workers; they exit. */
+    sched_wakeup(rt_ta);
+    sched_wakeup(rt_tb);
+    sched_wakeup(rt_tc);
+    sched_wakeup(rt_th);
+    sched_wakeup(rt_tl);
+    t0 = g_ticks;
+    while (thread_count() != base) {
+        if (g_ticks - t0 > 8000u) {
+            serial_puts("RUNTIME-FAIL reap\n");
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    serial_puts("RUNTIME-OK\n");
+    return 0;
+abi_fail_cr3:
+    arch_write_cr3(saved);
+    __asm__ volatile("sti" ::: "memory");
+abi_fail:
+    pmm_free_frame(f1);
+    pmm_free_frame(f2);
+    addrspace_destroy(as);
+    return -1;
 }

@@ -46,6 +46,7 @@
 #define SYS_WINCLICK 34u
 #define SYS_STATS 35u
 #define SYS_TRACEFETCH 36u
+#define SYS_RUNTIME 37u
 
 /* Socket ops mirrored from kernel/net/sock.h. */
 #define SOCK_OP_OPEN 0u
@@ -252,6 +253,11 @@ static inline int32_t nova_stats(struct nova_stats *out) {
 static inline int32_t nova_tracefetch(struct nova_trace_rec *out,
                                       uint32_t max) {
     return nova_syscall(SYS_TRACEFETCH, (uint32_t)out, max, 0);
+}
+
+static inline int32_t nova_runtime(uint32_t tid,
+                                   struct nova_runtime *out) {
+    return nova_syscall(SYS_RUNTIME, tid, (uint32_t)out, 0);
 }
 
 static inline int32_t nova_sock(uint32_t op, uint32_t a, uint32_t b) {

@@ -1349,6 +1349,35 @@ static int32_t do_tracefetch(uint32_t buf, uint32_t max, uint32_t c) {
     return (int32_t)take;
 }
 
+/* Per-thread runtime query (Phase F): tid in, snapshot out.
+ * tid==0 means the caller. Snapshot via sched_thread_stat
+ * (scalars only, never pointers); unknown/exited threads
+ * refuse ENOENT (graveyard not searched: dead means gone).
+ * World-readable (stats precedent; counters only). */
+static int32_t do_runtime(uint32_t tid, uint32_t out, uint32_t c) {
+    struct nova_runtime k;
+    uint32_t id = tid;
+    uint32_t rt;
+    int st;
+    uint32_t pr;
+    (void)c;
+    if (id == 0) {
+        struct thread *me = sched_current_thread();
+        if (me == 0) {
+            return -NOVA_ENOENT;
+        }
+        id = me->id;
+    }
+    if (!sched_thread_stat(id, &rt, &st, &pr)) {
+        return -NOVA_ENOENT;
+    }
+    k.tid = id;
+    k.runtime = rt;
+    k.state = (uint32_t)st;
+    k.prio = pr;
+    return copy_to_user(out, &k, sizeof(k));
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -1393,6 +1422,7 @@ static const struct {
     { SYS_WINCLICK, "winclick", do_winclick },
     { SYS_STATS, "stats", do_stats },
     { SYS_TRACEFETCH, "tracefetch", do_tracefetch },
+    { SYS_RUNTIME, "runtime", do_runtime },
 };
 
 void syscall_handler(struct syscall_frame *f) {

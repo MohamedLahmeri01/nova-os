@@ -36,7 +36,7 @@ static const char *sh_nextnum(const char *p, int *val);
 static void sh_putstrn(const char *s, uint32_t max);
 
 static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle click rm rmdir uloop nslookup stat clear exit");
+    nova_puts("commands: help echo mem ticks rt ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle click rm rmdir uloop nslookup stat clear exit");
 }
 
 static void sh_putip(uint32_t ip) {
@@ -593,6 +593,36 @@ static void sh_ticks(void) {
     nova_putchar('\n');
 }
 
+static void sh_rt(const char *line) {
+    /* rt [tid]: per-thread runtime in ticks (0 = caller). */
+    static struct nova_runtime r;
+    const char *p = sh_arg(line);
+    int ok = 0;
+    int tid = 0;
+    int32_t rc;
+    if (*p != 0) {
+        tid = nova_strtoi(p, &ok);
+        if (!ok || tid < 0) {
+            nova_puts("usage: rt [tid]");
+            return;
+        }
+    }
+    rc = nova_runtime((uint32_t)tid, &r);
+    if (rc < 0) {
+        nova_puts("rt: no such thread");
+        return;
+    }
+    nova_print("tid=", 4);
+    sh_putdec(r.tid);
+    nova_print(" runtime=", 9);
+    sh_putdec(r.runtime);
+    nova_print(" ticks state=", 13);
+    sh_putdec(r.state);
+    nova_print(" prio=", 6);
+    sh_putdec(r.prio);
+    nova_putchar('\n');
+}
+
 static void sh_clear(void) {
     for (int i = 0; i < 24; i++) {
         nova_putchar('\n');
@@ -814,6 +844,9 @@ static void sh_run(const char *line) {
         sh_mem();
     } else if (nova_strcmp(line, "ticks") == 0) {
         sh_ticks();
+    } else if (nova_strncmp(line, "rt", 2) == 0 &&
+               (line[2] == 0 || line[2] == ' ')) {
+        sh_rt(line);
     } else if (nova_strncmp(line, "ls", 2) == 0 &&
                (line[2] == 0 || line[2] == ' ')) {
         sh_ls(line);

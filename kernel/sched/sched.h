@@ -33,6 +33,12 @@ struct thread *sched_pick(struct thread *cur);
 void sched_enter(struct thread *t);
 struct thread *sched_current_thread(void);
 void sched_tick(void);
+/* Phase F lookup: snapshot {runtime, state, prio} of a live
+ * thread by id (current + runqueues + sleep list, under cli;
+ * graveyard/reaped threads are gone: 0). Never returns a
+ * pointer (no UAF surface for ABI callers). */
+int sched_thread_stat(uint32_t id, uint32_t *runtime, int *state,
+                      uint32_t *prio);
 void sched_do_switch(void);
 void sched_yield(void);
 void sched_switch_to(struct thread *cur, struct thread *next);
@@ -68,5 +74,9 @@ int sched_starve_selftest(void);
  * latency, sleep accuracy). Machine-readable SCHED-W lines.
  * Prints SCHEDW-OK. Nonzero on failure (fatal: panic). */
 int sched_workload_selftest(void);
+/* Per-thread runtime accounting + SYS_RUNTIME proof (fresh
+ * process isolation, exit persistence, strict-prio, ABI
+ * adversarial). Prints RUNTIME-OK. Nonzero on failure. */
+int sched_runtime_selftest(void);
 
 #endif /* NOVA_SCHED_H */

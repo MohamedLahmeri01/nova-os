@@ -413,6 +413,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (sched_workload_selftest() != 0) {
         nova_panic("workload-selftest-fail");
     }
+    /* Per-thread runtime accounting + SYS_RUNTIME proof. */
+    if (sched_runtime_selftest() != 0) {
+        nova_panic("runtime-selftest-fail");
+    }
     /* Blocking sockets (threads exist now; proves park/wake). */
     if (sock_block_selftest() != 0) {
         nova_panic("sockblock-selftest-fail");
