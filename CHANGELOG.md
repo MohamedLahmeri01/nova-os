@@ -52,6 +52,13 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   loss proof, RO/partial mappings, IF discipline,
   fault-class matrix); fixed en route: handler blind
   sti -> save/restore. Suite 23/23.
+- v0.5 timebase audit (Phase E): full consumer inventory
+  (all tick-native, all wrap-safe), PIT divisor verified
+  (11931 -> 100.0094 Hz), host-measured 99.37 Hz (+-2%),
+  TSC evidence (Zen 3, invariant, ~3.6 GHz, 13k-cycle
+  trap cost, no freq leaves); decision DEFER, PIT stays
+  authoritative (ADR-0078, `docs/TIMEBASE.md`). No code
+  changes. Suite 23/23.
 
 ## 0.2.0 - 2026-10-06 (second release)
 
