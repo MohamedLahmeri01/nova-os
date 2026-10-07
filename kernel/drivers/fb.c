@@ -203,3 +203,98 @@ int fb_selftest(void) {
     serial_puts("FB-OK\n");
     return 0;
 }
+
+/* --- text console (CLI-only UI): 40 cols x 25 rows of 8x8
+ * cells over the mode-13h framebuffer. Invariant: the
+ * cursor cell is always blank (chars are drawn, then the
+ * cursor moves to a fresh cell), so cursor draw/erase
+ * never destroys a glyph. Scroll = one upward pixel
+ * memmove (top-down is safe: destination precedes
+ * source). Bounded stores only; no heap; no locks. */
+
+#define FBCON_COLS (FB_W / 8u)
+#define FBCON_ROWS (FB_H / 8u)
+
+static uint32_t g_con_row;
+static uint32_t g_con_col;
+static int g_con_on;
+
+static void con_cursor(int on) {
+    uint32_t x = g_con_col * 8u;
+    uint32_t y = g_con_row * 8u + 6u;
+    uint8_t color = on ? FB_GRAY : FB_BLACK;
+    for (uint32_t r = 0; r < 2u; r++) {
+        for (uint32_t k = 0; k < 8u; k++) {
+            fb_pixel(x + k, y + r, color);
+        }
+    }
+}
+
+static void con_cell_clear(void) {
+    fb_rect(g_con_col * 8u, g_con_row * 8u, 8u, 8u, FB_BLACK);
+}
+
+static void con_scroll(void) {
+    for (uint32_t y = 0; y + 8u < FB_H; y++) {
+        for (uint32_t x = 0; x < FB_W; x++) {
+            FB_BASE[y * FB_W + x] = FB_BASE[(y + 8u) * FB_W + x];
+        }
+    }
+    fb_rect(0, (FBCON_ROWS - 1u) * 8u, FB_W, 8u, FB_BLACK);
+}
+
+static void con_newline(void) {
+    con_cursor(0);
+    g_con_col = 0;
+    g_con_row++;
+    if (g_con_row >= FBCON_ROWS) {
+        con_scroll();
+        g_con_row = FBCON_ROWS - 1u;
+    }
+    con_cursor(1);
+}
+
+void fbcon_init(void) {
+    fb_clear(FB_BLACK);
+    g_con_row = 0;
+    g_con_col = 0;
+    g_con_on = 1;
+    con_cursor(1);
+}
+
+void fbcon_putc(char c) {
+    if (!g_con_on) {
+        return;
+    }
+    if (c == '\r') {
+        con_cursor(0);
+        g_con_col = 0;
+        con_cursor(1);
+    } else if (c == '\n') {
+        con_newline();
+    } else if (c == '\b') {
+        con_cursor(0);
+        if (g_con_col > 0) {
+            g_con_col--;
+        }
+        con_cursor(1);
+    } else if (c == '\t') {
+        do {
+            fbcon_putc(' ');
+        } while ((g_con_col & 7u) != 0 && g_con_col < FBCON_COLS);
+    } else {
+        con_cursor(0);
+        con_cell_clear();
+        fb_char(g_con_col * 8u, g_con_row * 8u, c, FB_WHITE);
+        g_con_col++;
+        if (g_con_col >= FBCON_COLS) {
+            g_con_col = 0;
+            g_con_row++;
+            if (g_con_row >= FBCON_ROWS) {
+                con_scroll();
+                g_con_row = FBCON_ROWS - 1u;
+            }
+        }
+        con_cursor(1);
+    }
+}

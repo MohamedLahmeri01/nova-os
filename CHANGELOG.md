@@ -87,6 +87,14 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   shell errno texts (`failed E<num>`), `docs/DIAGNOSTICS.md`
   contract (15 items). No ABI/policy/timer changes.
   Suite 23/23.
+- CLI-only console (post-Phase-L): 40x25 framebuffer text
+  console (`fbcon_init`/`fbcon_putc`, white on black with
+  cursor) fed from `serial_putc`; screen switches from the
+  demo scene to the console before init spawn, so prompt,
+  echo, and output are visible on the display. Keyboard-
+  only input (no mouse in v0.5); banner states capture
+  keys. Screenshot-proven: banner, prompt, typed `help`,
+  backspace erase. No ABI/policy/timer changes.
 - v0.5 scheduler observability (Phase G): state-model +
   measurement audit (`docs/SCHEDULER-OBSERVABILITY.md`);
   added wake-resume proof + 200-query cost bound

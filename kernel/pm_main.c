@@ -492,6 +492,12 @@ void nova_pm_main(const nova_boot_info_t *info) {
      * pool is empty, so ids pack 0,1,2 deterministically. This
      * repaints the final screen (over the splash). */
     comp_demo();
+    /* CLI console: from here the screen is a text terminal
+     * (framebuffer console), not the demo scene. Spawn proofs
+     * + GATES-OK + the shell are all visible on screen. */
+    fbcon_init();
+    serial_puts("NOVA OS console: keyboard only, no mouse in v0.5\n");
+    serial_puts("Click the VM window to capture keys, Right-Ctrl frees\n");
     spawn_init();
     /* Boot-time exec proof (Phase 7b): run /bin/hi from the FS. Its
      * HI-OK line in the log proves spawn-by-name end to end. */

@@ -11,6 +11,7 @@
 
 #include "serial.h"
 #include "drivers/vga.h"
+#include "drivers/fb.h"
 
 #define COM1 0x3F8u
 
@@ -29,10 +30,11 @@ void serial_putc(char c) {
         /* wait for transmitter holding register empty */
     }
     arch_outb(COM1, (uint8_t)c);
-    /* Console mirror (Phase 8d): every serial char also reaches the
-     * VGA text screen. vga_putc is plain stores + CRT ports (safe
-     * from the first call: 0xB8000 is always addressable). */
+    /* Console mirrors (Phase 8d VGA text + CLI console on the
+     * framebuffer once enabled): plain stores + ports, safe from
+     * the first call (both apertures always addressable). */
     vga_putc(c);
+    fbcon_putc(c);
 }
 
 void serial_puts(const char *s) {

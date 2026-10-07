@@ -48,6 +48,14 @@ void fb_char(uint32_t x, uint32_t y, char c, uint8_t color);
 void fb_text(uint32_t x, uint32_t y, const char *s, uint8_t color);
 /* Boot splash (border + bars + blocks; the screenshot proof). */
 void fb_splash(void);
+/* Text console (CLI-only UI): 40x25 white-on-black over the
+ * framebuffer, 8x8 cells, underline cursor. Disabled until
+ * fbcon_init (boot graphics stay undisturbed); after that
+ * every console char is visible on screen. Same IRQ-safety
+ * argument as vga_putc (bounded stores, no shared state
+ * beyond row/col, torn updates self-heal next char). */
+void fbcon_init(void);
+void fbcon_putc(char c);
 /* Deterministic selftest (clear/readback/rect/clip/palette).
  * Prints FB-OK. Nonzero on failure (fatal: panic). */
 int fb_selftest(void);
