@@ -28,7 +28,7 @@ net pending queue    | net_rx_lock              | pump*  | no          | lock st
 sock slot + waiter   | IF-held check-and-park   | wake   | no (park after) | lock per-socket or global
 kbd ring + waiter    | cli sections / IF-park   | push   | no (park after) | same pattern as sock
 heap/PMM             | BSP-only (no guard)      | no     | no          | heap_lock + pmm_lock first
-FS nodes/fds         | BSP-only (single reader) | no     | no          | VFS locking passes (later phase)
+FS nodes/fds/drivers | g_fs_lock (VFS big lock, irqsave, syscall granularity) | no | no | lock stands; re-audit fences
 compositor pool      | BSP-only                 | mouse† | no          | gui_lock (later phase)
 ```
 

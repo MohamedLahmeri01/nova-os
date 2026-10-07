@@ -65,6 +65,12 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   read-only query + shell `rt`, adversarial ABI battery,
   `RUNTIME-OK` proof (`docs/RUNTIME-ACCOUNTING.md`).
   No scheduler policy change. Suite 23/23.
+- v0.5 filesystem concurrency (Phase H): VFS big lock
+  (irqsave, 12 FS syscalls), ATA blind-sti deadlock fix,
+  `FSSTRESS-OK` battery (open/close, shared offsets,
+  atomic writes, metadata storm, 3-graft reads, fsck),
+  `docs/FILESYSTEM-CONCURRENCY.md`, ADR-0079 (supersedes
+  ADR-0076 runtime contract), W8 closed. Suite 23/23.
 - v0.5 scheduler observability (Phase G): state-model +
   measurement audit (`docs/SCHEDULER-OBSERVABILITY.md`);
   added wake-resume proof + 200-query cost bound

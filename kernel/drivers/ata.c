@@ -191,33 +191,42 @@ int ata_read_sector(uint32_t drive, uint32_t lba, uint8_t *dst) {
     if (g_use_dma && g_bm_base != 0) {
         return dma_sector(drive, lba, dst, 0);
     }
-    __asm__ volatile("cli" ::: "memory");
-    rc = wait_clear_bsy(status);
-    if (rc == 0) {
-        /* Drive/head: 0xE0 LBA-mode base | slave bit | LBA top 4. */
-        arch_outb((uint16_t)(base + 6u),
-                  (uint8_t)(0xE0u | (slave << 4) |
-                            ((lba >> 24) & 0x0Fu)));
-        /* 400ns settle (4 alt-status reads, no side effects). */
-        arch_inb(alt);
-        arch_inb(alt);
-        arch_inb(alt);
-        arch_inb(alt);
-        arch_outb((uint16_t)(base + 2u), 1);
-        arch_outb((uint16_t)(base + 3u), (uint8_t)(lba & 0xFFu));
-        arch_outb((uint16_t)(base + 4u), (uint8_t)((lba >> 8) & 0xFFu));
-        arch_outb((uint16_t)(base + 5u), (uint8_t)((lba >> 16) & 0xFFu));
-        arch_outb((uint16_t)(base + 7u), ATA_CMD_READ);
-        rc = wait_drq((uint16_t)(base + 7u));
+    /* IF save/restore (Phase H deadlock fix): blind cli/sti here
+     * re-enabled interrupts inside a caller's irqsave critical
+     * section (FS big lock), letting a same-priority waiter spin
+     * with IF=0 while its holder starves — permanent. The PIO
+     * sequence itself needs no IRQ delivery (pure polling). */
+    {
+        uint32_t ata_was = arch_irq_save();
+        rc = wait_clear_bsy(status);
         if (rc == 0) {
-            for (uint32_t i = 0; i < 256u; i++) {
-                uint16_t w = arch_inw(base);
-                dst[2u * i] = (uint8_t)(w & 0xFFu);
-                dst[2u * i + 1u] = (uint8_t)(w >> 8);
+            /* Drive/head: 0xE0 LBA-mode base | slave bit | LBA top 4. */
+            arch_outb((uint16_t)(base + 6u),
+                      (uint8_t)(0xE0u | (slave << 4) |
+                                ((lba >> 24) & 0x0Fu)));
+            /* 400ns settle (4 alt-status reads, no side effects). */
+            arch_inb(alt);
+            arch_inb(alt);
+            arch_inb(alt);
+            arch_inb(alt);
+            arch_outb((uint16_t)(base + 2u), 1);
+            arch_outb((uint16_t)(base + 3u), (uint8_t)(lba & 0xFFu));
+            arch_outb((uint16_t)(base + 4u),
+                      (uint8_t)((lba >> 8) & 0xFFu));
+            arch_outb((uint16_t)(base + 5u),
+                      (uint8_t)((lba >> 16) & 0xFFu));
+            arch_outb((uint16_t)(base + 7u), ATA_CMD_READ);
+            rc = wait_drq((uint16_t)(base + 7u));
+            if (rc == 0) {
+                for (uint32_t i = 0; i < 256u; i++) {
+                    uint16_t w = arch_inw(base);
+                    dst[2u * i] = (uint8_t)(w & 0xFFu);
+                    dst[2u * i + 1u] = (uint8_t)(w >> 8);
+                }
             }
         }
+        arch_irq_restore(ata_was);
     }
-    __asm__ volatile("sti" ::: "memory");
     return rc;
 }
 
@@ -236,34 +245,40 @@ int ata_write_sector(uint32_t drive, uint32_t lba, const uint8_t *src) {
     if (g_use_dma && g_bm_base != 0) {
         return dma_sector(drive, lba, (uint8_t *)src, 1);
     }
-    __asm__ volatile("cli" ::: "memory");
-    rc = wait_clear_bsy(status);
-    if (rc == 0) {
-        arch_outb((uint16_t)(base + 6u),
-                  (uint8_t)(0xE0u | (slave << 4) |
-                            ((lba >> 24) & 0x0Fu)));
-        arch_inb(alt);
-        arch_inb(alt);
-        arch_inb(alt);
-        arch_inb(alt);
-        arch_outb((uint16_t)(base + 2u), 1);
-        arch_outb((uint16_t)(base + 3u), (uint8_t)(lba & 0xFFu));
-        arch_outb((uint16_t)(base + 4u), (uint8_t)((lba >> 8) & 0xFFu));
-        arch_outb((uint16_t)(base + 5u), (uint8_t)((lba >> 16) & 0xFFu));
-        arch_outb((uint16_t)(base + 7u), ATA_CMD_WRITE);
-        rc = wait_drq(status);
+    /* Same IF save/restore as the read path (see above). */
+    {
+        uint32_t ata_was = arch_irq_save();
+        rc = wait_clear_bsy(status);
         if (rc == 0) {
-            for (uint32_t i = 0; i < 256u; i++) {
-                uint16_t w = (uint16_t)src[2u * i] |
-                             ((uint16_t)src[2u * i + 1u] << 8);
-                arch_outw(base, w);
+            arch_outb((uint16_t)(base + 6u),
+                      (uint8_t)(0xE0u | (slave << 4) |
+                                ((lba >> 24) & 0x0Fu)));
+            arch_inb(alt);
+            arch_inb(alt);
+            arch_inb(alt);
+            arch_inb(alt);
+            arch_outb((uint16_t)(base + 2u), 1);
+            arch_outb((uint16_t)(base + 3u), (uint8_t)(lba & 0xFFu));
+            arch_outb((uint16_t)(base + 4u),
+                      (uint8_t)((lba >> 8) & 0xFFu));
+            arch_outb((uint16_t)(base + 5u),
+                      (uint8_t)((lba >> 16) & 0xFFu));
+            arch_outb((uint16_t)(base + 7u), ATA_CMD_WRITE);
+            rc = wait_drq(status);
+            if (rc == 0) {
+                for (uint32_t i = 0; i < 256u; i++) {
+                    uint16_t w = (uint16_t)src[2u * i] |
+                                 ((uint16_t)src[2u * i + 1u] << 8);
+                    arch_outw(base, w);
+                }
+                /* WRITE SECTORS signals completion via a second
+                 * DRQ->idle cycle; poll BSY clear (bounded) to
+                 * confirm the write. */
+                rc = wait_clear_bsy(status);
             }
-            /* WRITE SECTORS signals completion via a second DRQ->idle
-             * cycle; poll BSY clear (bounded) to confirm the write. */
-            rc = wait_clear_bsy(status);
         }
+        arch_irq_restore(ata_was);
     }
-    __asm__ volatile("sti" ::: "memory");
     return rc;
 }
 
@@ -276,35 +291,38 @@ static int ata_set_dma_mode(uint32_t drive) {
     int rc = -NOVA_EIO;
     slave = chan_ports(drive, &base, &alt);
     status = (uint16_t)(base + 7u);
-    __asm__ volatile("cli" ::: "memory");
-    if (wait_clear_bsy(status) == 0) {
-        arch_outb((uint16_t)(base + 6u),
-                  (uint8_t)(0xE0u | (slave << 4)));
-        arch_inb(alt);
-        arch_inb(alt);
-        arch_outb((uint16_t)(base + 1u), 0x03u);
-        /* Multiword DMA 2 (conservative: needs no UDMA controller
-         * registers; PIIX-era baseline). */
-        arch_outb((uint16_t)(base + 2u), 0x22u);
-        arch_outb((uint16_t)(base + 7u), 0xEFu);
-        /* No data phase: BSY clear + no ERR soon. */
-        {
-            uint32_t i = 0;
-            for (;;) {
-                uint8_t st = arch_inb(status);
-                if ((st & ATA_SR_BSY) == 0) {
-                    rc = ((st & (ATA_SR_ERR | ATA_SR_DF)) != 0)
-                             ? -NOVA_EIO
-                             : NOVA_ESUCCESS;
-                    break;
-                }
-                if (i++ >= ATA_SPIN_MAX) {
-                    break;
+    /* Same IF save/restore as the read path (see above). */
+    {
+        uint32_t ata_was = arch_irq_save();
+        if (wait_clear_bsy(status) == 0) {
+            arch_outb((uint16_t)(base + 6u),
+                      (uint8_t)(0xE0u | (slave << 4)));
+            arch_inb(alt);
+            arch_inb(alt);
+            arch_outb((uint16_t)(base + 1u), 0x03u);
+            /* Multiword DMA 2 (conservative: needs no UDMA
+             * controller registers; PIIX-era baseline). */
+            arch_outb((uint16_t)(base + 2u), 0x22u);
+            arch_outb((uint16_t)(base + 7u), 0xEFu);
+            /* No data phase: BSY clear + no ERR soon. */
+            {
+                uint32_t i = 0;
+                for (;;) {
+                    uint8_t st = arch_inb(status);
+                    if ((st & ATA_SR_BSY) == 0) {
+                        rc = ((st & (ATA_SR_ERR | ATA_SR_DF)) != 0)
+                                 ? -NOVA_EIO
+                                 : NOVA_ESUCCESS;
+                        break;
+                    }
+                    if (i++ >= ATA_SPIN_MAX) {
+                        break;
+                    }
                 }
             }
         }
+        arch_irq_restore(ata_was);
     }
-    __asm__ volatile("sti" ::: "memory");
     return rc;
 }
 
@@ -356,51 +374,58 @@ static int dma_sector(uint32_t drive, uint32_t lba, uint8_t *buf,
     if (prd_build(prd, buf) == 0) {
         return -NOVA_EINVAL;
     }
-    __asm__ volatile("cli" ::: "memory");
-    rc = wait_clear_bsy(status);
-    if (rc == 0) {
-        uint8_t dir = (uint8_t)(is_write ? 0x00u : BM_CMD_FROMDEV);
-        /* Engine setup first (stopped, direction, cleared status),
-         * then the ATA command, then START (Intel order). */
-        arch_outb(bm, 0x00u);
-        arch_outl((uint16_t)(bm + 4u), g_prd_phys);
-        arch_outb(bm, dir);
-        arch_outb((uint16_t)(bm + 2u), BM_ST_CLEAR);
-        arch_outb((uint16_t)(base + 6u),
-                  (uint8_t)(0xE0u | (slave << 4) |
-                            ((lba >> 24) & 0x0Fu)));
-        arch_inb(alt);
-        arch_inb(alt);
-        arch_inb(alt);
-        arch_inb(alt);
-        arch_outb((uint16_t)(base + 2u), 1);
-        arch_outb((uint16_t)(base + 3u), (uint8_t)(lba & 0xFFu));
-        arch_outb((uint16_t)(base + 4u), (uint8_t)((lba >> 8) & 0xFFu));
-        arch_outb((uint16_t)(base + 5u), (uint8_t)((lba >> 16) & 0xFFu));
-        arch_outb((uint16_t)(base + 7u),
-                  (uint8_t)(is_write ? ATA_CMD_WRITE_DMA
-                                     : ATA_CMD_READ_DMA));
-        arch_outb(bm, (uint8_t)(dir | BM_CMD_START));
-        /* Completion: Interrupt bit (bounded); error bit fails. */
-        {
-            uint32_t i = 0;
-            for (;;) {
-                uint8_t st = arch_inb((uint16_t)(bm + 2u));
-                if ((st & BM_ST_INT) != 0) {
-                    rc = ((st & BM_ST_ERR) != 0) ? -NOVA_EIO
-                                                 : NOVA_ESUCCESS;
-                    break;
-                }
-                if (i++ >= ATA_SPIN_MAX) {
-                    rc = -NOVA_EIO;
-                    break;
+    /* Same IF save/restore as the read path (see above). */
+    {
+        uint32_t ata_was = arch_irq_save();
+        rc = wait_clear_bsy(status);
+        if (rc == 0) {
+            uint8_t dir = (uint8_t)(is_write ? 0x00u : BM_CMD_FROMDEV);
+            /* Engine setup first (stopped, direction, cleared
+             * status), then the ATA command, then START
+             * (Intel order). */
+            arch_outb(bm, 0x00u);
+            arch_outl((uint16_t)(bm + 4u), g_prd_phys);
+            arch_outb(bm, dir);
+            arch_outb((uint16_t)(bm + 2u), BM_ST_CLEAR);
+            arch_outb((uint16_t)(base + 6u),
+                      (uint8_t)(0xE0u | (slave << 4) |
+                                ((lba >> 24) & 0x0Fu)));
+            arch_inb(alt);
+            arch_inb(alt);
+            arch_inb(alt);
+            arch_inb(alt);
+            arch_outb((uint16_t)(base + 2u), 1);
+            arch_outb((uint16_t)(base + 3u), (uint8_t)(lba & 0xFFu));
+            arch_outb((uint16_t)(base + 4u),
+                      (uint8_t)((lba >> 8) & 0xFFu));
+            arch_outb((uint16_t)(base + 5u),
+                      (uint8_t)((lba >> 16) & 0xFFu));
+            arch_outb((uint16_t)(base + 7u),
+                      (uint8_t)(is_write ? ATA_CMD_WRITE_DMA
+                                         : ATA_CMD_READ_DMA));
+            arch_outb(bm, (uint8_t)(dir | BM_CMD_START));
+            /* Completion: Interrupt bit (bounded); error bit
+             * fails. */
+            {
+                uint32_t i = 0;
+                for (;;) {
+                    uint8_t st = arch_inb((uint16_t)(bm + 2u));
+                    if ((st & BM_ST_INT) != 0) {
+                        rc = ((st & BM_ST_ERR) != 0) ? -NOVA_EIO
+                                                     : NOVA_ESUCCESS;
+                        break;
+                    }
+                    if (i++ >= ATA_SPIN_MAX) {
+                        rc = -NOVA_EIO;
+                        break;
+                    }
                 }
             }
+            arch_outb(bm, dir);
+            arch_outb((uint16_t)(bm + 2u), BM_ST_CLEAR);
         }
-        arch_outb(bm, dir);
-        arch_outb((uint16_t)(bm + 2u), BM_ST_CLEAR);
+        arch_irq_restore(ata_was);
     }
-    __asm__ volatile("sti" ::: "memory");
     return rc;
 }
 

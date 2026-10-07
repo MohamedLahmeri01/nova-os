@@ -146,6 +146,11 @@ int fs_unlink(const char *path);
  * nodes; ENOTEMPTY otherwise; ramfs only, like chmod). */
 int fs_rmdir(const char *path);
 
+/* Deterministic concurrency + stress proof (guest, Phase H):
+ * same-priority pair through the locked syscalls (frames),
+ * structural asserts + fsck. Prints FSSTRESS-OK. Nonzero on
+ * failure (fatal: panic). */
+int fs_concurrency_selftest(void);
 /* Deterministic ownership proof (guest selftest): denials bind,
  * triplets behave, credential dispatch refuses rises. Prints
  * PERM-OK. Nonzero on failure (fatal: panic). */

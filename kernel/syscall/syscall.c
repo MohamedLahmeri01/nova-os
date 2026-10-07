@@ -34,6 +34,7 @@
 #include "input/kbd.h"
 #include "trace/trace.h"
 #include "time/time.h"
+#include "sync/sync.h"
 
 #if defined(__i386__)
 #include "../arch/x86/cpu.h"
@@ -287,7 +288,8 @@ static struct fs_node *blank_node(uint8_t *data, uint32_t cap) {
     return n;
 }
 
-static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
+static int32_t do_open_locked(uint32_t path, uint32_t flags,
+                              uint32_t c) {
     char kpath[FS_MAX_PATH + 1u];
     struct fs_node *n = 0;
     struct fs_file *f;
@@ -522,7 +524,8 @@ static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
     return rc;
 }
 
-static int32_t do_read(uint32_t fd, uint32_t buf, uint32_t len) {
+static int32_t do_read_locked(uint32_t fd, uint32_t buf,
+                              uint32_t len) {
     struct process *p;
     struct fs_file *f;
     uint8_t kbuf[512];
@@ -555,6 +558,17 @@ static int32_t do_read(uint32_t fd, uint32_t buf, uint32_t len) {
         }
         rc = fs_read_node(f->node, f->off, kbuf, want, &got);
         if (rc != 0) {
+            /* Failure forensics (a read error here once cost a
+             * Phase H debug day: print identity, not just rc). */
+            serial_puts("READ-DIAG fd=");
+            serial_putdec32(fd);
+            serial_puts(" node=0x");
+            serial_puthex32((uint32_t)f->node);
+            serial_puts(" off=");
+            serial_putdec32(f->off);
+            serial_puts(" rc=");
+            serial_putdec32((uint32_t)rc);
+            serial_putc('\n');
             return (total != 0) ? (int32_t)total : rc;
         }
         if (got == 0) {
@@ -570,7 +584,8 @@ static int32_t do_read(uint32_t fd, uint32_t buf, uint32_t len) {
     return (int32_t)total;
 }
 
-static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
+static int32_t do_write_locked(uint32_t fd, uint32_t buf,
+                               uint32_t len) {
     struct process *p;
     struct fs_file *f;
     uint8_t kbuf[512];
@@ -695,7 +710,8 @@ static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
     return (int32_t)total;
 }
 
-static int32_t do_close(uint32_t fd, uint32_t b, uint32_t c) {
+static int32_t do_close_locked(uint32_t fd, uint32_t b,
+                               uint32_t c) {
     struct process *p;
     (void)b;
     (void)c;
@@ -712,7 +728,8 @@ static int32_t copy_name_out(uint32_t namebuf, const char *kname, int r) {
     return (rc != 0) ? rc : r;
 }
 
-static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
+static int32_t do_readdir_locked(uint32_t path, uint32_t index,
+                                  uint32_t namebuf) {
     char kpath[FS_MAX_PATH + 1u];
     char name[FS_MAX_NAME];
     struct fs_node *dir = 0;
@@ -776,7 +793,8 @@ static int32_t do_readdir(uint32_t path, uint32_t index, uint32_t namebuf) {
     return copy_name_out(namebuf, name, rc);
 }
 
-static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
+static int32_t do_mkdir_locked(uint32_t path, uint32_t b,
+                               uint32_t c) {
     char kpath[FS_MAX_PATH + 1u];
     struct process *p;
     int32_t plen;
@@ -813,7 +831,8 @@ static int need_cap(uint32_t need) {
     return caps_allow(cur->proc->caps, need);
 }
 
-static int32_t do_exec(uint32_t path, uint32_t b, uint32_t c) {
+static int32_t do_exec_locked(uint32_t path, uint32_t b,
+                              uint32_t c) {
     char kpath[FS_MAX_PATH + 1u];
     int32_t plen;
     (void)b;
@@ -831,7 +850,8 @@ static int32_t do_exec(uint32_t path, uint32_t b, uint32_t c) {
     return spawn_file(kpath);
 }
 
-static int32_t do_fsck(uint32_t a, uint32_t b, uint32_t c) {
+static int32_t do_fsck_locked(uint32_t a, uint32_t b,
+                              uint32_t c) {
     (void)a;
     (void)b;
     (void)c;
@@ -987,7 +1007,8 @@ static int32_t do_cred(uint32_t op, uint32_t id, uint32_t c) {
     return -NOVA_EINVAL;
 }
 
-static int32_t do_chmod(uint32_t path, uint32_t mode, uint32_t c) {
+static int32_t do_chmod_locked(uint32_t path, uint32_t mode,
+                               uint32_t c) {
     char kpath[FS_MAX_PATH + 1u];
     int32_t plen;
     (void)c;
@@ -1004,7 +1025,8 @@ static int32_t do_chmod(uint32_t path, uint32_t mode, uint32_t c) {
     return fs_chmod(kpath, (uint16_t)mode);
 }
 
-static int32_t do_unlink(uint32_t path, uint32_t b, uint32_t c) {
+static int32_t do_unlink_locked(uint32_t path, uint32_t b,
+                                uint32_t c) {
     char kpath[FS_MAX_PATH + 1u];
     int32_t plen;
     (void)b;
@@ -1029,7 +1051,8 @@ static int32_t do_unlink(uint32_t path, uint32_t b, uint32_t c) {
     return fs_unlink(kpath);
 }
 
-static int32_t do_rmdir(uint32_t path, uint32_t b, uint32_t c) {
+static int32_t do_rmdir_locked(uint32_t path, uint32_t b,
+                               uint32_t c) {
     char kpath[FS_MAX_PATH + 1u];
     int32_t plen;
     (void)b;
@@ -1168,7 +1191,8 @@ static void proc_set_jail(struct process *p, struct fs_node *n) {
     p->jail_root = n;
 }
 
-static int32_t do_chroot(uint32_t path, uint32_t b, uint32_t c) {
+static int32_t do_chroot_locked(uint32_t path, uint32_t b,
+                                uint32_t c) {
     char kpath[FS_MAX_PATH + 1u];
     struct process *p;
     struct fs_node *n = 0;
@@ -1380,6 +1404,145 @@ static int32_t do_runtime(uint32_t tid, uint32_t out, uint32_t c) {
 
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
+/* VFS big lock (Phase H, ADR-0079): one global spinlock,
+ * irqsave discipline, held across each FS-touching syscall
+ * handler (wrappers below), never nested, never in IRQ
+ * context (no FS path runs there), never across sleep
+ * (no FS path sleeps; disk polls are bounded). irqsave —
+ * not plain — because a higher-priority waiter spinning
+ * while a preempted holder waits for CPU is a deadlock;
+ * with IF=0 the holder always completes (bounded paths).
+ * Direct fs_* users (boot selftests/seeds) run unlocked
+ * but single-threaded by phase order; post-boot all FS
+ * access funnels through these wrappers. Static zero-init
+ * is already unlocked-safe (locked==0 acquires). */
+static struct spinlock g_fs_lock;
+
+static void fs_big_lock(uint32_t *was_on) {
+    struct thread *me = sched_current_thread();
+    spin_lock_irqsave(&g_fs_lock, (uintptr_t)me, was_on);
+}
+
+static void fs_big_unlock(uint32_t was_on) {
+    spin_unlock_irqrestore(&g_fs_lock, was_on);
+}
+
+/* FS table names (wrappers: acquire, locked body, release).
+ * Bodies above were renamed *_locked; the table below keeps
+ * the plain names, so dispatch and ABI are untouched. */
+
+/* FS table names (wrappers: acquire, locked body, release).
+ * Bodies above were renamed *_locked; the table below keeps
+ * the plain names, so dispatch and ABI are untouched. */
+static int32_t do_open(uint32_t path, uint32_t flags, uint32_t c) {
+    uint32_t was_on;
+    int32_t rc;
+    fs_big_lock(&was_on);
+    rc = do_open_locked(path, flags, c);
+    fs_big_unlock(was_on);
+    return rc;
+}
+
+static int32_t do_read(uint32_t fd, uint32_t buf, uint32_t len) {
+    uint32_t was_on;
+    int32_t rc;
+    fs_big_lock(&was_on);
+    rc = do_read_locked(fd, buf, len);
+    fs_big_unlock(was_on);
+    return rc;
+}
+
+static int32_t do_write(uint32_t fd, uint32_t buf, uint32_t len) {
+    uint32_t was_on;
+    int32_t rc;
+    fs_big_lock(&was_on);
+    rc = do_write_locked(fd, buf, len);
+    fs_big_unlock(was_on);
+    return rc;
+}
+
+static int32_t do_close(uint32_t fd, uint32_t b, uint32_t c) {
+    uint32_t was_on;
+    int32_t rc;
+    fs_big_lock(&was_on);
+    rc = do_close_locked(fd, b, c);
+    fs_big_unlock(was_on);
+    return rc;
+}
+
+static int32_t do_readdir(uint32_t path, uint32_t index,
+                          uint32_t namebuf) {
+    uint32_t was_on;
+    int32_t rc;
+    fs_big_lock(&was_on);
+    rc = do_readdir_locked(path, index, namebuf);
+    fs_big_unlock(was_on);
+    return rc;
+}
+
+static int32_t do_mkdir(uint32_t path, uint32_t b, uint32_t c) {
+    uint32_t was_on;
+    int32_t rc;
+    fs_big_lock(&was_on);
+    rc = do_mkdir_locked(path, b, c);
+    fs_big_unlock(was_on);
+    return rc;
+}
+
+static int32_t do_exec(uint32_t path, uint32_t b, uint32_t c) {
+    uint32_t was_on;
+    int32_t rc;
+    fs_big_lock(&was_on);
+    rc = do_exec_locked(path, b, c);
+    fs_big_unlock(was_on);
+    return rc;
+}
+
+static int32_t do_fsck(uint32_t a, uint32_t b, uint32_t c) {
+    uint32_t was_on;
+    int32_t rc;
+    fs_big_lock(&was_on);
+    rc = do_fsck_locked(a, b, c);
+    fs_big_unlock(was_on);
+    return rc;
+}
+
+static int32_t do_chmod(uint32_t path, uint32_t mode, uint32_t c) {
+    uint32_t was_on;
+    int32_t rc;
+    fs_big_lock(&was_on);
+    rc = do_chmod_locked(path, mode, c);
+    fs_big_unlock(was_on);
+    return rc;
+}
+
+static int32_t do_unlink(uint32_t path, uint32_t b, uint32_t c) {
+    uint32_t was_on;
+    int32_t rc;
+    fs_big_lock(&was_on);
+    rc = do_unlink_locked(path, b, c);
+    fs_big_unlock(was_on);
+    return rc;
+}
+
+static int32_t do_rmdir(uint32_t path, uint32_t b, uint32_t c) {
+    uint32_t was_on;
+    int32_t rc;
+    fs_big_lock(&was_on);
+    rc = do_rmdir_locked(path, b, c);
+    fs_big_unlock(was_on);
+    return rc;
+}
+
+static int32_t do_chroot(uint32_t path, uint32_t b, uint32_t c) {
+    uint32_t was_on;
+    int32_t rc;
+    fs_big_lock(&was_on);
+    rc = do_chroot_locked(path, b, c);
+    fs_big_unlock(was_on);
+    return rc;
+}
+
 static const struct {
     uint32_t nr;
     const char *name;
@@ -1437,8 +1600,13 @@ void syscall_handler(struct syscall_frame *f) {
     f->eax = (uint32_t)(-NOVA_ENOSYS);
 }
 
+/* Thin wrappers below rename each FS handler to *_locked and
+ * re-expose the table name with acquire/release around it
+ * (explicit pair per wrapper: grep-able, single exit). */
+
 void syscall_init(void) {
     idt_set_gate(0x80, syscall_stub, 0xEEu);
+    spin_init(&g_fs_lock, "fs");
     /* Permanent hygiene: the gate must resolve to the stub. */
     {
         arch_idtr_t idtr;
@@ -2327,4 +2495,641 @@ int stats_selftest(void) {
     }
     serial_puts("STATS-OK\n");
     return NOVA_ESUCCESS;
+}
+
+/* --- Phase H filesystem concurrency stress (FSSTRESS-OK) ---
+ * Same-priority worker pair hammering the LOCKED FS syscalls
+ * through real frames on one shared scratch mapping (disjoint
+ * buffers/paths per side). Every assert is structural (sums,
+ * sizes, block purity, rc sets, refcounts, fsck) — no timing
+ * asserts. Same prio (16) keeps RR progress under the
+ * irqsave spin (holder always completes: bounded paths). */
+#define FST_NOP 0u
+#define FST_OPEN_CLOSE 1u
+#define FST_SHARED_READ 2u
+#define FST_SHARED_WRITE 3u
+#define FST_META 4u
+#define FST_GRAFT 5u
+
+static volatile uint32_t fst_a_done, fst_b_done;
+static volatile uint32_t fst_sum_a, fst_sum_b;
+static volatile int32_t fst_shared_fd;
+static volatile uint32_t fst_fd_ready;
+static volatile uint32_t fst_a_failed, fst_b_failed;
+static volatile uint32_t fst_gwant;
+static uint8_t fst_exp_a[32];
+static uint8_t fst_exp_b[32];
+static struct process *fst_proc;
+static struct addrspace *fst_as;
+static uint32_t fst_f1, fst_f2;
+
+static int32_t fst_call(uint32_t nr, uint32_t a, uint32_t b,
+                        uint32_t c) {
+    struct syscall_frame f;
+    f.ebx = a;
+    f.ecx = b;
+    f.edx = c;
+    f.eax = nr;
+    syscall_handler(&f);
+    return (int32_t)f.eax;
+}
+
+/* Borrow-per-call wrapper (Phase H lesson): the scratch mapping
+ * is borrowed for exactly one dispatch, with IF held across
+ * borrow+dispatch+restore so no switch can land mid-borrow
+ * (every switch reloads g_kernel_cr3 for kernel threads: a
+ * tick-preempted worker would otherwise resume with kernel
+ * tables and fault on its user buffers — observed as -EFAULT
+ * after ~10 ticks, i.e. the first slice expiry; ramfs phases
+ * were too fast to trip it, disk phases were not). Whole-phase
+ * borrow is therefore forbidden for concurrent workers. */
+static int32_t fst_bcall_as(struct addrspace *as, uint32_t nr,
+                            uint32_t a, uint32_t b, uint32_t c) {
+    uint32_t saved;
+    int32_t rc;
+    __asm__ volatile("cli" ::: "memory");
+    saved = arch_read_cr3();
+    arch_write_cr3(as->pd);
+    rc = fst_call(nr, a, b, c);
+    arch_write_cr3(saved);
+    __asm__ volatile("sti" ::: "memory");
+    return rc;
+}
+
+static int32_t fst_bcall(uint32_t nr, uint32_t a, uint32_t b,
+                         uint32_t c) {
+    return fst_bcall_as(fst_as, nr, a, b, c);
+}
+
+static void fst_cpy(char *dst, const char *src) {
+    uint32_t i = 0;
+    while (src[i] != 0) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+}
+
+/* path slot (page0 +side*256) and data buf (page1 +side*2048)
+ * as USER addresses for frames; workers recompute identity
+ * addresses from fst_f1/fst_f2 for direct stores. */
+static uint32_t fst_upath(uint32_t side) {
+    return USER_BASE + side * 256u;
+}
+
+static uint32_t fst_ubuf(uint32_t side) {
+    return USER_BASE + 0x1000u + side * 2048u;
+}
+
+static void fst_worker(void *arg) {
+    uint32_t combo = (uint32_t)(uintptr_t)arg;
+    uint32_t role = combo / 2u;
+    uint32_t side = combo % 2u;
+    /* NOTE: no phase-level borrow (see fst_bcall_as comment):
+     * every frame below borrows per call. */
+    volatile uint32_t *mydone = (side == 0) ? &fst_a_done
+                                            : &fst_b_done;
+    volatile uint32_t *mysum = (side == 0) ? &fst_sum_a
+                                           : &fst_sum_b;
+    volatile uint32_t *myfail = (side == 0) ? &fst_a_failed
+                                            : &fst_b_failed;
+    /* Identity addresses for direct stores; user addresses
+     * for frames (fst_bcall borrows per call). Frames are
+     * identity-mapped, so both views hit the same bytes. */
+    char *pp = (char *)(fst_f1 + side * 256u);
+    uint8_t *bb = (uint8_t *)(fst_f2 + side * 2048u);
+    uint32_t upp = fst_upath(side);
+    uint32_t ubb = fst_ubuf(side);
+    uint32_t i;
+    if (role == FST_OPEN_CLOSE) {
+        fst_cpy(pp, (side == 0) ? "/st/ax" : "/st/bx");
+        for (i = 0; i < 100u; i++) {
+            int32_t fd = fst_bcall(SYS_OPEN, upp,
+                                  FS_O_RDWR | FS_O_CREAT, 0);
+            if (fd < 0) {
+                *myfail = 1;
+                break;
+            }
+            if (fst_bcall(SYS_CLOSE, (uint32_t)fd, 0, 0) != 0) {
+                *myfail = 1;
+                break;
+            }
+        }
+    } else if (role == FST_SHARED_READ) {
+        fst_cpy(pp, "/st/pattern");
+        if (side == 0) {
+            int32_t s = fst_bcall(SYS_OPEN, upp, 0, 0);
+            fst_shared_fd = s;
+            fst_fd_ready = 1;
+            if (s < 0) {
+                *myfail = 1;
+            }
+        } else {
+            uint32_t t0 = g_ticks;
+            while (!fst_fd_ready) {
+                if (g_ticks - t0 > 8000u) {
+                    break;
+                }
+            }
+        }
+        if (fst_shared_fd >= 0) {
+            for (i = 0; i < 32u; i++) {
+                int32_t r = fst_bcall(SYS_READ,
+                                     (uint32_t)fst_shared_fd,
+                                     ubb, 256u);
+                if (r < 0) {
+                    *myfail = 1;
+                    break;
+                }
+                *mysum += (uint32_t)r;
+                if (r == 0) {
+                    break;
+                }
+            }
+        }
+        if (side == 0) {
+            uint32_t t0 = g_ticks;
+            while (!fst_b_done) {
+                if (g_ticks - t0 > 8000u) {
+                    break;
+                }
+            }
+            if (fst_shared_fd >= 0) {
+                fst_bcall(SYS_CLOSE, (uint32_t)fst_shared_fd,
+                         0, 0);
+            }
+        }
+    } else if (role == FST_SHARED_WRITE) {
+        fst_cpy(pp, "/st/atomic");
+        for (i = 0; i < 64u; i++) {
+            bb[i] = (side == 0) ? 'A' : 'B';
+        }
+        if (side == 0) {
+            int32_t s = fst_bcall(SYS_OPEN, upp, 1, 0);
+            fst_shared_fd = s;
+            fst_fd_ready = 1;
+            if (s < 0) {
+                *myfail = 1;
+            }
+        } else {
+            uint32_t t0 = g_ticks;
+            while (!fst_fd_ready) {
+                if (g_ticks - t0 > 8000u) {
+                    break;
+                }
+            }
+        }
+        if (fst_shared_fd >= 0) {
+            for (i = 0; i < 64u; i++) {
+                int32_t r = fst_bcall(SYS_WRITE,
+                                     (uint32_t)fst_shared_fd,
+                                     ubb, 64u);
+                if (r != 64) {
+                    *myfail = 1;
+                    break;
+                }
+                *mysum += (uint32_t)r;
+            }
+        }
+        if (side == 0) {
+            uint32_t t0 = g_ticks;
+            while (!fst_b_done) {
+                if (g_ticks - t0 > 8000u) {
+                    break;
+                }
+            }
+            if (fst_shared_fd >= 0) {
+                fst_bcall(SYS_CLOSE, (uint32_t)fst_shared_fd,
+                         0, 0);
+            }
+        }
+    } else if (role == FST_META) {
+        for (i = 0; i < 100u; i++) {
+            int32_t r;
+            pp[0] = '/';
+            pp[1] = 's';
+            pp[2] = 't';
+            pp[3] = '/';
+            pp[4] = 'm';
+            pp[5] = (char)('0' + (i % 8u));
+            pp[6] = 0;
+            r = fst_bcall(SYS_MKDIR, upp, 0, 0);
+            if (r != 0 && r != -NOVA_EEXIST) {
+                *myfail = 1;
+                break;
+            }
+            fst_cpy(pp, "/st/pattern");
+            r = fst_bcall(SYS_CHMOD, upp,
+                         (side == 0) ? 0644 : 0600, 0);
+            if (r != 0) {
+                *myfail = 1;
+                break;
+            }
+            pp[4] = 'm';
+            pp[5] = (char)('0' + (i % 8u));
+            pp[6] = 0;
+            r = fst_bcall(SYS_RMDIR, upp, 0, 0);
+            if (r != 0 && r != -NOVA_ENOENT) {
+                *myfail = 1;
+                break;
+            }
+            r = fst_bcall(SYS_READDIR, upp - 2u + 2u,
+                         0, ubb);
+            (void)r;
+        }
+    } else if (role == FST_GRAFT) {
+        /* Path + byte count seeded by main into this side's
+         * slot (same file both sides; want in fst_gwant). */
+        uint32_t want = fst_gwant;
+        int32_t fd, r, k;
+        for (k = 0; k < 20; k++) {
+            uint32_t got = 0;
+            fd = fst_bcall(SYS_OPEN, upp, 0, 0);
+            if (fd < 0) {
+                serial_puts("FSSTRESS-FAIL graft-open k=");
+                serial_putdec32((uint32_t)k);
+                serial_puts(" rc=");
+                serial_putdec32((uint32_t)fd);
+                serial_putc('\n');
+                *myfail = 1;
+                break;
+            }
+            r = fst_bcall(SYS_READ, (uint32_t)fd, ubb,
+                         want);
+            if (r < 0) {
+                serial_puts("FSSTRESS-FAIL graft-read k=");
+                serial_putdec32((uint32_t)k);
+                serial_puts(" side=");
+                serial_putdec32(side);
+                serial_puts(" fd=");
+                serial_putdec32((uint32_t)fd);
+                serial_puts(" rc=");
+                serial_putdec32((uint32_t)r);
+                serial_putc('\n');
+                /* TEMP-H-DIAG: driver-direct cross-check. */
+                {
+                    uint8_t db[32];
+                    uint32_t dgot = 0, dsz = 0;
+                    int disdir = 0;
+                    int drc = ext_stat("/ext/HELLO.TXT", &dsz,
+                                       &disdir);
+                    serial_puts("DIAG ext_stat rc=");
+                    serial_putdec32((uint32_t)drc);
+                    serial_puts(" size=");
+                    serial_putdec32(dsz);
+                    serial_putc('\n');
+                    drc = ext_read_file("/ext/HELLO.TXT", db,
+                                        sizeof(db), &dgot);
+                serial_puts("DIAG ext_read rc=");
+                serial_putdec32((uint32_t)drc);
+                serial_puts(" got=");
+                serial_putdec32(dgot);
+                serial_putc('\n');
+                /* TEMP-H-DIAG: dump fd table + slot state. */
+                {
+                    struct process *dp = fst_proc;
+                    struct fs_file *d0 = 0;
+                    uint32_t di;
+                    serial_puts("DIAG nfds=");
+                    for (di = 0; di < 16u; di++) {
+                        if (dp->fds[di] != 0) {
+                            serial_putdec32(di);
+                            serial_putc(',');
+                        }
+                    }
+                    serial_putc('\n');
+                    if ((uint32_t)fd < 16u) {
+                        d0 = dp->fds[(uint32_t)fd];
+                    }
+                    serial_puts("DIAG fslot=0x");
+                    serial_puthex32((uint32_t)d0);
+                    serial_putc('\n');
+                    if (d0 != 0) {
+                        serial_puts("DIAG node=0x");
+                        serial_puthex32((uint32_t)d0->node);
+                        serial_puts(" off=");
+                        serial_putdec32(d0->off);
+                        serial_puts(" r=");
+                        serial_putdec32((uint32_t)d0->readable);
+                        serial_puts(" w=");
+                        serial_putdec32((uint32_t)d0->writable);
+                        serial_puts(" own=");
+                        serial_putdec32((uint32_t)d0->owns_node);
+                        serial_puts(" sp0=");
+                        serial_putdec32((uint32_t)d0->store_path[0]);
+                        serial_putc('\n');
+                    }
+                }
+                }
+                *myfail = 1;
+                fst_bcall(SYS_CLOSE, (uint32_t)fd, 0, 0);
+                break;
+            }
+            got = (uint32_t)r;
+            if (fst_bcall(SYS_CLOSE, (uint32_t)fd, 0, 0) != 0) {
+                serial_puts("FSSTRESS-FAIL graft-close\n");
+                *myfail = 1;
+                break;
+            }
+            if (k == 0) {
+                *mysum = got;
+                for (i = 0; i < got && i < 32u; i++) {
+                    if (side == 0) {
+                        fst_exp_a[i] = bb[i];
+                    } else {
+                        fst_exp_b[i] = bb[i];
+                    }
+                }
+            } else if (got != *mysum) {
+                *myfail = 1;
+                break;
+            }
+        }
+    }
+    /* No borrow held here (per-call inside fst_bcall). */
+    *mydone = 1;
+    thread_exit(0);
+}
+
+static int fst_run_pair(uint32_t role, const char *tag) {
+    uint32_t t0 = g_ticks;
+    fst_a_done = 0;
+    fst_b_done = 0;
+    fst_sum_a = 0;
+    fst_sum_b = 0;
+    fst_a_failed = 0;
+    fst_b_failed = 0;
+    fst_shared_fd = -1;
+    fst_fd_ready = 0;
+    /* TEMP-H-DIAG single-worker hack REVERTED (two workers
+     * needed for the different-files bisect). */
+    if (thread_create(fst_proc, fst_worker,
+                      (void *)(uintptr_t)(role * 2u), 16u) == 0 ||
+        thread_create(fst_proc, fst_worker,
+                      (void *)(uintptr_t)(role * 2u + 1u),
+                      16u) == 0) {
+        serial_puts("FSSTRESS-FAIL spawn-");
+        serial_puts(tag);
+        serial_putc('\n');
+        return -1;
+    }
+    while (!fst_a_done || !fst_b_done) {
+        if (g_ticks - t0 > 8000u) {
+            serial_puts("FSSTRESS-FAIL join-");
+            serial_puts(tag);
+            serial_putc('\n');
+            return -1;
+        }
+        __asm__ volatile("hlt");
+    }
+    if (fst_a_failed || fst_b_failed) {
+        serial_puts("FSSTRESS-FAIL worker-");
+        serial_puts(tag);
+        serial_putc('\n');
+        return -1;
+    }
+    return 0;
+}
+
+static int fst_graft_check(void) {
+    uint32_t i;
+    if (fst_sum_a != fst_gwant || fst_sum_b != fst_gwant) {
+        serial_puts("FSSTRESS-FAIL graft-got\n");
+        return -1;
+    }
+    for (i = 0; i < fst_gwant && i < 32u; i++) {
+        if (fst_exp_a[i] != fst_exp_b[i]) {
+            serial_puts("FSSTRESS-FAIL graft-bytes\n");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int fs_concurrency_selftest(void) {
+    uint32_t f1, f2, t0;
+    uint32_t elapsed;
+    struct fs_node *n = 0;
+    uint8_t kbuf[1024];
+    uint32_t i, got = 0;
+    t0 = g_ticks;
+    fst_proc = process_create();
+    if (fst_proc == 0) {
+        serial_puts("FSSTRESS-FAIL alloc-proc\n");
+        return -1;
+    }
+    fst_proc->uid = 0;
+    fst_as = addrspace_create();
+    f1 = pmm_alloc_frame();
+    f2 = pmm_alloc_frame();
+    if (fst_as == 0 || f1 == 0 || f2 == 0) {
+        serial_puts("FSSTRESS-FAIL alloc-map\n");
+        return -1;
+    }
+    if (addrspace_map(fst_as, USER_BASE, f1, 1) != 0 ||
+        addrspace_map(fst_as, USER_BASE + 0x1000u, f2, 1) != 0) {
+        serial_puts("FSSTRESS-FAIL map\n");
+        goto fail;
+    }
+    fst_f1 = f1;
+    fst_f2 = f2;
+    /* Pointer battery (single-threaded): bad user buffers
+     * refuse EFAULT through the locked handlers (validation
+     * precedes fd lookup, so no open fd is needed). */
+    {
+        char *p0 = (char *)f1;
+        fst_cpy(p0, "/st");
+        if (fst_bcall(SYS_OPEN, 0, 0, 0) != -NOVA_EFAULT ||
+            fst_bcall(SYS_READ, 0, 0, 16) != -NOVA_EFAULT ||
+            fst_bcall(SYS_READ, 0, 0x1000u, 16) != -NOVA_EFAULT ||
+            fst_bcall(SYS_READ, 0, 0xFFFFFFF0u, 16) !=
+                -NOVA_EFAULT ||
+            fst_bcall(SYS_READ, 0, USER_BASE + 0x2000u,
+                      16) != -NOVA_EFAULT) {
+            serial_puts("FSSTRESS-FAIL ptr-battery\n");
+            goto fail;
+        }
+    }
+    /* Setup, single-threaded: dir + pattern file + empty files. */
+    if (fs_mkdir("/st") != 0) {
+        serial_puts("FSSTRESS-FAIL mkdir-st\n");
+        goto fail;
+    }
+    if (fs_create("/st/pattern", &n) != 0 || n == 0) {
+        serial_puts("FSSTRESS-FAIL create-pattern\n");
+        goto fail;
+    }
+    for (i = 0; i < 1024u; i++) {
+        kbuf[i] = (uint8_t)(i & 0xFFu);
+    }
+    for (i = 0; i < 8u; i++) {
+        uint32_t off = i * 1024u;
+        uint32_t k;
+        for (k = 0; k < 1024u; k++) {
+            kbuf[k] = (uint8_t)((off + k) & 0xFFu);
+        }
+        if (fs_write_node(n, off, kbuf, 1024u, &got) != 0 ||
+            got != 1024u) {
+            serial_puts("FSSTRESS-FAIL seed-pattern\n");
+            goto fail;
+        }
+    }
+    if (fs_create("/st/atomic", &n) != 0) {
+        serial_puts("FSSTRESS-FAIL create-atomic\n");
+        goto fail;
+    }
+    /* P1: open/close hammer (refcount + fd churn). */
+    if (fst_run_pair(FST_OPEN_CLOSE, "open") != 0) {
+        goto fail;
+    }
+    serial_puts("FSSTRESS phase=open done\n");
+    /* P2: shared-fd reads — byte-sum across both must equal
+     * the file size exactly (offset serialized under lock). */
+    if (fst_run_pair(FST_SHARED_READ, "read") != 0) {
+        goto fail;
+    }
+    if (fst_sum_a + fst_sum_b != 8192u) {
+        serial_puts("FSSTRESS-FAIL read-sum\n");
+        goto fail;
+    }
+    serial_puts("FSSTRESS readsum=");
+    serial_putdec32(fst_sum_a + fst_sum_b);
+    serial_putc('\n');
+    /* P3: shared-fd writes — exact size + pure 64B blocks. */
+    if (fst_run_pair(FST_SHARED_WRITE, "write") != 0) {
+        goto fail;
+    }
+    serial_puts("FSSTRESS phase=write done\n");
+    if (fst_sum_a + fst_sum_b != 8192u) {
+        serial_puts("FSSTRESS-FAIL write-sum\n");
+        goto fail;
+    }
+    if (fs_lookup("/st/atomic", &n) != 0 || n == 0 ||
+        n->size != 8192u) {
+        serial_puts("FSSTRESS-FAIL atomic-size\n");
+        goto fail;
+    }
+    for (i = 0; i < 128u; i++) {
+        uint32_t off = i * 64u;
+        uint32_t k;
+        if (fs_read_node(n, off, kbuf, 64u, &got) != 0 ||
+            got != 64u) {
+            serial_puts("FSSTRESS-FAIL atomic-read\n");
+            goto fail;
+        }
+        for (k = 1u; k < 64u; k++) {
+            if (kbuf[k] != kbuf[0] ||
+                (kbuf[0] != 'A' && kbuf[0] != 'B')) {
+                serial_puts("FSSTRESS-FAIL atomic-pure\n");
+                goto fail;
+            }
+        }
+    }
+    /* P4: metadata storm (races intended; only valid rc set). */
+    if (fst_run_pair(FST_META, "meta") != 0) {
+        goto fail;
+    }
+    serial_puts("FSSTRESS phase=meta done\n");
+    /* P5: graft concurrent reads (driver cache consistency),
+     * one round per graft (FAT 17B, EXT/NOVA 16B). */
+    {
+        char *p0 = (char *)f1;
+        char *p1 = (char *)f1 + 256u;
+        fst_cpy(p0, "/disk/HELLO.TXT");
+        fst_cpy(p1, "/disk/HELLO.TXT");
+        fst_gwant = 17u;
+        if (fst_run_pair(FST_GRAFT, "graft-fat") != 0) {
+            goto fail;
+        }
+        serial_puts("FSSTRESS phase=graft-fat done\n");
+        if (fst_graft_check() != 0) {
+            goto fail;
+        }
+        fst_cpy(p0, "/ext/HELLO.TXT");
+        fst_cpy(p1, "/ext/HELLO.TXT");
+        fst_gwant = 16u;
+        if (fst_run_pair(FST_GRAFT, "graft-ext") != 0) {
+            goto fail;
+        }
+        serial_puts("FSSTRESS phase=graft-ext done\n");
+        if (fst_graft_check() != 0) {
+            goto fail;
+        }
+        fst_cpy(p0, "/nova/HELLO.TXT");
+        fst_cpy(p1, "/nova/HELLO.TXT");
+        fst_gwant = 16u;
+        if (fst_run_pair(FST_GRAFT, "graft-nova") != 0) {
+            goto fail;
+        }
+        serial_puts("FSSTRESS phase=graft-nova done\n");
+        if (fst_graft_check() != 0) {
+            goto fail;
+        }
+    }
+    /* Post: refs drained, tree intact, fsck clean. Mode is one
+     * of the two alternating chmod values (writer order is
+     * intentionally racy; the value must still be exact). */
+    if (fs_lookup("/st/pattern", &n) != 0 || n == 0 ||
+        n->refs != 0 ||
+        (n->mode != 0644 && n->mode != 0600)) {
+        serial_puts("FSSTRESS-FAIL refs-pattern\n");
+        goto fail;
+    }
+    if (fs_lookup("/st/atomic", &n) != 0 || n == 0 ||
+        n->refs != 0) {
+        serial_puts("FSSTRESS-FAIL refs-atomic\n");
+        goto fail;
+    }
+    if (fs_unlink("/st/ax") != 0 || fs_unlink("/st/bx") != 0) {
+        serial_puts("FSSTRESS-FAIL cleanup-ab\n");
+        goto fail;
+    }
+    if (fs_unlink("/st/pattern") != 0 ||
+        fs_unlink("/st/atomic") != 0) {
+        serial_puts("FSSTRESS-FAIL cleanup-files\n");
+        goto fail;
+    }
+    for (i = 0; i < 8u; i++) {
+        char pn[8];
+        pn[0] = '/';
+        pn[1] = 's';
+        pn[2] = 't';
+        pn[3] = '/';
+        pn[4] = 'm';
+        pn[5] = (char)('0' + i);
+        pn[6] = 0;
+        fs_rmdir(pn);
+    }
+    if (fs_rmdir("/st") != 0 ||
+        fs_lookup("/st", &n) != -NOVA_ENOENT) {
+        serial_puts("FSSTRESS-FAIL cleanup-st\n");
+        goto fail;
+    }
+    serial_puts("FSSTRESS phase=cleanup done\n");
+    {
+        uint32_t c0 = g_ticks;
+        int frc = nova_fsck();
+        uint32_t dt = g_ticks - c0;
+        serial_puts("FSSTRESS fsck ticks=");
+        serial_putdec32(dt);
+        serial_putc('\n');
+        if (frc != 0) {
+            serial_puts("FSSTRESS-FAIL fsck\n");
+            goto fail;
+        }
+    }
+    elapsed = g_ticks - t0;
+    serial_puts("FSSTRESS threads=2 elapsed=");
+    serial_putdec32(elapsed);
+    serial_puts(" ticks\n");
+    pmm_free_frame(f1);
+    pmm_free_frame(f2);
+    addrspace_destroy(fst_as);
+    serial_puts("FSSTRESS-OK\n");
+    return NOVA_ESUCCESS;
+fail:
+    pmm_free_frame(f1);
+    pmm_free_frame(f2);
+    addrspace_destroy(fst_as);
+    return -1;
 }

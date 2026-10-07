@@ -152,15 +152,15 @@ W7  trace/stats disclosure surface — DEFERRED (new).
     FAULT event carries the faulting address (possibly
     a kernel address a user probed). Requirements
     recorded in Phase A report; Phase C enforces.
-W8  FS concurrent use unsound — OPEN (new, found Phase A).
-    Refcounts plain ++/--, node buffers + fd offsets
-    shared, zero locking anywhere in fs/. Safe today
-    ONLY because no two threads use FS concurrently
-    (shell single-threaded; selftests sequential).
-    Contract declared in ADR-0076: FS syscalls are
-    single-threaded-only until locking lands; Phase O
-    stress is gated on it. Not exploitable from the
-    current userspace (one reader), so OPEN-not-P0.
+W8  FS concurrent use unsound — CLOSED by Phase H
+    (ADR-0079, VFS big lock + FSSTRESS-OK). Refcounts,
+    buffers, offsets, driver caches now mutate under one
+    irqsave spinlock held per FS syscall; checks and uses
+    share each critical section (TOCTOU closed for
+    non-sleeping paths). Residual: coarse granularity
+    (not a vulnerability), direct-fs_* review rule,
+    no priority inheritance (see FILESYSTEM-CONCURRENCY
+    §22).
 ```
 
 W2 corrected 2026-10-06 vs the v0.2 audit's P1-3 wording: user

@@ -433,6 +433,11 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (sync_contention_selftest() != 0) {
         nova_panic("sync-selftest-fail");
     }
+    /* FS concurrency stress (locked syscalls, same-prio pair;
+     * scheduler + threads + disk drivers all live now). */
+    if (fs_concurrency_selftest() != 0) {
+        nova_panic("fsstress-selftest-fail");
+    }
     /* Event trace ring (emits from thread exits/sleeps/wakes
      * below; reset first for a deterministic selftest). */
     trace_init();
