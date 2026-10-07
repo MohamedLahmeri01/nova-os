@@ -32,6 +32,7 @@
 #include "net/net.h"
 #include "irq/irq.h"
 #include "input/kbd.h"
+#include "trace/trace.h"
 #include "time/time.h"
 
 #if defined(__i386__)
@@ -1293,6 +1294,56 @@ static int32_t do_stats(uint32_t out, uint32_t b, uint32_t c) {
     return copy_to_user(out, &k, sizeof(k));
 }
 
+/* Bounded trace snapshot (Phase C, ADR-0077 design C+E).
+ * World-readable by decision (all analogous counters are;
+ * projection — not scope — is the control; a capability
+ * gate is a 3-line change if policy ever requires it).
+ * Semantics: count==0 returns 0 touching nothing (not even
+ * validation); max > TRACEFETCH_MAX refuses EINVAL; empty
+ * ring returns 0; short rings return what's held (newest
+ * first in time, oldest-first in the buffer); misses of all
+ * kinds return -errno, never partial garbage. */
+static struct nova_trace_rec trace_snap[TRACEFETCH_MAX];
+
+static int32_t do_tracefetch(uint32_t buf, uint32_t max, uint32_t c) {
+    uint32_t n, take, i;
+    (void)c;
+    if (max == 0) {
+        return 0;
+    }
+    if (max > TRACEFETCH_MAX) {
+        return -NOVA_EINVAL;
+    }
+    /* Exact byte range (max*20 <= 5120: no overflow possible
+     * past the cap above; validate_usermem re-checks anyway). */
+    if (validate_usermem(buf, max * (uint32_t)sizeof(trace_snap[0]),
+                          1) != 0) {
+        return -NOVA_EFAULT;
+    }
+    /* Snapshot under IF: coherent cut, no torn set. The copy
+     * below runs IF=1 (never hold interrupt-disable across
+     * user copies). */
+    arch_cli();
+    n = trace_count();
+    take = (n < max) ? n : max;
+    for (i = 0; i < take; i++) {
+        struct trace_event e;
+        /* Cannot fail: IF-held, indices pre-validated against
+         * the count just read. */
+        trace_read(n - take + i, &e);
+        trace_project(&e, &trace_snap[i]);
+    }
+    arch_sti();
+    {
+        int rc = copy_to_user(buf, trace_snap,
+                              take * (uint32_t)sizeof(trace_snap[0]));
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return (int32_t)take;
+}
+
 typedef int32_t (*sys_fn_t)(uint32_t, uint32_t, uint32_t);
 
 static const struct {
@@ -1336,6 +1387,7 @@ static const struct {
     { SYS_WINCLOSE, "winclose", do_winclose },
     { SYS_WINCLICK, "winclick", do_winclick },
     { SYS_STATS, "stats", do_stats },
+    { SYS_TRACEFETCH, "tracefetch", do_tracefetch },
 };
 
 void syscall_handler(struct syscall_frame *f) {

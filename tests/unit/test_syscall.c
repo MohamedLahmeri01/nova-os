@@ -116,7 +116,7 @@ int main(void) {
     edge(0xC0000000u, 100, 0, -NOVA_EFAULT, "at end");
     edge(0xFFFFFFFFu, 100, 0, -NOVA_EFAULT, "top");
     edge(0xFFFFFF00u, 0x200u, 0, -NOVA_EFAULT, "wrap");
-    edge(0x80000000u, 5000, 0, -NOVA_EINVAL, "over cap");
+    edge(0x80000000u, 9000, 0, -NOVA_EINVAL, "over cap");
     edge(0x80100000u, 100, 0, -NOVA_EFAULT, "hole");
     edge(0x800FF00u, 0x200u, 0, -NOVA_EFAULT, "span into hole");
     edge(0x80200000u, 100, 0, 0, "ro read ok");
@@ -131,13 +131,13 @@ int main(void) {
     cedge(0, 0x70000000u, 100, -NOVA_EFAULT, "copy from-user addr");
     cedge(0, 0x00001000u, 100, -NOVA_EFAULT, "copy from low");
     cedge(0, 0xFFFFFF00u, 0x200u, -NOVA_EFAULT, "copy from wrap");
-    cedge(0, 0x80000000u, 5000, -NOVA_EINVAL, "copy from cap");
+    cedge(0, 0x80000000u, 9000, -NOVA_EINVAL, "copy from cap");
     cedge(0, 0x80100000u, 100, -NOVA_EFAULT, "copy from hole");
     cedge(0, 0x80300000u, 100, -NOVA_EFAULT, "copy from sup");
     cedge(0, 0x70000000u, 0, 0, "copy from empty");
     cedge(1, 0x70000000u, 100, -NOVA_EFAULT, "copy to-user addr");
     cedge(1, 0xFFFFFF00u, 0x200u, -NOVA_EFAULT, "copy to wrap");
-    cedge(1, 0x80000000u, 5000, -NOVA_EINVAL, "copy to cap");
+    cedge(1, 0x80000000u, 9000, -NOVA_EINVAL, "copy to cap");
     cedge(1, 0x80200000u, 100, -NOVA_EFAULT, "copy to ro");
     cedge(1, 0x70000000u, 0, 0, "copy to empty");
     /* NULL kernel side with nonzero length refuses before any

@@ -39,6 +39,13 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   shell harness T23 + corpus (strtoi overflow fixed),
   `CORPUS-OK 7/7`, fuzzing contract (ADR-0073).
   Suite 23/23 (T23 new).
+- v0.5 trace fetch (Phase C, ADR-0077): `SYS_TRACEFETCH`
+  (36) projected records (20B, vers/rsv/seq, FAULT->class),
+  seq per emit, snapshot-under-IF + bounded copy,
+  `TRACEFETCH-OK` proof, PERF trace block;
+  `SYSCALL_MAX_RANGE` 4096->8192 (full fetch is 5120B);
+  fixed en route: trace_read seq copy, bench eax IN+OUT
+  restore (also dispatch-floor bench). Suite 23/23.
 
 ## 0.2.0 - 2026-10-06 (second release)
 

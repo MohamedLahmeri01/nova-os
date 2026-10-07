@@ -1,17 +1,17 @@
-/* NOVA OS kernel event trace implementation (Phase 0.4-O).
- * Single static ring (256 x 12B = 3KB, .bss). The reserve-then-
- * fill order under IF-save makes emit atomic w.r.t. interrupts:
- * an IRQ between reserve and fill would observe a half-written
- * slot only if it also emitted — in which case it reserves its
- * OWN next slot (head advanced before fill), so slots never tear
- * and order stays FIFO modulo overwrite. Readers tolerate
- * overwrite (count caps at capacity; read clamps).
+/* NOVA OS kernel event trace implementation (Phase 0.4-O,
+ * seq + projection in Phase C).
+ * Single static ring (256 x 16B = 4KB, .bss). Emission holds
+ * IF across reserve + fill, so no IRQ can interleave mid-record
+ * (the old reserve-vs-IRQ scenario cannot occur). Readers
+ * tolerate overwrite (count caps at capacity; read clamps).
  */
 #include <stdint.h>
 
 #include "trace/trace.h"
 #include "serial.h"
 #include "syscall/syscall.h"
+#include "mm/addrspace.h"
+#include "mm/pmm.h"
 
 #if defined(__i386__)
 #include "../arch/x86/cpu.h"
@@ -26,6 +26,9 @@
 static struct trace_event g_ring[TRACE_N];
 static volatile uint32_t g_head;
 static volatile uint32_t g_n;
+/* Emit sequence (never reset: see header). BSP-only assignment
+ * under the emit lock; SMP era needs per-CPU seq spaces. */
+static volatile uint32_t g_seq;
 
 void trace_init(void) {
     g_head = 0;
@@ -51,6 +54,8 @@ void trace_emit(uint16_t kind, uint16_t id, uint32_t arg) {
     g_ring[i].kind = kind;
     g_ring[i].id = id;
     g_ring[i].arg = arg;
+    g_ring[i].seq = g_seq;
+    g_seq++;
     arch_irq_restore(f);
 }
 
@@ -74,6 +79,7 @@ int trace_read(uint32_t i, struct trace_event *out) {
     out->kind = g_ring[idx].kind;
     out->id = g_ring[idx].id;
     out->arg = g_ring[idx].arg;
+    out->seq = g_ring[idx].seq;
     return NOVA_ESUCCESS;
 }
 
@@ -141,4 +147,210 @@ int trace_selftest(void) {
     }
     serial_puts("TRACE-OK\n");
     return NOVA_ESUCCESS;
+}
+
+/* Fault-address projection (the one lossy field, by decision):
+ * classes reveal what kind of address faulted, never which.
+ * 0 null (<4K), 1 low/hw (<2G), 2 user, 3 supervisor. A reader
+ * learns at most that some thread probed a supervisor address
+ * — never whose, never which. */
+static uint16_t fault_class(uint32_t addr) {
+    if (addr < 0x1000u) {
+        return 0;
+    }
+    if (addr < USER_BASE) {
+        return 1;
+    }
+    if (addr < USER_END) {
+        return 2;
+    }
+    return 3;
+}
+
+void trace_project(const struct trace_event *in,
+                   struct nova_trace_rec *out) {
+    out->vers = NOVA_TRACE_VERS;
+    out->kind = in->kind;
+    out->seq = in->seq;
+    out->tick = in->tick;
+    out->id = in->id;
+    out->rsv = 0;
+    if (in->kind == TRACE_FAULT) {
+        out->arg = fault_class(in->arg);
+    } else {
+        out->arg = in->arg;
+    }
+}
+
+/* Trace-fetch ABI selftest (Phase C): real syscall frames through
+ * the real dispatch on a real scratch addrspace, read back through
+ * the identity map. Killed vectors: max==0 touches nothing (not
+ * even validation: NULL returns 0); two live marks
+ * project exactly (vers/kind/id/arg/rsv, seq +1); fault projects
+ * to class (never address); supervisor-half pointer refuses
+ * EFAULT with the scratch provably untouched; over-cap max
+ * refuses EINVAL; newest-256 window lands oldest-first with
+ * strictly +1 seqs. Two scratch frames at USER_BASE (256 recs =
+ * 5120B > one page). CR3 lent under cli, restored + destroyed
+ * after (stats precedent). */
+
+static int tracefetch_probe_user(void) {
+    struct syscall_frame f;
+    struct addrspace *as;
+    uint32_t f1, f2, saved, i, got;
+    struct nova_trace_rec *k;
+    as = addrspace_create();
+    f1 = pmm_alloc_frame();
+    f2 = pmm_alloc_frame();
+    if (as == 0 || f1 == 0 || f2 == 0) {
+        serial_puts("TRACEFETCH-FAIL alloc\n");
+        return -1;
+    }
+    if (addrspace_map(as, USER_BASE, f1, 1) != 0 ||
+        addrspace_map(as, USER_BASE + 0x1000u, f2, 1) != 0) {
+        serial_puts("TRACEFETCH-FAIL map\n");
+        goto fail;
+    }
+    k = (struct nova_trace_rec *)f1;
+    f.ecx = 0;
+    f.edx = 0;
+    /* max==0 against NULL: 0 proves validation was never
+     * touched (a validating path refuses EFAULT here). */
+    f.ebx = 0;
+    f.eax = SYS_TRACEFETCH;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != 0) {
+        serial_puts("TRACEFETCH-FAIL max0-no-mapping\n");
+        goto fail;
+    }
+    trace_reset();
+    __asm__ volatile("cli" ::: "memory");
+    saved = arch_read_cr3();
+    arch_write_cr3(as->pd);
+    {
+        uint32_t mid = USER_BASE + 8u;
+        struct nova_trace_rec *mu = (struct nova_trace_rec *)mid;
+        /* Canaries outside the write window (fetch of 2 records
+         * at mid covers frame bytes 8..47): kw[1] is bytes 4..7
+         * (before), k[3] is bytes 60..79 (past). */
+        uint32_t *kw = (uint32_t *)f1;
+        kw[1] = 0x12345678u;
+        k[3].arg = 0x9ABCDEF0u;
+        trace_emit(TRACE_MARK, 91, 0xA1u);
+        trace_emit(TRACE_MARK, 92, 0xB2u);
+        f.ebx = mid;
+        f.eax = SYS_TRACEFETCH;
+        /* NOTE: max rides in ecx (dispatch passes ebx,ecx,edx). */
+        f.ecx = 2;
+        syscall_handler(&f);
+        if ((int32_t)f.eax != 2) {
+            serial_puts("TRACEFETCH-FAIL count\n");
+            goto fail_cr3;
+        }
+        if (kw[1] != 0x12345678u || k[3].arg != 0x9ABCDEF0u ||
+            mu[0].vers != NOVA_TRACE_VERS ||
+            mu[0].kind != TRACE_MARK || mu[0].id != 91 ||
+            mu[0].arg != 0xA1u || mu[0].rsv != 0 ||
+            mu[1].kind != TRACE_MARK || mu[1].id != 92 ||
+            mu[1].arg != 0xB2u || mu[1].rsv != 0 ||
+            mu[1].seq != mu[0].seq + 1u) {
+            serial_puts("TRACEFETCH-FAIL project\n");
+            goto fail_cr3;
+        }
+    }
+    {
+        /* Bad pointer: supervisor half (never user-valid) ->
+         * EFAULT, scratch provably untouched. */
+        k[3].arg = 0xDEADu;
+        f.ebx = 0xF0000000u;
+        f.ecx = 2;
+        f.eax = SYS_TRACEFETCH;
+        syscall_handler(&f);
+        if ((int32_t)f.eax != -NOVA_EFAULT ||
+            k[3].arg != 0xDEADu) {
+            serial_puts("TRACEFETCH-FAIL badptr\n");
+            goto fail_cr3;
+        }
+    }
+    {
+        /* Over-cap max: EINVAL even against a valid pointer. */
+        f.ebx = USER_BASE;
+        f.ecx = TRACEFETCH_MAX + 1u;
+        f.eax = SYS_TRACEFETCH;
+        syscall_handler(&f);
+        if ((int32_t)f.eax != -NOVA_EINVAL) {
+            serial_puts("TRACEFETCH-FAIL overcap\n");
+            goto fail_cr3;
+        }
+    }
+    /* Newest-N: 262 marks (ids 500..761, > capacity by 6);
+     * ask 256, expect ids 506..761 oldest-first, seqs +1.
+     * Read back through the USER window (records pack across
+     * the frame boundary: struct-indexing the identity frames
+     * would misalign past record 203). */
+    for (i = 0; i < TRACEFETCH_MAX + 6u; i++) {
+        trace_emit(TRACE_MARK, (uint16_t)(500u + i), i);
+    }
+    f.ebx = USER_BASE;
+    f.ecx = TRACEFETCH_MAX;
+    f.eax = SYS_TRACEFETCH;
+    syscall_handler(&f);
+    got = (uint32_t)f.eax;
+    if (got != TRACEFETCH_MAX) {
+        serial_puts("TRACEFETCH-FAIL window-count\n");
+        goto fail_cr3;
+    }
+    {
+        struct nova_trace_rec *wu =
+            (struct nova_trace_rec *)USER_BASE;
+        for (i = 0; i < TRACEFETCH_MAX; i++) {
+            if (wu[i].id != (uint16_t)(506u + i) ||
+                wu[i].arg != 6u + i || wu[i].rsv != 0 ||
+                wu[i].vers != NOVA_TRACE_VERS) {
+                serial_puts("TRACEFETCH-FAIL window-shape\n");
+                goto fail_cr3;
+            }
+            if (i > 0 && wu[i].seq != wu[i - 1u].seq + 1u) {
+                serial_puts("TRACEFETCH-FAIL window-seq\n");
+                goto fail_cr3;
+            }
+        }
+    }
+    arch_write_cr3(saved);
+    __asm__ volatile("sti" ::: "memory");
+    {
+        /* Fault: project CR2 to class, never the address
+         * (pure function, no ring/IRQ involved). */
+        struct trace_event e;
+        e.tick = 7;
+        e.kind = TRACE_FAULT;
+        e.id = 14;
+        e.seq = 424242u;
+        e.arg = 0xDEADBEEFu;
+        trace_project(&e, &k[0]);
+        if (k[0].vers != NOVA_TRACE_VERS ||
+            k[0].kind != TRACE_FAULT || k[0].seq != 424242u ||
+            k[0].tick != 7 || k[0].id != 14 ||
+            k[0].arg != 3u || k[0].rsv != 0) {
+            serial_puts("TRACEFETCH-FAIL fault\n");
+            goto fail;
+        }
+    }
+    pmm_free_frame(f1);
+    pmm_free_frame(f2);
+    addrspace_destroy(as);
+    serial_puts("TRACEFETCH-OK\n");
+    return NOVA_ESUCCESS;
+fail_cr3:
+    arch_write_cr3(saved);
+    __asm__ volatile("sti" ::: "memory");
+fail:
+    pmm_free_frame(f1);
+    pmm_free_frame(f2);
+    addrspace_destroy(as);
+    return -1;
+}
+
+int trace_fetch_selftest(void) {
+    return tracefetch_probe_user();
 }

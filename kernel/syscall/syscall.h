@@ -47,7 +47,8 @@
 #define SYS_DNS 33u
 #define SYS_WINCLICK 34u
 #define SYS_STATS 35u
-#define SYS_MAX 35u
+#define SYS_TRACEFETCH 36u
+#define SYS_MAX 36u
 
 /* Linux-compatible errno values (negative on return). */
 #define NOVA_ESUCCESS 0
@@ -76,7 +77,12 @@
 #define NOVA_EADDRINUSE 98
 
 #define SYSCALL_MAX_PRINT 1024u
-#define SYSCALL_MAX_RANGE 4096u
+/* Per-call range cap (Phase C: 4096 -> 8192). A full trace fetch
+ * moves 256 x 20B = 5120B (two pages); the old one-page cap
+ * refused it EINVAL. Still tightly bounded: the largest single
+ * copy stays under 8KB, per-page present/user/writable checks
+ * below are unchanged. */
+#define SYSCALL_MAX_RANGE 8192u
 #define USER_END 0xC0000000u
 
 /* C argument is the pushed ESP *value* (= address of kflags), so the

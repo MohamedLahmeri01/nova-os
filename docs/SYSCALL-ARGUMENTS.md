@@ -48,6 +48,7 @@ W=single validated store, F=kernel fill (no user reread),
 33 dns       name:I str, ip_out:O u32               NUL-scan+grammar; u32   P;W     253+P;4    same as open; none
 34 winclick  x+y:I scalars                          – (hit compares)        –       –          –
 35 stats     out:O struct                           range+pages(w)          H       20         none (kernel data)
+36 tracefetch buf:O recs, max:I scalar             range+pages(w)+256cap  H       256×20     none (projected: fault->class)
 (P = NUL terminator)
 ```
 

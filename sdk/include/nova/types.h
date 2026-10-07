@@ -43,6 +43,36 @@ struct nova_sock_recv {
     uint32_t timeout;
 };
 
+/* Trace fetch record (SYS_TRACEFETCH): projected, fixed layout.
+ * 20 bytes, 4-aligned, little-endian (x86 native). Every byte
+ * has defined semantics (see below); rsv is always zero.
+ *   vers: ABI version (1). kind: 1..7 (same numbers as kernel).
+ *   seq: per-emit sequence from boot (u32 wrap documented).
+ *   tick: 100 Hz tick at emit (wraps u32, like g_ticks).
+ *   id: tid (small int) / fault vec / port / marker id.
+ *   arg: prio / timedout / deadline-tick / payload len /
+ *        FAULT CLASS (0 null, 1 low/hw, 2 user, 3 supervisor)
+ *        — never a raw address. MARK args pass through.
+ * NOT present by design: pid, cpu, pointers, CR2/CR3/SP,
+ * padding (none exists), kernel addresses of any kind. */
+#define NOVA_TRACE_VERS 1u
+#define TRACEFETCH_MAX 256u
+
+struct nova_trace_rec {
+    uint16_t vers;
+    uint16_t kind;
+    uint32_t seq;
+    uint32_t tick;
+    uint16_t id;
+    uint16_t rsv;
+    uint32_t arg;
+};
+
+_Static_assert(sizeof(struct nova_trace_rec) == 20,
+               "trace rec size");
+_Static_assert(sizeof(((struct nova_trace_rec *)0)->seq) == 4,
+               "trace rec seq width");
+
 /* Kernel counters snapshot (SYS_STATS, read-only diagnostics):
  * 20 bytes, 4-aligned. All monotonic except pmm_free. */
 struct nova_stats {

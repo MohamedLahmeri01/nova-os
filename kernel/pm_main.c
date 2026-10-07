@@ -439,6 +439,11 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (stats_selftest() != 0) {
         nova_panic("stats-selftest-fail");
     }
+    /* Trace fetch (real syscall on a scratch addrspace; resets
+     * the ring deterministically like trace_selftest above). */
+    if (trace_fetch_selftest() != 0) {
+        nova_panic("tracefetch-selftest-fail");
+    }
     /* Microbenchmarks (numbers informational; completion gated). */
     if (bench_selftest() != 0) {
         nova_panic("bench-selftest-fail");

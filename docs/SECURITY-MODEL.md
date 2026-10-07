@@ -27,7 +27,7 @@ net stack            rogue mutants gated (T14), demux bounds-checked      crafte
 ```text
 Input                 Entry point              Validation (implemented)
 userspace pointers    every syscall arg        validate_usermem: USER_BASE..USER_END,
-                                               no-wrap, ≤4096B range, per-page
+                                               no-wrap, ≤8192B range, per-page
                                                present/user(/writable); centralized
                                                copy_from/to_user (ADR-0066)
 userspace lengths     same                     capped per call (PRINT 1024, files 64KB,

@@ -257,7 +257,62 @@ int bench_selftest(void) {
         addrspace_destroy(as);
         perf_line("copy", 2000u, t1 - t0);
     }
-    /* 7. thread create/exit churn: 20 spawns, joined. */
+    /* 7. trace fetch: 200 x full-ring (256) fetch through
+     * real dispatch on a scratch mapping (ring pre-filled;
+     * measures snapshot + project + copy, the debuggability
+     * price per full read). */
+    {
+        struct addrspace *as;
+        uint32_t f1, f2, saved;
+        struct syscall_frame fr;
+        as = addrspace_create();
+        f1 = pmm_alloc_frame();
+        f2 = pmm_alloc_frame();
+        if (as == 0 || f1 == 0 || f2 == 0) {
+            serial_puts("PERF-FAIL trace-alloc\n");
+            return -1;
+        }
+        if (addrspace_map(as, USER_BASE, f1, 1) != 0 ||
+            addrspace_map(as, USER_BASE + 0x1000u, f2, 1) != 0) {
+            serial_puts("PERF-FAIL trace-map\n");
+            return -1;
+        }
+        for (uint32_t i = 0; i < TRACEFETCH_MAX; i++) {
+            trace_emit(TRACE_MARK, (uint16_t)i, i);
+        }
+        fr.ebx = USER_BASE;
+        fr.ecx = TRACEFETCH_MAX;
+        fr.edx = 0;
+        __asm__ volatile("cli" ::: "memory");
+        saved = arch_read_cr3();
+        arch_write_cr3(as->pd);
+        t0 = g_ticks;
+        for (uint32_t i = 0; i < 200u; i++) {
+            /* eax is IN+OUT (number in, result out): restore the
+             * number every iteration or the second fetch dispatches
+             * syscall#256 (ENOSYS). */
+            fr.eax = SYS_TRACEFETCH;
+            syscall_handler(&fr);
+            if ((int32_t)fr.eax != (int32_t)TRACEFETCH_MAX) {
+                arch_write_cr3(saved);
+                __asm__ volatile("sti" ::: "memory");
+                serial_puts("PERF-FAIL trace-fetch rc=0x");
+                serial_puthex32(fr.eax);
+                serial_puts(" iter=");
+                serial_putdec32(i);
+                serial_putc('\n');
+                return -1;
+            }
+        }
+        t1 = g_ticks;
+        arch_write_cr3(saved);
+        __asm__ volatile("sti" ::: "memory");
+        pmm_free_frame(f1);
+        pmm_free_frame(f2);
+        addrspace_destroy(as);
+        perf_line("trace", 200u, t1 - t0);
+    }
+    /* 8. thread create/exit churn: 20 spawns, joined. */
     {
         t0 = g_ticks;
         for (uint32_t i = 0; i < 100u; i++) {
@@ -281,7 +336,7 @@ int bench_selftest(void) {
         t1 = g_ticks;
         perf_line("thread", 100u, t1 - t0);
     }
-    /* 8. syscall dispatch floor: 100k TICKS through the real
+    /* 9. syscall dispatch floor: 100k TICKS through the real
      * handler (table walk included; boot context suffices —
      * do_ticks touches no process state). */
     {
@@ -303,6 +358,10 @@ int bench_selftest(void) {
         f.ss = 0;
         t0 = g_ticks;
         for (uint32_t i = 0; i < 1000000u; i++) {
+            /* Same eax IN+OUT discipline as the trace bench
+             * above: without this the loop times the ENOSYS
+             * refusal path, not dispatch. */
+            f.eax = SYS_TICKS;
             syscall_handler(&f);
             sink = f.eax;
         }

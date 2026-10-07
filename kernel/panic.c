@@ -98,7 +98,7 @@ __attribute__((noreturn)) void nova_panic(const char *reason) {
     /* Event tail (last 12, oldest first): what the kernel was
      * doing when it died (thread/sleep/wake/fault/divert).
      * After END-PANIC-HALT (T6 marker compatibility), before
-     * the halt loop. */
+     * the halt loop. Prints the seq so gaps are visible. */
     {
         uint32_t n = trace_count();
         uint32_t start = (n > 12u) ? n - 12u : 0u;
@@ -114,6 +114,8 @@ __attribute__((noreturn)) void nova_panic(const char *reason) {
             serial_putdec32(e.kind);
             serial_puts(" id=");
             serial_putdec32(e.id);
+            serial_puts(" seq=");
+            serial_putdec32(e.seq);
             serial_puts(" arg=0x");
             serial_puthex32(e.arg);
             serial_putc('\n');
