@@ -97,6 +97,11 @@ void net_rx_lock(void) {
 
 void net_rx_unlock(void) {
 }
+
+/* No sockets on this rig either (net.c links alone): the pool
+ * lock init is a no-op for the same single-threaded reason. */
+void sock_lock_init(void) {
+}
 /* Independent checksum oracle (different loop shape). */
 static uint16_t oracle_ck(const uint8_t *d, uint32_t n) {
     uint32_t s = 0;
@@ -415,6 +420,33 @@ int main(int argc, char **argv) {
                              &le) == -NOVA_EINVAL,
               "dhcp-wireaddr", 0, 0);
         msg[19] = 15;
+        /* NAK: explicit refusal succeeds with nothing trusted
+         * (outs untouched: still zero from the memset above...
+         * reuse the zeroed tail by re-zeroing first). */
+        memset(msg, 0, sizeof(msg));
+        msg[0] = 2;
+        msg[1] = 1;
+        msg[2] = 6;
+        msg[4] = 0x12;
+        msg[5] = 0x34;
+        msg[6] = 0x56;
+        msg[7] = 0x78;
+        memcpy(msg + 28, tmac, 6);
+        msg[236] = 99;
+        msg[237] = 130;
+        msg[238] = 83;
+        msg[239] = 99;
+        msg[240] = 53;
+        msg[241] = 1;
+        msg[242] = 6;
+        msg[243] = 255;
+        mt = 0xFFu;
+        y = 0xDEADu;
+        check(dhcp_parse_msg(msg, sizeof(msg), 0x12345678u, tmac,
+                             &mt, &y, &sv, &mk, &rt,
+                             &le) == 0 && mt == 6u &&
+                   y == 0xDEADu,
+              "dhcp-nak", mt, y);
     }
 
     /* No NIC on the host: acquisition refuses cleanly. */
@@ -522,11 +554,15 @@ int main(int argc, char **argv) {
             { "dhcp/dhcp-short.bin", 0, -NOVA_EINVAL },
             { "dhcp/dhcp-chaddr.bin", 0, -NOVA_EINVAL },
             { "dhcp/dhcp-wireaddr.bin", 0, -NOVA_EINVAL },
+            { "dhcp/dhcp-noend.bin", 0, 0 },
+            { "dhcp/dhcp-badlen.bin", 0, -NOVA_EINVAL },
             { "dns/dns-ok.bin", 1, 0 },
             { "dns/dns-id.bin", 1, -NOVA_EINVAL },
             { "dns/dns-nxdomain.bin", 1, -NOVA_ENOENT },
             { "dns/dns-trunc.bin", 1, -NOVA_EINVAL },
             { "dns/dns-cname.bin", 1, -NOVA_ENOENT },
+            { "dns/dns-ptrloop.bin", 1, -NOVA_EINVAL },
+            { "dns/dns-2ans.bin", 1, 0 },
         };
         char path[256];
         uint32_t i;
@@ -578,7 +614,7 @@ int main(int argc, char **argv) {
                 }
             }
         }
-        printf("corpus: 11 wire seeds replayed\n");
+        printf("corpus: 15 wire seeds replayed\n");
     }
 
     /* Guest selftest runs the same stack in-guest (NET-OK). */

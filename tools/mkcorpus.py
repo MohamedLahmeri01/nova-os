@@ -68,6 +68,12 @@ wbin("dhcp", "dhcp-chaddr.bin", m)
 m = bytearray(base)
 m[19] = 0
 wbin("dhcp", "dhcp-wireaddr.bin", m)
+m = bytearray(base)
+m = m[:-1]
+wbin("dhcp", "dhcp-noend.bin", m)
+m = bytearray(base)
+m[241] = 200
+wbin("dhcp", "dhcp-badlen.bin", m)
 
 q = bytes([0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
            0x00, 0x00, 0x00, 0x00, 0x07]) + b"example" + \
@@ -102,6 +108,16 @@ m = reply()
 m[29 + 2] = 0x00
 m[29 + 3] = 0x05
 wbin("dns", "dns-cname.bin", m)
+m = reply()
+m[29] = 0xC0
+m[29 + 1] = 0x1D
+wbin("dns", "dns-ptrloop.bin", m)
+second = bytes([0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01,
+                0x00, 0x00, 0x00, 0x3C, 0x00, 0x04,
+                1, 2, 3, 4])
+m = reply()
+m[7] = 0x02
+wbin("dns", "dns-2ans.bin", m + second)
 
 SH = os.path.join(OUT, "shell")
 os.makedirs(SH, exist_ok=True)
@@ -210,4 +226,15 @@ u("udp-badcksum.bin", eth_frame(ip_pkt(bytes(bad))))
 big = udp_seg(4000, 67, b"A" * 100)
 big = big[:4] + (8 + 200).to_bytes(2, "big") + big[6:]
 u("udp-huge.bin", eth_frame(ip_pkt(big)))
+u("eth-multi.bin", eth_frame(ip_pkt(good_udp),
+                             dmac=bytes([1, 0, 0x5E, 0, 0, 1])))
+u("udp-empty-u.bin", eth_frame(ip_pkt(udp_seg(4000, 67, b""))))
+opt_ip = bytearray(ip_pkt(udp_seg(4000, 67, b"Q?")))
+opt_ip[0] = 0x46
+opt_ip[20:20] = bytes([1, 2, 3, 4])
+opt_total = (24 + 8 + 2).to_bytes(2, "big")
+opt_ip[2:4] = opt_total
+opt_ip[10:12] = b"\x00\x00"
+opt_ip[10:12] = cksum(bytes(opt_ip[:24])).to_bytes(2, "big")
+u("ip-opt.bin", eth_frame(bytes(opt_ip)))
 print("corpus done")

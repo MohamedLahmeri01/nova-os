@@ -24,6 +24,7 @@
 #include "syscall/syscall.h"
 #include "trace/trace.h"
 #include "time/time.h"
+#include "sync/sync.h"
 
 #if defined(__i386__)
 #include "../arch/x86/cpu.h"
@@ -51,18 +52,46 @@ static struct sock g_socks[SOCK_MAX];
 static uint16_t g_next_ephem = SOCK_EPHEMERAL_MIN;
 static uint32_t g_sock_gen; /* 0 = never bound (skipped on wrap) */
 
+/* Socket-pool lock (Phase I): irqsave spin guarding slot
+ * leasing (used/port/gen), slot data (rx/rxlen/has/waiter),
+ * and counters. Every touch happens with IF=0 (lock-held
+ * or pump-IF=0 or park-cli), so threads and the tick pump
+ * never interleave a mutation. Nesting: pump takes
+ * net_rx_lock, then this (rx→sock, the only nesting;
+ * threads take this alone). Never held across sleep
+ * (park releases conceptually: cli only, see below). */
+static struct spinlock g_sock_lock;
+
+static void sock_lock(uint32_t *was_on) {
+    spin_lock_irqsave(&g_sock_lock,
+                      (uintptr_t)sched_current_thread(), was_on);
+}
+
+static void sock_unlock(uint32_t was_on) {
+    spin_unlock_irqrestore(&g_sock_lock, was_on);
+}
+
+void sock_lock_init(void) {
+    spin_init(&g_sock_lock, "sock");
+}
+
 static int valid_id(uint32_t id) {
     return id < SOCK_MAX && g_socks[id].used;
 }
 
-/* Fill one RX slot + wake its waiter. Wake-then-clear: a
- * newcomer between the two sees a waiter (EBUSY) instead of
- * stealing the wake. Shared by loopback delivery and the wire
- * demux (one wake path, two arrivals). Traces the divert with
- * the destination port. */
+/* Fill one RX slot + wake its waiter. Caller holds the sock
+ * lock (loopback wrapper, pump). Wake-then-clear: a newcomer
+ * between the two sees a waiter (EBUSY) instead of stealing
+ * the wake. Oversize drops without touching the slot
+ * (defense in depth: both callers already bound len; a future
+ * caller inherits refusal, never truncation). */
 static void sock_slot_deliver(uint32_t i, uint16_t dport,
                               const uint8_t *payload, uint32_t len) {
-    for (uint32_t k = 0; k < len; k++) {
+    uint32_t k;
+    if (len > SOCK_MTU_PAYLOAD) {
+        return;
+    }
+    for (k = 0; k < len; k++) {
         g_socks[i].rx[k] = payload[k];
     }
     g_socks[i].rxlen = len;
@@ -77,6 +106,9 @@ static void sock_slot_deliver(uint32_t i, uint16_t dport,
 
 int sock_open(uint16_t port) {
     uint16_t want = port;
+    uint32_t was_on;
+    int rc;
+    sock_lock(&was_on);
     if (port == 0) {
         /* Ephemeral pick: scan up from the cursor (wraps;
          * bounded: the whole range, then give up). */
@@ -100,12 +132,14 @@ int sock_open(uint16_t port) {
             }
         } while (++tries < 16384u);
         if (taken) {
-            return -NOVA_EMFILE;
+            rc = -NOVA_EMFILE;
+            goto out;
         }
     } else {
         for (uint32_t i = 0; i < SOCK_MAX; i++) {
             if (g_socks[i].used && g_socks[i].port == port) {
-                return -NOVA_EADDRINUSE;
+                rc = -NOVA_EADDRINUSE;
+                goto out;
             }
         }
     }
@@ -120,15 +154,23 @@ int sock_open(uint16_t port) {
                 ++g_sock_gen;
             }
             g_socks[i].gen = g_sock_gen;
-            return (int)i;
+            rc = (int)i;
+            goto out;
         }
     }
-    return -NOVA_EMFILE;
+    rc = -NOVA_EMFILE;
+out:
+    sock_unlock(was_on);
+    return rc;
 }
 
 int sock_close(uint32_t id) {
+    uint32_t was_on;
+    int rc;
+    sock_lock(&was_on);
     if (!valid_id(id)) {
-        return -NOVA_EBADF;
+        rc = -NOVA_EBADF;
+        goto out;
     }
     /* A parked receiver fails (EBADF on wake: slot gone). */
     if (g_socks[id].waiter != 0) {
@@ -137,17 +179,26 @@ int sock_close(uint32_t id) {
     }
     g_socks[id].used = 0;
     g_socks[id].has = 0;
-    return NOVA_ESUCCESS;
+    rc = NOVA_ESUCCESS;
+out:
+    sock_unlock(was_on);
+    return rc;
 }
 
 int sock_send(uint32_t id, uint32_t dst, uint16_t dport,
               const uint8_t *payload, uint32_t len) {
     uint16_t sport;
+    uint32_t was_on;
+    int wire = 0;
+    int rc;
+    sock_lock(&was_on);
     if (!valid_id(id)) {
-        return -NOVA_EBADF;
+        rc = -NOVA_EBADF;
+        goto out;
     }
     if ((payload == 0 && len != 0) || len > SOCK_MTU_PAYLOAD) {
-        return -NOVA_EINVAL;
+        rc = -NOVA_EINVAL;
+        goto out;
     }
     sport = g_socks[id].port;
     if (dst == SOCK_LOOPBACK || dst == net_self_ip()) {
@@ -158,26 +209,54 @@ int sock_send(uint32_t id, uint32_t dst, uint16_t dport,
                 break;
             }
         }
-        return NOVA_ESUCCESS;
+        rc = NOVA_ESUCCESS;
+        goto out;
     }
-    return net_udp_send(net_self_ip(), dst, sport, dport, payload,
-                        len);
+    /* Wire leg runs WITHOUT the pool lock (ARP + TX take
+     * milliseconds and the RX pump nests rx_lock under no
+     * pool lock held here; sport snapshot above is stable
+     * for UDP fire-and-forget even if the socket closes). */
+    wire = 1;
+out:
+    sock_unlock(was_on);
+    if (wire) {
+        return net_udp_send(net_self_ip(), dst, sport, dport,
+                            payload, len);
+    }
+    return rc;
 }
 
 /* Drain one buffered datagram (copy, clear slot). Shared by the
- * fast path, the early-boot spin, and the blocking wakeup. */
+ * fast path, the early-boot spin, and the blocking wakeup.
+ * Pool-locked (all callers either hold IF=0 already or take
+ * the lock here via irqsave — never across sleep). */
 static int recv_copy(uint32_t id, uint8_t *out, uint32_t max,
                      uint32_t *len_out) {
-    uint32_t n = g_socks[id].rxlen;
+    uint32_t was_on;
+    uint32_t n;
+    int rc;
+    sock_lock(&was_on);
+    /* Revalidate under the lock (the caller's check can race
+     * close+reopen on another thread: stale id must refuse,
+     * never copy a stranger's slot). */
+    if (!valid_id(id)) {
+        rc = -NOVA_EBADF;
+        goto out;
+    }
+    n = g_socks[id].rxlen;
     if (n > max) {
-        return -NOVA_ENOSPC;
+        rc = -NOVA_ENOSPC;
+        goto out;
     }
     for (uint32_t k = 0; k < n; k++) {
         out[k] = g_socks[id].rx[k];
     }
     *len_out = n;
     g_socks[id].has = 0;
-    return (int)n;
+    rc = (int)n;
+out:
+    sock_unlock(was_on);
+    return rc;
 }
 
 int sock_recv(uint32_t id, uint8_t *out, uint32_t max,
@@ -306,13 +385,24 @@ int sock_demux_frame(const uint8_t *frame, uint32_t len) {
     if (n > SOCK_MTU_PAYLOAD) {
         return 0; /* no slot fits: drop (never truncate) */
     }
-    for (uint32_t i = 0; i < SOCK_MAX; i++) {
-        if (g_socks[i].used && g_socks[i].port == dport) {
-            sock_slot_deliver(i, dport, frame + uoff + 8u, n);
-            return 1;
+    /* Pool scan + deliver under the sock lock. Nesting note:
+     * the tick pump calls this with net_rx_lock held, so this
+     * is rx→sock (the only nesting in-tree; threads take the
+     * sock lock alone). Host T21 stubs the lock out. */
+    {
+        uint32_t was_on;
+        int found = 0;
+        sock_lock(&was_on);
+        for (uint32_t i = 0; i < SOCK_MAX; i++) {
+            if (g_socks[i].used && g_socks[i].port == dport) {
+                sock_slot_deliver(i, dport, frame + uoff + 8u, n);
+                found = 1;
+                break;
+            }
         }
+        sock_unlock(was_on);
+        return found;
     }
-    return 0; /* no socket owns this port */
 }
 
 int sock_selftest(void) {

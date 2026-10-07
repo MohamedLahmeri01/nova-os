@@ -425,6 +425,10 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (sock_drill_selftest() != 0) {
         nova_panic("sockdrill-selftest-fail");
     }
+    /* Network stress (flood/churn/races, same scheduler). */
+    if (net_stress_selftest() != 0) {
+        nova_panic("netstress-selftest-fail");
+    }
     /* Blocking keyboard (reader threads exist now). */
     if (kbd_block_selftest() != 0) {
         nova_panic("kbdblock-selftest-fail");

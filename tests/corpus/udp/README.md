@@ -12,4 +12,7 @@ Shapes: `udp-ok` (valid, unbound port), `udp-hit`
 refused — no reassembly, ever), `ip-ttl0`, `ip-trunc`,
 `ip-badproto` (TCP=6, not UDP), `udp-short` (ulen<8),
 `udp-badcksum`, `udp-huge` (ulen exceeds frame; jumbo
-only — legal MTUs max out at exactly 1472 payload).
+only — legal MTUs max out at exactly 1472 payload),
+`eth-multi` (multicast MAC, not ours), `ip-opt`
+(IHL=6 options, valid checksum, unbound port),
+`udp-empty-u` (zero-length payload, unbound port).

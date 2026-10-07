@@ -71,6 +71,11 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   atomic writes, metadata storm, 3-graft reads, fsck),
   `docs/FILESYSTEM-CONCURRENCY.md`, ADR-0079 (supersedes
   ADR-0076 runtime contract), W8 closed. Suite 23/23.
+- v0.5 network robustness (Phase I): socket-pool lock
+  (irqsave, rx→sock nesting), deliver length guard,
+  `NETSTRESS-OK` battery (flood/churn/late/rebind/pair),
+  +7 corpus seeds, 2000-frame demux flood,
+  `docs/NETWORK-ROBUSTNESS.md`, ADR-0080. Suite 23/23.
 - v0.5 scheduler observability (Phase G): state-model +
   measurement audit (`docs/SCHEDULER-OBSERVABILITY.md`);
   added wake-resume proof + 200-query cost bound

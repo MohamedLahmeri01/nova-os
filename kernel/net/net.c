@@ -1034,7 +1034,6 @@ int dhcp_parse_msg(const uint8_t *pkt, uint32_t len, uint32_t xid,
     int have_router = 0;
     uint32_t lease = 0;
     uint32_t y;
-    /* TEMP-DIAG: stage of refusal (which check fired). */
     if (pkt == 0 || chmac == 0 || msgtype_out == 0 ||
         yiaddr_out == 0 || server_out == 0 || mask_out == 0 ||
         router_out == 0 || lease_out == 0) {
@@ -1516,6 +1515,7 @@ int net_init(void) {
     g_loop_has = 0;
     g_loop_tx = 0;
     g_loop_rx = 0;
+    sock_lock_init();
     return NOVA_ESUCCESS;
 }
 

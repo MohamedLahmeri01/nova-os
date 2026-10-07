@@ -13,6 +13,7 @@
 #include "net/net.h"
 #include "thread/thread.h"
 #include "syscall/syscall.h"
+#include "sync/sync.h"
 
 static int g_failed;
 
@@ -123,12 +124,32 @@ uint32_t virtio_irq_count(void) {
     return 0;
 }
 
-/* No IRQs on the host: subsystem lock no-ops (pump + queue
- * run single-threaded here). */
+/* No threads or IRQs on host: both subsystem locks no-op
+ * (pool + pump run single-threaded here; guest proves
+ * contention with SYNC-OK + NETSTRESS-OK). */
 void net_rx_lock(void) {
 }
 
 void net_rx_unlock(void) {
+}
+
+void spin_init(struct spinlock *l, const char *name) {
+    (void)l;
+    (void)name;
+}
+
+void spin_lock_irqsave(struct spinlock *l, uintptr_t owner,
+                       uint32_t *was_on) {
+    (void)l;
+    (void)owner;
+    if (was_on != 0) {
+        *was_on = 0;
+    }
+}
+
+void spin_unlock_irqrestore(struct spinlock *l, uint32_t was_on) {
+    (void)l;
+    (void)was_on;
 }
 
 /* No event consumer on host (no panic dump, no selftest):
@@ -331,13 +352,165 @@ int main(int argc, char **argv) {
         check(sock_recv(c, rx, sizeof(rx), 0, &got) ==
                   -NOVA_EAGAIN,
               "dmx-huge-empty", 0, 0);
+        /* Exact-full datagram (1472B payload): fits the slot
+         * exactly, delivers; small-buffer recv refuses ENOSPC
+         * with the slot retained, big-buffer recv then drains. */
+        {
+            static uint8_t full[1514];
+            static uint8_t pl[1472];
+            uint8_t ip[24];
+            uint16_t ipc;
+            int k2;
+            for (k2 = 0; k2 < 1472; k2++) {
+                pl[k2] = (uint8_t)(k2 & 0xFFu);
+            }
+            for (k2 = 0; k2 < 6; k2++) {
+                full[k2] = t_mac_self[k2];
+                full[6 + k2] = t_mac_src[k2];
+            }
+            full[12] = 0x08;
+            full[13] = 0x00;
+            {
+                uint8_t u[1480];
+                int uu;
+                u[0] = 0;
+                u[1] = 67;
+                u[2] = 0x14;
+                u[3] = 0x50;
+                u[4] = 0x05;
+                u[5] = 0xC8; /* ulen 1480 */
+                u[6] = 0;
+                u[7] = 0; /* checksum absent */
+                for (uu = 0; uu < 1472; uu++) {
+                    u[8 + uu] = pl[uu];
+                }
+                ip[0] = 0x45;
+                ip[1] = 0x00;
+                ip[2] = 0x05;
+                ip[3] = 0xDC; /* total 1500 */
+                ip[4] = 0x12;
+                ip[5] = 0x34;
+                ip[6] = 0x40;
+                ip[7] = 0x00;
+                ip[8] = 64;
+                ip[9] = 17;
+                ip[10] = 0;
+                ip[11] = 0;
+                ip[12] = 0x0A;
+                ip[13] = 0x00;
+                ip[14] = 0x02;
+                ip[15] = 0x02;
+                ip[16] = 0x0A;
+                ip[17] = 0x00;
+                ip[18] = 0x02;
+                ip[19] = 0x0F;
+                ipc = net_checksum(ip, 20);
+                ip[10] = (uint8_t)(ipc >> 8);
+                ip[11] = (uint8_t)(ipc & 0xFFu);
+                memcpy(full + 14, ip, 20);
+                memcpy(full + 34, u, 1480u);
+            }
+            check(sock_demux_frame(full, 1514u) == 1,
+                  "dmx-full", 0, 0);
+            check(sock_recv(c, rx, sizeof(rx), 0, &got) ==
+                      -NOVA_ENOSPC,
+                  "dmx-full-small", 0, 0);
+            {
+                static uint8_t drain[1472];
+                uint32_t gl = 0;
+                int rr = sock_recv(c, drain, sizeof(drain), 0,
+                                   &gl);
+                int ok = (rr == 1472 && gl == 1472u);
+                for (k2 = 0; ok && k2 < 1472; k2++) {
+                    if (drain[k2] != pl[k2]) {
+                        ok = 0;
+                    }
+                }
+                check(ok, "dmx-full-drain", gl, 0);
+            }
+        }
+        /* Empty datagram (ulen 8, zero payload): legal UDP,
+         * delivers 0 bytes; recv reports 0, not an error. */
+        fl = build_frame(f, t_mac_self, 0x0A000202u, 0x0A00020Fu,
+                         67, 5200, hello, 0);
+        check(sock_demux_frame(f, fl) == 1, "dmx-emptygram",
+              0, 0);
+        check(sock_recv(c, rx, sizeof(rx), 0, &got) == 0 &&
+                  got == 0u,
+              "dmx-emptygram-recv", got, 0);
+        /* Multicast MAC (not ours, not broadcast): dropped. */
+        {
+            static const uint8_t multi[6] = { 0x01, 0x00, 0x5E,
+                                              0x00, 0x00, 0x01 };
+            fl = build_frame(f, multi, 0x0A000202u, 0x0A00020Fu,
+                             67, 5200, hello, 5);
+            check(sock_demux_frame(f, fl) == 0, "dmx-multi",
+                  0, 0);
+        }
+        /* IHL=6 with options (24B header, valid checksum over
+         * all 24): parses the longer header, delivers. */
+        {
+            uint8_t ip6[24];
+            uint8_t fr[64];
+            uint16_t ipc6;
+            int k6;
+            fl = build_frame(f, t_mac_self, 0x0A000202u,
+                             0x0A00020Fu, 67, 5200, hello, 5);
+            for (k6 = 0; k6 < 20; k6++) {
+                ip6[k6] = f[14 + k6];
+            }
+            ip6[0] = 0x46;
+            ip6[20] = 1;
+            ip6[21] = 2;
+            ip6[22] = 3;
+            ip6[23] = 4;
+            ip6[10] = 0;
+            ip6[11] = 0;
+            ipc6 = net_checksum(ip6, 24);
+            ip6[10] = (uint8_t)(ipc6 >> 8);
+            ip6[11] = (uint8_t)(ipc6 & 0xFFu);
+            for (k6 = 0; k6 < 14; k6++) {
+                fr[k6] = f[k6];
+            }
+            for (k6 = 0; k6 < 24; k6++) {
+                fr[14 + k6] = ip6[k6];
+            }
+            for (k6 = 0; k6 < 13; k6++) {
+                fr[38 + k6] = f[34 + k6];
+            }
+            check(sock_demux_frame(fr, 51u) == 1, "dmx-ihl6",
+                  0, 0);
+            check(sock_recv(c, rx, sizeof(rx), 0, &got) == 5,
+                  "dmx-ihl6-recv", got, 0);
+        }
+        /* Zero checksum + corrupt payload: accepted (absent
+         * means unchecked, RFC 768 — checksum absence is not
+         * integrity). */
+        {
+            uint8_t bad[64];
+            uint32_t bl;
+            bl = build_frame(bad, t_mac_self, 0x0A000202u,
+                             0x0A00020Fu, 67, 5200, hello, 5);
+            bad[34 + 6] = 0;
+            bad[34 + 7] = 0;
+            bad[34 + 8] ^= 0xFFu;
+            check(sock_demux_frame(bad, bl) == 1,
+                  "dmx-nocksum", 0, 0);
+            check(sock_recv(c, rx, sizeof(rx), 0, &got) == 5,
+                  "dmx-nocksum-recv", got, 0);
+        }
+        /* Send to unbound port: fire-and-forget success. */
+        check(sock_send(c, 0x7F000001u, 5999, hello, 5) == 0,
+              "dmx-unbound-send", 0, 0);
+        /* Ethernet-only frame (len 14, no IP): dropped. */
+        check(sock_demux_frame(f, 14u) == 0, "dmx-ethonly",
+              0, 0);
         /* Unbound after close: dropped. */
         check(sock_close(c) == 0, "dmx-close", 0, 0);
         fl = build_frame(f, t_mac_self, 0x0A000202u, 0x0A00020Fu,
                          67, 5200, hello, 5);
         check(sock_demux_frame(f, fl) == 0, "dmx-gone", 0, 0);
     }
-
     /* Ring pump: one drain routes the socket frame to its slot
      * (counted) and parks the other in the pending queue, where
      * the legacy filtered recv finds it. */
@@ -388,6 +561,8 @@ int main(int argc, char **argv) {
             { "ip-trunc.bin", 0 }, { "ip-badproto.bin", 0 },
             { "udp-short.bin", 0 }, { "udp-badcksum.bin", 0 },
             { "udp-huge.bin", 0 }, { "udp-hit.bin", 1 },
+            { "eth-multi.bin", 0 }, { "ip-opt.bin", 0 },
+            { "udp-empty-u.bin", 0 },
         };
         char path[256];
         uint32_t i;
@@ -428,7 +603,48 @@ int main(int argc, char **argv) {
         /* Bound shape leaves no residue (queue untouched). */
         check(sock_recv(h, rx, sizeof(rx), 0, &got) == -NOVA_EBADF,
               "shape-drain", 0, 0);
-        printf("corpus: 10 wire shapes replayed\n");
+        printf("corpus: 13 wire shapes replayed\n");
+    }
+
+    /* Demux flood: 2000 mixed valid/malformed frames through
+     * the real demux (host has no device/IRQs: pure parser +
+     * pool discipline). Returns stay in {0,1}; pool drains
+     * clean after; slot holds a pattern-valid last hit. */
+    {
+        static uint8_t ff[64];
+        uint32_t i;
+        int h = sock_open(5200);
+        uint32_t hits = 0;
+        check(h >= 0, "flood-open", (unsigned long)h, 0);
+        for (i = 0; i < 2000u; i++) {
+            uint32_t fl;
+            uint8_t tag[2] = { 'F', (uint8_t)(i & 0xFFu) };
+            int rc;
+            if ((i & 3u) == 3u) {
+                /* Deterministic drop: total-length lies far
+                 * past the frame (checksum state untouched;
+                 * bad checksums are covered by corpus). */
+                fl = build_frame(ff, t_mac_self, 0x0A000202u,
+                                 0x0A00020Fu, 67, 5200, tag, 2);
+                ff[14 + 2] ^= 0xFFu;
+            } else {
+                fl = build_frame(ff, t_mac_self, 0x0A000202u,
+                                 0x0A00020Fu, 67, 5200, tag, 2);
+            }
+            rc = sock_demux_frame(ff, fl);
+            check(rc == 0 || rc == 1, "flood-rc", (unsigned long)rc,
+                  i);
+            hits += (uint32_t)(rc == 1);
+        }
+        check(hits == 1500u, "flood-hits", hits, 0);
+        check(sock_recv(h, rx, sizeof(rx), 0, &got) == 2 &&
+                  got == 2u && rx[0] == 'F',
+              "flood-last", got, 0);
+        check(sock_recv(h, rx, sizeof(rx), 0, &got) ==
+                  -NOVA_EAGAIN,
+              "flood-drain", 0, 0);
+        check(sock_close(h) == 0, "flood-close", 0, 0);
+        printf("flood: 2000 mixed frames, %u delivered\n", hits);
     }
 
     /* Queue flood: 6 non-socket frames, depth-4 queue keeps the
