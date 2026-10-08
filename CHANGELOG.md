@@ -95,6 +95,10 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   only input (no mouse in v0.5); banner states capture
   keys. Screenshot-proven: banner, prompt, typed `help`,
   backspace erase. No ABI/policy/timer changes.
+- CLI user manual (`docs/CLI.md`): starting a session,
+  console UI/UX, guided first session, full 33-command
+  reference with usage strings, widget-over-console note,
+  troubleshooting.
 - v0.5 scheduler observability (Phase G): state-model +
   measurement audit (`docs/SCHEDULER-OBSERVABILITY.md`);
   added wake-resume proof + 200-query cost bound
