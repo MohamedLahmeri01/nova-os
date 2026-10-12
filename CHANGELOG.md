@@ -95,6 +95,34 @@ All notable changes will be documented here. Format follows Keep a Changelog.
   only input (no mouse in v0.5); banner states capture
   keys. Screenshot-proven: banner, prompt, typed `help`,
   backspace erase. No ABI/policy/timer changes.
+- Beta prototype (Phase N): deterministic fault-test
+  marker (atomic INJECT-FAULT print; T6 gate stable),
+  session-end guidance on `exit` (no respawn — stated,
+  not built). Demo- and screenshot-proven console
+  session. No ABI/policy/timer changes.
+- Beta usability (Phase N.2): authoritative in-shell
+  command table (`help` lists all 37, `help <cmd>`
+  usage), `!!` last-command repeat (128B static,
+  no history yet), `uptime` (nominal seconds) +
+  `about` (version/target/ABI from real sources).
+  Host-test consistency proofs (table<->dispatch,
+  bare-usage, exit-once) incl. a nova_exit
+   no-return harness redirect. No ABI/policy/timer
+   changes; 23/23 ×3 + gate.
+- v0.8 persistent files (release candidate, not
+  released): reboot-persistent put/cat/rm/ls on
+  /disk (FAT32) + /nova (NOVA-FS), proven across
+  genuine poweroff+cold boot; PERSIST-OK lifecycle
+  battery (byte-exact + fsck-clean) every boot;
+  atomic GATES-OK print (same interleave class as
+  the T6 marker). VERSION 0.8.0. Durability limits
+  documented (no crash-consistency claims). Suite
+  23/23 ×3 + gate.
+- Beta V1.3 qualification: third interleave instance
+  closed (atomic INIT-OK print in spawn_init after
+  the T6 gate caught `INIT-`+banner); per-board
+  evidence in BETA-V1.3-TEST-RESULTS.md. No ABI/
+  policy/timer changes.
 - CLI user manual (`docs/CLI.md`): starting a session,
   console UI/UX, guided first session, full 33-command
   reference with usage strings, widget-over-console note,

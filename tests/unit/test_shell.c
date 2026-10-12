@@ -50,11 +50,37 @@ int32_t test_syscall_stub(uint32_t nr, uint32_t a, uint32_t b,
         }
         return (int32_t)b;
     }
+    /* Phase N.2: succeed the read-only identity/time calls
+     * with fixed values so success paths (not just error
+     * paths) are covered; everything else still fails
+     * closed. SYS_TICKS=8 -> 12345 ticks, SYS_VERSION=5
+     * -> ABI 1. */
+    if (nr == 8u) {
+        return 12345;
+    }
+    if (nr == 5u) {
+        return 1;
+    }
     return -5; /* EIO: fail closed, touch nothing */
 }
 
 #include "libs/libc/string.c"
 #include "libs/libc/stdio.c"
+
+/* nova_exit() never returns on guest (the thread dies), so
+ * nova.h spins for(;;) after the syscall — which would hang
+ * the host harness where the stub returns. Redirect the call
+ * sites in sh.c to a recording stub (test-only; production
+ * code untouched). Must precede the sh.c include. */
+static int exit_calls;
+
+static void test_nova_exit(int code) {
+    (void)code;
+    exit_calls++;
+}
+
+#define nova_exit(code) test_nova_exit(code)
+
 #include "init/sh.c"
 
 static int g_failed;
@@ -134,6 +160,103 @@ int main(int argc, char **argv) {
 
     /* Exact matrix (bounds that matter). */
     runline("", "empty");
+    /* Phase N.2 Track B: history starts empty (must run
+     * before any other storing line). */
+    {
+        uint32_t mark = cap_n;
+        runline("!!", "hist-empty");
+        check(cap_contains(mark, "no history"), "hist-empty-out",
+              0, 0);
+    }
+    /* Phase N.2 Track A: table<->dispatch consistency.
+     * Every table name must dispatch to something real
+     * (never the unknown message). */
+    {
+        static const char *names[] = {
+            "help", "echo", "mem", "ticks", "uptime", "about",
+            "rt", "ls", "cat", "mkdir", "clear", "run", "put",
+            "fsck", "ping", "ip", "dhcp", "caps", "dropcap",
+            "rlimit", "id", "setuid", "chmod", "chroot",
+            "focus", "wins", "winopen", "winclose", "wintitle",
+            "click", "rmdir", "uloop", "nslookup", "stat", "rm",
+            "!!", "exit",
+        };
+        uint32_t k;
+        for (k = 0; k < sizeof(names) / sizeof(names[0]); k++) {
+            uint32_t mark = cap_n;
+            runline(names[k], "dispatch-table");
+            check(!cap_contains(mark, "unknown: try help"),
+                  "dispatch-real", k, 0);
+        }
+        /* "exit" ran once above: the exit builtin must have
+         * attempted exit exactly once (recording stub). */
+        check(exit_calls == 1, "dispatch-exit-once", exit_calls, 0);
+    }
+    /* Phase N.2 Track A: bare names flagged bare_usage
+     * must print usage (verified per handler). */
+    {
+        static const char *bare[] = {
+            "cat", "mkdir", "run", "put", "dropcap", "setuid",
+            "chmod", "chroot", "rm", "rmdir", "uloop",
+            "nslookup", "winopen", "winclose", "click",
+            "wintitle",
+        };
+        uint32_t k;
+        for (k = 0; k < sizeof(bare) / sizeof(bare[0]); k++) {
+            uint32_t mark = cap_n;
+            runline(bare[k], "bare-usage");
+            check(cap_contains(mark, "usage:"), "bare-usage-out",
+                  k, 0);
+        }
+    }
+    /* Phase N.2 Track A: help lists every name; help <cmd>
+     * describes one; help <bogus> stays unknown. */
+    {
+        uint32_t mark = cap_n;
+        runline("help", "help-list");
+        check(cap_contains(mark, "commands:"), "help-head", 0, 0);
+        check(cap_contains(mark, "uptime"), "help-uptime", 0, 0);
+        check(cap_contains(mark, "about"), "help-about", 0, 0);
+        check(cap_contains(mark, "!!"), "help-hist", 0, 0);
+        mark = cap_n;
+        runline("help cat", "help-one");
+        check(cap_contains(mark, "usage: cat <path>"),
+              "help-one-out", 0, 0);
+        mark = cap_n;
+        runline("help stat", "help-noargs");
+        check(cap_contains(mark, "(no arguments)"),
+              "help-noargs-out", 0, 0);
+        mark = cap_n;
+        runline("help bogus", "help-bogus");
+        check(cap_contains(mark, "unknown: try help"),
+              "help-bogus-out", 0, 0);
+    }
+    /* Phase N.2 Track B: !! repeats the last stored line. */
+    {
+        uint32_t mark;
+        runline("ticks", "hist-store");
+        mark = cap_n;
+        runline("!!", "hist-repeat");
+        check(cap_contains(mark, "ticks="), "hist-repeat-out",
+              0, 0);
+    }
+    /* Phase N.2 Track C: uptime/about from real sources
+     * (stub ticks=12345, ABI=1). */
+    {
+        uint32_t mark = cap_n;
+        runline("uptime", "uptime");
+        check(cap_contains(mark, "uptime ticks=12345"),
+              "uptime-out", 0, 0);
+        check(cap_contains(mark, "~123 s @100Hz nominal"),
+              "uptime-units", 0, 0);
+        mark = cap_n;
+        runline("about", "about");
+        check(cap_contains(mark, "nova sh "), "about-name",
+              0, 0);
+        check(cap_contains(mark, "x86-32 BIOS prototype"),
+              "about-arch", 0, 0);
+        check(cap_contains(mark, "abi=1"), "about-abi", 0, 0);
+    }
     runline("   ", "spaces");
     runline("help", "help");
     {

@@ -131,7 +131,13 @@ static void spawn_init(void) {
     if (spawn_image(binary_init_bin_start, size) == 0) {
         nova_panic("init-spawn-fail");
     }
+    /* Atomic print (v0.8/V1.3): the spawned init thread can
+     * print its banner concurrently from here on; an unguarded
+     * print splits mid-line (observed "INIT-"+banner, breaking
+     * the T6 match). Same class as the GATES-OK fix. */
+    __asm__ volatile("cli" ::: "memory");
     serial_puts("INIT-OK\n");
+    __asm__ volatile("sti" ::: "memory");
 }
 
 /* Seed builtin user binaries into ramfs (Phase 7b): the hi blob
@@ -442,6 +448,11 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (fs_concurrency_selftest() != 0) {
         nova_panic("fsstress-selftest-fail");
     }
+    /* Persistent graft lifecycle (FAT + NOVA-FS live disks;
+     * same driver calls the shell put/cat/rm path uses). */
+    if (fs_persist_selftest() != 0) {
+        nova_panic("persist-selftest-fail");
+    }
     /* Event trace ring (emits from thread exits/sleeps/wakes
      * below; reset first for a deterministic selftest). */
     trace_init();
@@ -512,10 +523,21 @@ void nova_pm_main(const nova_boot_info_t *info) {
     }
     /* Formal gate summary (Phase 0.3-G): reaching here means every
      * selftest above passed (any failure panics first). Machine-
-     * greppable SYSTEM READY line for harnesses and CI. */
+     * greppable SYSTEM READY line for harnesses and CI. Atomic
+     * print (v0.8): init/shell already run concurrently here, so
+     * an unguarded print can interleave mid-line (observed:
+     * "GATES-O"+banner) and break the run-vbox match. */
+    __asm__ volatile("cli" ::: "memory");
     serial_puts("GATES-OK\n");
+    __asm__ volatile("sti" ::: "memory");
 #ifdef NOVA_FAULT_TEST
+    /* Atomic marker print: init/shell already run concurrently
+     * here, and an unguarded serial_puts can interleave mid-line
+     * (observed: "INJECT"+banner+"-FAULT"), breaking the T6 match.
+     * Test-only path (fault image); production build unaffected. */
+    __asm__ volatile("cli" ::: "memory");
     serial_puts("INJECT-FAULT\n");
+    __asm__ volatile("sti" ::: "memory");
     __asm__ volatile("ud2"); /* deliberate #UD: proves IDT->trap->panic */
     nova_panic("fault-test-unreached");
 #else

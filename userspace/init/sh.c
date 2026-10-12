@@ -36,8 +36,120 @@ static void sh_err(const char *what, int32_t rc);
 static const char *sh_nextnum(const char *p, int *val);
 static void sh_putstrn(const char *s, uint32_t max);
 
-static void sh_help(void) {
-    nova_puts("commands: help echo mem ticks rt ls cat mkdir run put fsck ping ip dhcp caps dropcap rlimit id setuid chmod chroot focus wins winopen winclose wintitle click rm rmdir uloop nslookup stat clear exit");
+#ifndef NOVA_VERSION
+#define NOVA_VERSION "dev"
+#endif
+
+/* Authoritative command table (Phase N.2, Track A):
+ * every dispatched name appears here exactly once, with
+ * the same usage text its handler prints. The host test
+ * enforces table<->dispatch consistency, so help cannot
+ * advertise what dispatch cannot do. bare_usage=1 means
+ * the bare name prints usage (verified per handler). */
+struct sh_cmdinfo {
+    const char *name;
+    const char *desc;
+    const char *usage;
+    int bare_usage;
+};
+
+static const struct sh_cmdinfo sh_cmds[] = {
+    {"help", "list commands (help <cmd> for usage)",
+     "help [cmd]", 0},
+    {"echo", "print arguments", "echo [text]", 0},
+    {"mem", "memory frames total/free", 0, 0},
+    {"ticks", "kernel tick counter", 0, 0},
+    {"uptime", "ticks and nominal seconds", 0, 0},
+    {"about", "build and ABI identity", 0, 0},
+    {"rt", "thread runtime/state/prio",
+     "usage: rt [tid]", 0},
+    {"ls", "list directory", "ls [dir]", 0},
+    {"cat", "print a file", "usage: cat <path>", 1},
+    {"mkdir", "make a directory", "usage: mkdir <path>", 1},
+    {"clear", "blank the screen", 0, 0},
+    {"run", "execute a program", "usage: run <path>", 1},
+    {"put", "write text to a file", "usage: put <path> <text>", 1},
+    {"fsck", "check the native filesystem", 0, 0},
+    {"ping", "ping (default gateway)", "usage: ping [a.b.c.d]", 0},
+    {"ip", "self/gateway/netmask", 0, 0},
+    {"dhcp", "run DHCP", 0, 0},
+    {"caps", "capability mask", 0, 0},
+    {"dropcap", "drop capabilities",
+     "usage: dropcap net|spawn|all", 1},
+    {"rlimit", "show or lower limits",
+     "usage: rlimit [nofd|fsize|frames|ticks value]", 0},
+    {"id", "uid and gid", 0, 0},
+    {"setuid", "set uid", "usage: setuid <uid>", 1},
+    {"chmod", "change mode (octal digits)",
+     "usage: chmod <mode> <path>", 1},
+    {"chroot", "narrow session view", "usage: chroot <dir>", 1},
+    {"focus", "focused window id", 0, 0},
+    {"wins", "list widget windows", 0, 0},
+    {"winopen", "open a widget window",
+     "usage: winopen x y w h color", 1},
+    {"winclose", "close a widget window",
+     "usage: winclose id", 1},
+    {"wintitle", "retitle a widget window",
+     "usage: wintitle id text", 1},
+    {"click", "click at pixels (mouseless)",
+     "usage: click x y", 1},
+    {"rmdir", "remove an empty dir", "usage: rmdir <dir>", 1},
+    {"uloop", "loopback UDP send+receive",
+     "usage: uloop <port> <text>", 1},
+    {"nslookup", "DNS A lookup", "usage: nslookup <name>", 1},
+    {"stat", "ticks/switches/irqs/threads/frames", 0, 0},
+    {"rm", "delete a file", "usage: rm <path>", 1},
+    {"!!", "repeat the last command", "!!", 0},
+    {"exit", "end the session (reset VM after)", 0, 0},
+};
+
+#define SH_NCMDS (sizeof(sh_cmds) / sizeof(sh_cmds[0]))
+
+static const struct sh_cmdinfo *sh_lookup(const char *name) {
+    uint32_t i;
+    for (i = 0; i < SH_NCMDS; i++) {
+        const char *n = sh_cmds[i].name;
+        uint32_t k = 0;
+        while (n[k] != 0 && n[k] == name[k]) {
+            k++;
+        }
+        if (n[k] == 0 && (name[k] == 0 || name[k] == ' ')) {
+            return &sh_cmds[i];
+        }
+    }
+    return 0;
+}
+
+static void sh_help(const char *line) {
+    const char *p = sh_arg(line);
+    uint32_t i;
+    if (*p == 0) {
+        /* Compact name list (fits the 25-row console:
+         * descriptions live under help <cmd>). */
+        nova_print("commands:", 9);
+        for (i = 0; i < SH_NCMDS; i++) {
+            nova_putchar(' ');
+            nova_print(sh_cmds[i].name,
+                       nova_strlen(sh_cmds[i].name));
+        }
+        nova_putchar('\n');
+        return;
+    }
+    {
+        const struct sh_cmdinfo *c = sh_lookup(p);
+        if (c == 0) {
+            nova_puts("unknown: try help");
+            return;
+        }
+        nova_print(c->name, nova_strlen(c->name));
+        nova_print(" - ", 3);
+        nova_puts(c->desc);
+        if (c->usage != 0) {
+            nova_puts(c->usage);
+        } else {
+            nova_puts("(no arguments)");
+        }
+    }
 }
 
 static void sh_putip(uint32_t ip) {
@@ -596,6 +708,40 @@ static void sh_ticks(void) {
     nova_putchar('\n');
 }
 
+static void sh_uptime(void) {
+    /* Ticks are 100 Hz nominal (TIMEBASE.md); seconds are
+     * approximate by construction, and labeled as such. */
+    int32_t t = nova_ticks();
+    uint32_t u;
+    if (t < 0) {
+        sh_err("uptime", t);
+        return;
+    }
+    u = (uint32_t)t;
+    nova_print("uptime ticks=", 13);
+    sh_putdec(u);
+    nova_print(" (~", 3);
+    sh_putdec(u / 100u);
+    nova_puts(" s @100Hz nominal)");
+}
+
+static void sh_about(void) {
+    /* Identity from real sources only: build version
+     * string, ABI number from the kernel, and the one
+     * architecture this binary targets. */
+    int32_t abi = nova_version();
+    nova_print("nova sh ", 8);
+    nova_print(NOVA_VERSION, nova_strlen(NOVA_VERSION));
+    nova_puts(" (x86-32 BIOS prototype)");
+    if (abi < 0) {
+        sh_err("abi", abi);
+        return;
+    }
+    nova_print("abi=", 4);
+    sh_putdec((uint32_t)abi);
+    nova_putchar('\n');
+}
+
 static void sh_rt(const char *line) {
     /* rt [tid]: per-thread runtime in ticks (0 = caller). */
     static struct nova_runtime r;
@@ -860,16 +1006,39 @@ static void sh_exec(const char *line) {
 }
 
 static void sh_run(const char *line) {
+    /* Repeat-last (Track B): "!!" re-runs the stored line.
+     * Stored lines are never "!!" (expansion is not stored),
+     * so this cannot recurse. */
+    static char sh_last[128];
     if (line[0] == 0) {
         return;
-    } else if (nova_strcmp(line, "help") == 0) {
-        sh_help();
+    } else if (line[0] == '!' && line[1] == '!' && line[2] == 0) {
+        if (sh_last[0] == 0) {
+            nova_puts("no history");
+            return;
+        }
+        line = sh_last;
+    } else {
+        uint32_t i = 0;
+        while (line[i] != 0 && i + 1u < sizeof(sh_last)) {
+            sh_last[i] = line[i];
+            i++;
+        }
+        sh_last[i] = 0;
+    }
+    if (nova_strncmp(line, "help", 4) == 0 &&
+               (line[4] == 0 || line[4] == ' ')) {
+        sh_help(line);
     } else if (nova_strncmp(line, "echo", 4) == 0) {
         sh_echo(line);
     } else if (nova_strcmp(line, "mem") == 0) {
         sh_mem();
     } else if (nova_strcmp(line, "ticks") == 0) {
         sh_ticks();
+    } else if (nova_strcmp(line, "uptime") == 0) {
+        sh_uptime();
+    } else if (nova_strcmp(line, "about") == 0) {
+        sh_about();
     } else if (nova_strncmp(line, "rt", 2) == 0 &&
                (line[2] == 0 || line[2] == ' ')) {
         sh_rt(line);
@@ -949,7 +1118,10 @@ static void sh_run(const char *line) {
                (line[2] == 0 || line[2] == ' ')) {
         sh_rm(line, 0);
     } else if (nova_strcmp(line, "exit") == 0) {
-        nova_puts("bye");
+        /* Ends the session: the shell thread dies here and there
+         * is no respawn in this beta (no process reaping), so the
+         * recovery instruction must print BEFORE exiting. */
+        nova_puts("bye; reset the VM for a new shell");
         nova_exit(0);
     } else {
         nova_puts("unknown: try help");

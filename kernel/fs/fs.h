@@ -151,6 +151,11 @@ int fs_rmdir(const char *path);
  * structural asserts + fsck. Prints FSSTRESS-OK. Nonzero on
  * failure (fatal: panic). */
 int fs_concurrency_selftest(void);
+/* Persistent graft lifecycle (guest, v0.8): create/write/
+ * grow/reread/delete on the live FAT + NOVA-FS disks,
+ * byte-exact, volume fsck-clean after. Prints PERSIST-OK.
+ * Nonzero on failure (fatal: panic). */
+int fs_persist_selftest(void);
 /* Deterministic ownership proof (guest selftest): denials bind,
  * triplets behave, credential dispatch refuses rises. Prints
  * PERM-OK. Nonzero on failure (fatal: panic). */

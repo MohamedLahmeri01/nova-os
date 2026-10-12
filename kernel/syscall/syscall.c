@@ -2906,14 +2906,111 @@ static int fst_graft_check(void) {
     return 0;
 }
 
+/* --- persistent graft lifecycle (v0.8): create -> write ->
+ * grow -> reread byte-exact -> delete -> gone, on the LIVE
+ * graft disks (FAT /disk + NOVA-FS /nova), then the NOVA
+ * volume still fsck-clean. These are the exact driver calls
+ * the syscall layer makes for shell put/cat/rm, so this
+ * gates the user-visible path every boot. Cross-reboot
+ * survival is proven by the V0.8 demo procedure (screenshot
+ * record: write, poweroff, cold boot, read back), which no
+ * single-boot test can assert. Prints PERSIST-OK. Lives
+ * here (not file.c): like fs_concurrency_selftest, it needs
+ * cross-driver calls that host unit tests do not link. */
+int fs_persist_selftest(void) {
+    static uint8_t pw[512], pr[1024];
+    uint32_t len = 0;
+    uint32_t size = 0;
+    int is_dir = 0;
+    uint32_t i;
+    for (i = 0; i < sizeof(pw); i++) {
+        pw[i] = (uint8_t)(i * 7u + 1u);
+    }
+    /* FAT (/disk graft volume). */
+    fat_delete("/NOVA-P.TST");
+    if (fat_create_file("/NOVA-P.TST") != 0) {
+        serial_puts("PERSIST-FAIL fat-create\n");
+        return -1;
+    }
+    if (fat_write_at("/NOVA-P.TST", 0, pw, sizeof(pw)) != 0) {
+        serial_puts("PERSIST-FAIL fat-write\n");
+        return -1;
+    }
+    if (fat_write_at("/NOVA-P.TST", sizeof(pw), pw, sizeof(pw)) !=
+        0) {
+        serial_puts("PERSIST-FAIL fat-grow\n");
+        return -1;
+    }
+    if (fat_read_file("/NOVA-P.TST", pr, sizeof(pr), &len) != 0 ||
+        len != sizeof(pr)) {
+        serial_puts("PERSIST-FAIL fat-read\n");
+        return -1;
+    }
+    for (i = 0; i < sizeof(pr); i++) {
+        if (pr[i] != pw[i % sizeof(pw)]) {
+            serial_puts("PERSIST-FAIL fat-content\n");
+            return -1;
+        }
+    }
+    if (fat_delete("/NOVA-P.TST") != 0) {
+        serial_puts("PERSIST-FAIL fat-delete\n");
+        return -1;
+    }
+    if (fat_stat("/NOVA-P.TST", &size, &is_dir) != -NOVA_ENOENT) {
+        serial_puts("PERSIST-FAIL fat-gone\n");
+        return -1;
+    }
+    /* NOVA-FS (/nova graft volume): same shape. */
+    nova_delete("/NOVA-P.TST");
+    if (nova_create_file("/NOVA-P.TST") != 0) {
+        serial_puts("PERSIST-FAIL nova-create\n");
+        return -1;
+    }
+    if (nova_write_at("/NOVA-P.TST", 0, pw, sizeof(pw)) != 0) {
+        serial_puts("PERSIST-FAIL nova-write\n");
+        return -1;
+    }
+    if (nova_write_at("/NOVA-P.TST", sizeof(pw), pw, sizeof(pw)) !=
+        0) {
+        serial_puts("PERSIST-FAIL nova-grow\n");
+        return -1;
+    }
+    len = 0;
+    if (nova_read_file("/NOVA-P.TST", pr, sizeof(pr), &len) != 0 ||
+        len != sizeof(pr)) {
+        serial_puts("PERSIST-FAIL nova-read\n");
+        return -1;
+    }
+    for (i = 0; i < sizeof(pr); i++) {
+        if (pr[i] != pw[i % sizeof(pw)]) {
+            serial_puts("PERSIST-FAIL nova-content\n");
+            return -1;
+        }
+    }
+    if (nova_delete("/NOVA-P.TST") != 0) {
+        serial_puts("PERSIST-FAIL nova-delete\n");
+        return -1;
+    }
+    if (nova_stat("/NOVA-P.TST", &size, &is_dir) != -NOVA_ENOENT) {
+        serial_puts("PERSIST-FAIL nova-gone\n");
+        return -1;
+    }
+    /* Volume still clean after the churn. */
+    if (nova_fsck() != 0) {
+        serial_puts("PERSIST-FAIL fsck\n");
+        return -1;
+    }
+    serial_puts("PERSIST-OK\n");
+    return NOVA_ESUCCESS;
+}
+
 int fs_concurrency_selftest(void) {
     uint32_t f1, f2, t0;
     uint32_t elapsed;
     struct fs_node *n = 0;
     uint8_t kbuf[1024];
     uint32_t i, got = 0;
-    t0 = g_ticks;
-    fst_proc = process_create();
+    t0 = g_ticks;    fst_proc = process_create();
     if (fst_proc == 0) {
         serial_puts("FSSTRESS-FAIL alloc-proc\n");
         return -1;

@@ -33,6 +33,12 @@ mouse could do here is done with typed commands instead
 - Prompt is `> ` with an underline cursor. What you type
   echoes as you type it.
 - Enter runs the line. Backspace erases one char.
+- `help` lists every command; `help <cmd>` shows what
+  it does plus its exact usage line.
+- `!!` repeats the last command (`no history` if none
+  yet). No arrow-key history: extended scancodes are
+  dropped by the keyboard driver, so history is
+  explicit, not cursor-driven.
 - Lines wrap at column 40 mid-word; long output (e.g.
   `help`) wraps onto several rows — that is normal.
 - The screen scrolls (oldest rows fall off the top).
@@ -80,16 +86,26 @@ pmm_free=...
 System / help:
 
 | Command | What it does | Example |
-| help | lists every command | `help` |
+| help | lists every command (`help <cmd>` for usage) | `help`, `help cat` |
 | echo | prints its arguments | `echo hello` |
 | clear | blanks the screen | `clear` |
 | ticks | kernel tick counter | `ticks` |
+| uptime | ticks + nominal seconds | `uptime` |
+| about | build version, target, ABI number | `about` |
+| !! | repeat the last command | `!!` |
 | mem | total + free frames (`frames total=… free=…`) | `mem` |
 | stat | ticks, switches, irqs, threads, free frames | `stat` |
 | rt [tid] | thread runtime ticks, state, prio (own tid default) | `rt` |
-| exit | ends the shell session | `exit` |
+| `exit` | ends the session (no respawn: reset the VM) | `exit` |
 
 Files (paths absolute, `/` is the ramfs root):
+
+`/disk/…` (FAT32) and `/nova/…` (NOVA-FS) are real
+disks: files written there survive reboot
+(`put` → poweroff → cold boot → `cat` reads them
+back). `/` and `/test` are ramfs (volatile).
+64 KB per file. No mid-write power-loss promises
+(see V0.8-SCOPE.md durability contract).
 
 | Command | What it does | Example |
 | ls [dir] | list names, `/` default | `ls /test` |
@@ -148,3 +164,6 @@ the console — run `clear` afterwards):
   construction; report both if they ever disagree.
 - Colored rectangles over my text: a widget command
   painted the framebuffer. Run `clear`.
+- After `exit` the prompt never returns: expected —
+  the shell has no respawn in this beta. Reset the VM
+  (Machine → Reset or power-cycle) for a new shell.
