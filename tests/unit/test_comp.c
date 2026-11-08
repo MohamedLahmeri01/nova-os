@@ -207,6 +207,29 @@ int main(void) {
     /* Guest selftest runs the same stack in-guest (COMP-OK). */
     check(comp_selftest() == 0, "selftest", 0, 0);
 
+    /* P2: real compositor, stub VRAM; rejected changes are atomic. */
+    {
+        struct nova_device_profile p = {
+            NOVA_DEVICE_HANDHELD, NOVA_INPUT_GAMEPAD | NOVA_INPUT_TOUCH,
+            FB_W, FB_H
+        };
+        check(comp_ui_mode() == NOVA_UI_DESKTOP, "profile-default", 0, 0);
+        check(comp_configure_profile(&p) == 0, "profile-set", 0, 0);
+        check(comp_ui_mode() == NOVA_UI_CONTROLLER, "controller", 0, 0);
+        comp_present();
+        check(fb_get(310,190) == FB_DARKGRAY, "no-cursor", fb_get(310,190), 0);
+        p.width_px++;
+        check(comp_configure_profile(&p) == -NOVA_EINVAL, "bad-dims", 0, 0);
+        check(comp_ui_mode() == NOVA_UI_CONTROLLER, "rollback", 0, 0);
+        p.width_px = FB_W; p.device_class = NOVA_DEVICE_PHONE;
+        p.input_caps = NOVA_INPUT_TOUCH;
+        check(comp_configure_profile(&p) == 0, "phone-set", 0, 0);
+        check(comp_ui_mode() == NOVA_UI_TOUCH, "touch", 0, 0);
+        p.device_class = NOVA_DEVICE_DESKTOP;
+        p.input_caps = NOVA_INPUT_KEYBOARD | NOVA_INPUT_POINTER;
+        check(comp_configure_profile(&p) == 0, "restore", 0, 0);
+        check(comp_ui_mode() == NOVA_UI_DESKTOP, "desktop", 0, 0);
+    }
     if (g_failed) {
         printf("VERDICT: compositor BROKEN\n");
         return 1;
