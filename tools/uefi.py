@@ -12,9 +12,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "build" / "uefi"
-SOURCES = [ROOT / "boot" / "uefi" / "entry.c",
-           ROOT / "kernel" / "arch" / "x86_64" / "early.c"]
-MARKER = b"NOVA-KERNEL-X64-ENTRY-OK"
+SOURCES = [ROOT / "boot" / "uefi" / "entry.c"]
+MARKER = b"NOVA-UEFI-ELF-LOAD-OK"
 
 def require(name):
     executable = shutil.which(name)
@@ -84,9 +83,10 @@ def run_qemu(esp, firmware, vars_template, timeout):
     except subprocess.TimeoutExpired as e:
         serial = (e.stdout or b"") + (e.stderr or b"")
     (OUT / "qemu-serial.log").write_bytes(serial)
-    if MARKER not in serial or b"NOVA-UEFI-X64-ENTRY-OK" not in serial:
+    if (MARKER not in serial or b"NOVA-UEFI-X64-ENTRY-OK" not in serial
+            or b"NOVA-KERNEL-ELF64-ENTRY-OK" not in serial):
         raise RuntimeError("QEMU marker not observed; see build/uefi/qemu-serial.log")
-    print("UEFI-QEMU-KERNEL-ENTRY-OK (marker verified in serial output)")
+    print("UEFI-QEMU-ELF64-KERNEL-ENTRY-OK (marker verified in serial output)")
 
 def main():
     ap = argparse.ArgumentParser()
@@ -98,7 +98,11 @@ def main():
     ap.add_argument("--timeout", type=int, default=25)
     a = ap.parse_args()
     try:
+        # Build the standalone kernel before the loader; the loader itself
+        # contains no kernel code and the disk builder embeds both files.
+        subprocess.run([sys.executable, str(ROOT / "tools" / "kernel64.py")], check=True)
         esp = build()
+        shutil.copyfile(OUT / "nova-kernel-x64.elf", esp / "nova-kernel-x64.elf")
         if a.action == "test-qemu":
             if not a.ovmf:
                 raise RuntimeError("--ovmf is required for test-qemu")
