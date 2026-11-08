@@ -12,6 +12,7 @@
 #include "serial.h"
 #include "drivers/fb.h"
 #include "gui/comp.h"
+#include "platform/device_profile.h"
 #include "gui/widget.h"
 #include "input/mouse.h"
 #include "syscall/syscall.h"
@@ -26,6 +27,20 @@ struct comp_win {
 
 static struct comp_win g_wins[COMP_MAXWIN];
 static int g_focus = -1;
+/* Default remains the legacy x86 VM; this is UI policy, not probing. */
+static struct nova_device_profile g_profile = {
+    NOVA_DEVICE_DESKTOP, NOVA_INPUT_KEYBOARD | NOVA_INPUT_POINTER,
+    FB_W, FB_H
+};
+int comp_configure_profile(const struct nova_device_profile *p) {
+    if (nova_profile_validate(p) != 0 ||
+        p->width_px != FB_W || p->height_px != FB_H)
+        return -NOVA_EINVAL;
+    g_profile = *p;
+    return NOVA_ESUCCESS;
+}
+int comp_ui_mode(void) { return nova_profile_ui_mode(&g_profile); }
+
 
 static int valid_id(uint32_t id) {
     return id < COMP_MAXWIN && g_wins[id].used;
@@ -200,14 +215,20 @@ void comp_present(void) {
     /* Desktop bar, always on top (Phase 12d): identity left,
      * focused title right of it (black on... white on black). */
     fb_rect(0, 0, FB_W, COMP_BAR_H, FB_BLACK);
-    fb_text(4, 2, "NOVA OS", FB_WHITE);
+    if (comp_ui_mode() == NOVA_UI_CONTROLLER)
+        fb_text(4, 2, "NOVA GAME", FB_WHITE);
+    else if (comp_ui_mode() == NOVA_UI_TOUCH)
+        fb_text(4, 2, "NOVA TOUCH", FB_WHITE);
+    else
+        fb_text(4, 2, "NOVA OS", FB_WHITE);
     if (g_focus >= 0 && g_wins[g_focus].used &&
         g_wins[g_focus].title[0] != 0) {
         fb_text(70, 2, g_wins[g_focus].title, FB_WHITE);
     }
     /* Cursor last of all (nothing covers the pointer), and only
      * when hardware proved itself (else no IRQ ever moves it). */
-    if (mouse_present() != 0) {
+    if ((g_profile.input_caps & NOVA_INPUT_POINTER) != 0 &&
+        mouse_present() != 0) {
         mouse_getpos(&mx, &my);
         fb_rect(mx, my, 5, 5, FB_BLACK);
         fb_rect(mx + 1u, my + 1u, 3, 3, FB_WHITE);

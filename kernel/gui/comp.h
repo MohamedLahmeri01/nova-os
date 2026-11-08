@@ -12,7 +12,11 @@
 #include <stdint.h>
 
 #include "nova/types.h"
+#include "platform/device_profile.h"
 
+/* Explicit software profile; framebuffer size unchanged, no drivers added. */
+int comp_configure_profile(const struct nova_device_profile *p);
+int comp_ui_mode(void);
 #define COMP_MAXWIN 8u
 #define COMP_TITLE_H 12u
 /* Desktop bar (Phase 12d): persistent top strip, painted last
