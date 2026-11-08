@@ -24,7 +24,7 @@ Avoid unreviewed execution of phone flashing, bootloader unlocking, repartitioni
 ## Milestones / exit gates
 
 1. **P1: Device profile policy (this PR).** Independent, freestanding C header; host assertions; no kernel integration, no boot regression claim.
-2. **P2: Integration.** Connect a read-only, platform-supplied profile to UI policy via a versioned API; verify existing x86 VM has identical serial traces and existing guest suite remains green.
+2. **P2: Compositor integration (implemented, verification pending).** Software-supplied profiles select desktop/controller/touch chrome and cursor policy on the existing 320×200 compositor. Existing x86 VM default stays desktop; execute existing VM suite and compare traces before marking complete.
 3. **P3: x86-64 UEFI in QEMU.** Boot and serial markers, exception/MMU tests, page permissions, no reliance on BIOS; maintain x86-32 fixture in CI.
 4. **P4: PC drivers.** Enumerate ACPI/PCI, implement USB HID and safe framebuffer backend on named reference hardware; independent CI and device test logs.
 5. **P5: Handheld.** One named, recoverable device with gamepad/touch input, rotation and battery monitoring, then UI integration; no claims about commercial game compatibility.
@@ -39,3 +39,7 @@ gcc -std=c11 -Wall -Wextra -Werror -pedantic -I. tests/unit/test_device_profile.
 ```
 
 This is a *host-only* test (exit code 0 = pass). It does not replace `python tools/nova.py test` and is intentionally excluded from guest build until P2 has integration evidence.
+
+## P2 API boundary
+
+`comp_configure_profile()` snapshots a validated software-supplied profile, refusing non-320×200 geometry without mutation. `comp_ui_mode()` selects rendering policy. No actual touch/gamepad drivers, new syscall, device detection, or phone boot support are implemented.
