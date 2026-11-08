@@ -55,16 +55,25 @@ def build():
     shutil.copyfile(efi, esp / "BOOTX64.EFI")
     return esp.parent.parent
 
-def run_qemu(esp, firmware, timeout):
+def run_qemu(esp, firmware, vars_template, timeout):
     qemu = require("qemu-system-x86_64")
     if not firmware.exists() or not firmware.is_file():
         raise RuntimeError("OVMF firmware file not found")
     # Read-only virtual FAT drive, no host block device exposed.
     cmd = [qemu, "-machine", "q35", "-m", "512M", "-smp", "2",
            "-nodefaults", "-nographic", "-monitor", "none",
-           "-serial", "stdio", "-no-reboot", "-net", "none",
-           "-drive", f"if=pflash,format=raw,readonly=on,file={firmware}",
-           "-drive", f"format=raw,media=disk,readonly=on,file=fat:ro:{esp}"]
+           "-serial", "stdio", "-no-reboot", "-net", "none"]
+    if vars_template is None:
+        # Unified OVMF.fd ROM with internal variable storage.
+        cmd += ["-bios", str(firmware)]
+    else:
+        if not vars_template.is_file():
+            raise RuntimeError("OVMF_VARS template not found")
+        vars_copy = OUT / "OVMF_VARS.test.fd"
+        shutil.copyfile(vars_template, vars_copy)
+        cmd += ["-drive", f"if=pflash,format=raw,readonly=on,file={firmware}",
+                "-drive", f"if=pflash,format=raw,file={vars_copy}"]
+    cmd += ["-drive", f"format=raw,media=disk,readonly=on,file=fat:ro:{esp}"]
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=timeout)
         serial = result.stdout + result.stderr
@@ -80,6 +89,8 @@ def main():
     ap.add_argument("action", choices=["build", "test-qemu"])
     ap.add_argument("--ovmf", type=pathlib.Path,
                     help="path to a read-only OVMF_CODE.fd (test-qemu)")
+    ap.add_argument("--ovmf-vars", type=pathlib.Path,
+                    help="OVMF_VARS template for split CODE/VARS mode")
     ap.add_argument("--timeout", type=int, default=25)
     a = ap.parse_args()
     try:
@@ -89,7 +100,9 @@ def main():
                 raise RuntimeError("--ovmf is required for test-qemu")
             if a.timeout < 1 or a.timeout > 120:
                 raise RuntimeError("timeout must be 1..120 seconds")
-            run_qemu(esp, a.ovmf.resolve(), a.timeout)
+            run_qemu(esp, a.ovmf.resolve(),
+                     a.ovmf_vars.resolve() if a.ovmf_vars else None,
+                     a.timeout)
     except (RuntimeError, OSError, subprocess.CalledProcessError) as e:
         print(f"[FAIL] {e}", file=sys.stderr)
         return 1
