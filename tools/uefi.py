@@ -102,7 +102,7 @@ def main():
         # contains no kernel code and the disk builder embeds both files.
         subprocess.run([sys.executable, str(ROOT / "tools" / "kernel64.py")], check=True)
         esp = build()
-        shutil.copyfile(OUT / "nova-kernel-x64.elf", esp / "nova-kernel-x64.elf")
+        shutil.copyfile(OUT / "nova-kernel-x64.elf", esp / "EFI" / "BOOT" / "NOVAKERN.ELF")
         if a.action == "test-qemu":
             if not a.ovmf:
                 raise RuntimeError("--ovmf is required for test-qemu")
