@@ -9,6 +9,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1] if Path(__file__).parent.name == 'tools' else Path.cwd()
 EFI = ROOT / 'build' / 'uefi' / 'esp' / 'EFI' / 'BOOT' / 'BOOTX64.EFI'
+KERNEL = ROOT / 'build' / 'uefi' / 'nova-kernel-x64.elf'
 OUT = ROOT / 'build' / 'uefi' / 'nova-uefi-fat32.img'
 SECTOR = 512
 DISK_SECTORS = 262144  # 128 MiB
@@ -33,6 +34,9 @@ def entry(name, attr, start_cluster, size=0):
 
 def main():
     payload = EFI.read_bytes()
+    kernel = KERNEL.read_bytes()
+    if not kernel.startswith(b'\x7fELF') or len(kernel) > 1024*1024:
+        raise ValueError('kernel ELF missing or invalid; run python tools/uefi.py build')
     if not payload.startswith(b'MZ') or not payload or len(payload) > 16*1024*1024:
         raise ValueError('BOOTX64.EFI missing, invalid or too large; run python tools/uefi.py build')
     fat_sectors = 1
@@ -45,7 +49,8 @@ def main():
     if not (65525 <= clusters < 0x0ffffff5):
         raise ValueError('FAT32 cluster count unsupported')
     file_clusters = math.ceil(len(payload)/SECTOR)
-    if 5 + file_clusters >= clusters:
+    kernel_clusters = math.ceil(len(kernel)/SECTOR)
+    if 5 + file_clusters + kernel_clusters >= clusters:
         raise ValueError('EFI too large for partition')
     OUT.parent.mkdir(parents=True, exist_ok=True)
     with OUT.open('wb') as f:
@@ -92,8 +97,8 @@ def main():
         fsinfo = bytearray(SECTOR)
         pack_at(fsinfo, 0, '<I', 0x41615252)
         pack_at(fsinfo, 484, '<I', 0x61417272)
-        pack_at(fsinfo, 488, '<I', clusters - 3 - file_clusters)
-        pack_at(fsinfo, 492, '<I', 5 + file_clusters)
+        pack_at(fsinfo, 488, '<I', clusters - 3 - file_clusters - kernel_clusters)
+        pack_at(fsinfo, 492, '<I', 5 + file_clusters + kernel_clusters)
         pack_at(fsinfo, 508, '<I', 0xAA550000)
         for sector in (1, 7):
             f.seek((PART_START + sector)*SECTOR); f.write(fsinfo)
@@ -104,6 +109,9 @@ def main():
         for c in (2, 3, 4): mark(c, 0x0fffffff)
         for i in range(file_clusters):
             mark(5+i, 5+i+1 if i != file_clusters-1 else 0x0fffffff)
+        kernel_start = 5 + file_clusters
+        for i in range(kernel_clusters):
+            mark(kernel_start+i, kernel_start+i+1 if i != kernel_clusters-1 else 0x0fffffff)
         for i in range(FATS):
             f.seek((PART_START + RESERVED + i*fat_sectors)*SECTOR)
             f.write(fat)
@@ -113,10 +121,12 @@ def main():
             f.write(bytes(value).ljust(SECTOR, b'\0'))
         cluster(2, entry(b'EFI        ', 0x10, 3))
         cluster(3, entry(b'.          ', 0x10, 3) + entry(b'..         ', 0x10, 2) + entry(b'BOOT       ', 0x10, 4))
-        cluster(4, entry(b'.          ', 0x10, 4) + entry(b'..         ', 0x10, 3) + entry(b'BOOTX64 EFI', 0x20, 5, len(payload)))
+        cluster(4, entry(b'.          ', 0x10, 4) + entry(b'..         ', 0x10, 3) + entry(b'BOOTX64 EFI', 0x20, 5, len(payload)) + entry(b'NOVAKERNELF', 0x20, kernel_start, len(kernel)))
         for i in range(file_clusters):
             cluster(5+i, payload[i*SECTOR:(i+1)*SECTOR])
-    print(f'FAT32-UEFI-IMAGE-OK {OUT} ({OUT.stat().st_size} bytes, {file_clusters} EFI clusters)')
+        for i in range(kernel_clusters):
+            cluster(kernel_start+i, kernel[i*SECTOR:(i+1)*SECTOR])
+    print(f'FAT32-UEFI-IMAGE-OK {OUT} ({OUT.stat().st_size} bytes, {file_clusters} EFI clusters, {kernel_clusters} ELF clusters)')
 
 if __name__ == '__main__':
     try: main()
