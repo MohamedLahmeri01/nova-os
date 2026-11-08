@@ -117,11 +117,19 @@ static int load_kernel(struct boot*b,uint64_t size,uint64_t*entry){
  return 1;
 }
 /* Early ELF entry uses SysV x86-64 ABI; no parameters. Stack aligned for call. */
-static void ABI jump_kernel(uint64_t address) __attribute__((noreturn));
-static void ABI jump_kernel(uint64_t address){
+static void ABI jump_kernel(uint64_t address,uint64_t bytes,uint64_t stride) __attribute__((noreturn));
+static void ABI jump_kernel(uint64_t address,uint64_t bytes,uint64_t stride){
  uintptr_t top=(uintptr_t)(stack+sizeof(stack));
- __asm__ volatile("movq %0,%%rsp\n\tandq $-16,%%rsp\n\tcall *%1\n\tud2"
-                  ::"r"(top),"r"(address):"memory");
+ /* SysV ELF kernel: RDI=map pointer, RSI=bytes, RDX=descriptor stride.
+  * Firmware services have ended; map is persistent loader-owned storage.
+  * Place target in R11 to avoid accidental register conflicts.
+  */
+ __asm__ volatile("movq %0,%%rsp\n\tandq $-16,%%rsp\n\t"
+                  "movq %1,%%r11\n\tmovq %2,%%rdi\n\t"
+                  "movq %3,%%rsi\n\tmovq %4,%%rdx\n\t"
+                  "call *%%r11\n\tud2"
+                  ::"r"(top),"r"(address),"r"((uintptr_t)mmap),"r"(bytes),"r"(stride)
+                  :"r11","rdi","rsi","rdx","memory");
  __builtin_unreachable();
 }
 status_t ABI efi_main(handle_t image,struct system*system){
@@ -144,7 +152,7 @@ status_t ABI efi_main(handle_t image,struct system*system){
    say("NOVA-UEFI-MAP-FAIL\r\n");return ERR(1);
   }
   s=b->exit(image,key);
-  if(!s)jump_kernel(entry);
+  if(!s)jump_kernel(entry,length,stride);
   if(s!=ERR(2)){say("NOVA-UEFI-EXIT-FAIL\r\n");return s;}
  }
  say("NOVA-UEFI-EXIT-RETRIES-EXHAUSTED\r\n");return ERR(1);
