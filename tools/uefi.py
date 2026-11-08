@@ -53,7 +53,7 @@ def build():
     esp = OUT / "esp" / "EFI" / "BOOT"
     esp.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(efi, esp / "BOOTX64.EFI")
-    return esp.parent.parent.parent
+    return esp.parent.parent
 
 def run_qemu(esp, firmware, timeout):
     qemu = require("qemu-system-x86_64")
