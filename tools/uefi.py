@@ -12,8 +12,9 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "build" / "uefi"
-SOURCE = ROOT / "boot" / "uefi" / "entry.c"
-MARKER = b"NOVA-UEFI-X64-ENTRY-OK"
+SOURCES = [ROOT / "boot" / "uefi" / "entry.c",
+           ROOT / "kernel" / "arch" / "x86_64" / "early.c"]
+MARKER = b"NOVA-KERNEL-X64-ENTRY-OK"
 
 def require(name):
     executable = shutil.which(name)
@@ -24,17 +25,20 @@ def require(name):
 def build():
     clang, linker = require("clang"), require("lld-link")
     OUT.mkdir(parents=True, exist_ok=True)
-    obj = OUT / "entry.obj"
+    objs = []
     efi = OUT / "BOOTX64.EFI"
-    subprocess.run([clang, "-target", "x86_64-pc-windows-msvc",
-                    "-ffreestanding", "-fshort-wchar", "-fno-stack-protector",
-                    "-fno-builtin", "-Wall", "-Wextra", "-Werror",
-                    "-std=c11", "-O2", "-c", str(SOURCE), "-o", str(obj)],
-                   check=True)
+    for source in SOURCES:
+        obj = OUT / (source.stem + ".obj")
+        subprocess.run([clang, "-target", "x86_64-pc-windows-msvc",
+                        "-ffreestanding", "-fshort-wchar", "-fno-stack-protector",
+                        "-fno-builtin", "-Wall", "-Wextra", "-Werror",
+                        "-std=c11", "-O2", "-c", str(source), "-o", str(obj)],
+                       check=True)
+        objs.append(obj)
     subprocess.run([linker, "/nologo", "/machine:x64",
                     "/subsystem:efi_application", "/entry:efi_main",
                     "/nodefaultlib", "/fixed:no", "/out:" + str(efi),
-                    str(obj)], check=True)
+                    *map(str, objs)], check=True)
     blob = efi.read_bytes()
     if len(blob) < 256 or blob[:2] != b"MZ":
         raise RuntimeError("EFI PE DOS header missing")
@@ -80,9 +84,9 @@ def run_qemu(esp, firmware, vars_template, timeout):
     except subprocess.TimeoutExpired as e:
         serial = (e.stdout or b"") + (e.stderr or b"")
     (OUT / "qemu-serial.log").write_bytes(serial)
-    if MARKER not in serial or b"NOVA-UEFI-P3.2-SMOKE-ONLY" not in serial:
+    if MARKER not in serial or b"NOVA-UEFI-X64-ENTRY-OK" not in serial:
         raise RuntimeError("QEMU marker not observed; see build/uefi/qemu-serial.log")
-    print("UEFI-QEMU-ENTRY-OK (marker verified in serial output)")
+    print("UEFI-QEMU-KERNEL-ENTRY-OK (marker verified in serial output)")
 
 def main():
     ap = argparse.ArgumentParser()
