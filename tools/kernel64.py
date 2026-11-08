@@ -24,7 +24,7 @@ def validate_elf(path):
     raw = path.read_bytes()
     if len(raw) > 1024 * 1024 or len(raw) < 64:
         raise RuntimeError("ELF file size outside allowed 64B..1MiB")
-    if raw[:6] != b"\x7fELF\x02\x01":
+    if raw[:6] != bytes((0x7f, 69, 76, 70, 2, 1)):
         raise RuntimeError("Not ELF64 little-endian")
     e_type, machine = struct.unpack_from("<HH", raw, 16)
     if e_type != 3 or machine != 62:
@@ -41,7 +41,12 @@ def validate_elf(path):
         ptype, flags = struct.unpack_from("<II", raw, offset)
         foff, vaddr, _, filesz, memsz, align = struct.unpack_from("<QQQQQQ", raw, offset + 8)
         if ptype == 2:
-            raise RuntimeError("ELF has PT_DYNAMIC; use a fully static kernel")
+            if foff > len(raw) or filesz > len(raw)-foff or filesz % 16:
+                raise RuntimeError("Malformed PT_DYNAMIC")
+            for j in range(foff, foff + filesz, 16):
+                tag, _ = struct.unpack_from("<QQ", raw, j)
+                if tag in (7, 8, 9, 17, 18, 19, 23, 35, 36, 37):
+                    raise RuntimeError("Dynamic ELF relocations are unsupported")
         if ptype != 1:
             continue
         if not filesz <= memsz or foff > len(raw) or filesz > len(raw)-foff:
