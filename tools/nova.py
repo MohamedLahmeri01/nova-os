@@ -611,21 +611,25 @@ def cmd_test():
             print("[fail] T3 kernel entry symbol/marker missing"); failed += 1
     except FileNotFoundError:
         print("[fail] T3 kernel/entry.c missing"); failed += 1
-    # T4: the live disk contains the current kernel and no diagnostic opt-in.
-    if os.path.isfile(LIVE_RAW):
-        with open(LIVE_RAW, "rb") as f:
-            raw = f.read()
+    # T4: check both profiles against the freshly built kernel.
+    if os.path.isfile(LIVE_RAW) and os.path.isfile(os.path.join(BUILD, "kernel.bin")):
         with open(os.path.join(BUILD, "kernel.bin"), "rb") as f:
             kernel = f.read()
-        idx = raw[:510].find(BOOT_PATCH)
-        t4ok = (len(raw) == 1024 * 1024 and raw[510:512] == b"\x55\xAA"
-                and idx >= 0 and raw[idx + 6] == 0 and len(kernel) > 0
-                and int.from_bytes(raw[idx + 4:idx + 6], "little") ==
-                (len(kernel) + 511) // 512 and raw[512:512 + len(kernel)] == kernel)
-        if t4ok:
-            print(f"[pass] T4 image {len(raw)}B, boot signature ok"); passed += 1
+        images = [(LIVE_RAW, 0)]
+        if os.path.isfile(IMAGE_RAW):
+            images.append((IMAGE_RAW, 1))
+        for path, profile in images:
+            with open(path, "rb") as f:
+                raw = f.read()
+            idx = raw[:510].find(BOOT_PATCH)
+            if not (len(raw) == 1024 * 1024 and raw[510:512] == b"\x55\xAA"
+                    and 0 <= idx <= 503 and raw[idx + 6] == profile and kernel
+                    and int.from_bytes(raw[idx + 4:idx + 6], "little") ==
+                    (len(kernel) + 511) // 512 and raw[512:512 + len(kernel)] == kernel):
+                print(f"[fail] T4 image signature/layout/payload: {path}"); failed += 1
+                break
         else:
-            print("[fail] T4 image signature/layout broken"); failed += 1
+            print("[pass] T4 boot profile and kernel payload"); passed += 1
     else:
         print("[skip] T4 no live image yet (run `nova build` first)"); skipped += 1
     # T5: VBox-gated boot test (SKIP when no image or no VBox)
@@ -1483,9 +1487,12 @@ def cmd_panic_test():
     ok, elapsed, tail = _boot_expect(PANIC_MARKERS, "vbox-panic-proof.png")
     # Restore the normal image attachment for subsequent run-vbox/T5 runs.
     if os.path.exists(IMAGE_VDI):
-        vbox("storageattach", TEST_VM, "--storagectl", "IDE",
-             "--port", "0", "--device", "0", "--type", "hdd",
-             "--medium", IMAGE_VDI)
+        r = vbox("storageattach", TEST_VM, "--storagectl", "IDE",
+                 "--port", "0", "--device", "0", "--type", "hdd",
+                 "--medium", IMAGE_VDI)
+        if r.returncode != 0:
+            print(f"[fail] could not restore normal boot disk: {r.stderr[:500]}")
+            return 1
     if ok:
         print(f"[PASS] panic diagnostics on serial after ~{elapsed}s "
               f"(2 CPU / 1024 MB)")
