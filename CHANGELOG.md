@@ -2,7 +2,22 @@
 
 All notable changes will be documented here. Format follows Keep a Changelog.
 
-## [Unreleased] — v0.4 hardening (in progress)
+## [Unreleased] — after v0.8.0
+
+- `nova build` produces `images/nova-os-live.raw`, a one-disk BIOS shell
+  with RAM-only files and no required NIC. The diagnostic images still
+  exercise storage and networking against disposable fixtures.
+- Child processes keep their parent's credentials and limits. Failed
+  spawns release their allocations; new image padding and stacks are zeroed.
+- `run` checks execute permissions on regular files (the SDK samples
+  are marked executable). DNS lookups require the network capability.
+- BIOS boot refuses missing or truncated memory maps instead of assuming
+  1 GiB of RAM. Unaddressable memory is excluded from the allocator.
+- The qualification gate includes actual guest boots and an interactive
+  live test. A skipped check yields exit 2 rather than success. VM tooling
+  checks fixture ownership before reconfiguration and respects busy media.
+
+## v0.4–v0.8 prototype development
 
 - Legal + language hygiene: Apache-2.0 `LICENSE` (ADR-0064),
   C-first record (ADR-0065). `dist/` carries LICENSE.

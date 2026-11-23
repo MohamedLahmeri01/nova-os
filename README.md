@@ -1,85 +1,65 @@
 # NOVA OS
 
-An operating system built from zero — bootloader to timer interrupts —
-in C and x86 assembly. No Linux, no GRUB, no copy-pasted tutorials:
-every byte is hand-written, measured, and tested.
+NOVA is an experimental **32-bit x86 BIOS operating system** written in C
+and assembly. It boots its own kernel, runs user programs in ring 3, and
+provides a keyboard-driven shell. No Linux kernel or GRUB is required.
 
-> **Status: experimental (Phases 0–3 done).** It boots in VirtualBox,
-> prints a clean bill of health over serial, and halts. There is no
-> shell, no filesystem, no userspace yet — see [ROADMAP.md](ROADMAP.md)
-> for exactly what's real and what's next. Nothing here is claimed
-> done without a passing test.
+## Try the live shell
 
-```text
-NOVA-OS-BOOT-MARKER-v0
-boot-info ok regions=8
-mem base=0x0000000000100000 len=0x000000003fef0000 type=1
-...
-PMM-bitmap total=261864 free=261864 largest=261864
-PMM-OK
-VMM-STEP-TABLES
-VMM-STEP-CR
-VMM-PG
-VMM-CR3=0x00400000 MAP-END=0x40000000
-VMM-OK
-HEAP slabs=0 live=0 large=0
-HEAP-OK
-LAPIC base=0xfee00000 bsp=1 enabled=1
-IDT-OK
-TIMER-OK ticks=20
-NOVA-OS-READY-HALT
-```
-
-## What's inside
-
-| Layer | What it does |
-|---|---|
-| `boot/` | 512-byte BIOS stage1 (INT13 load, E820 map, A20, protected mode) + stage2 entry |
-| `kernel/mm/` | Bitmap **and** buddy physical allocators (benchmarked against each other), classic paging VMM with null/stack guards, slab heap |
-| `kernel/irq/` | 48-entry IDT, 8259 PIC, LAPIC probe + virtual-wire bring-up |
-| `kernel/time/` | PIT 100 Hz timer, proven by observed ticks |
-| `kernel/` | Serial driver, panic handler (registers + stack walk), `arch/` CPU abstraction |
-| `tools/nova.py` | One driver: `env`, `build`, `image`, `run-vbox`, `test`, `bench-pmm`, `panic-test` |
-| `docs/adr/` | 13 Architecture Decision Records — every big choice, with alternatives and evidence |
-
-Highlights: the allocator was chosen by a real shootout (`bench-pmm`:
-bitmap 173M vs buddy 154M ops/s, 1/40th the metadata); the PAE attempt
-failed deterministically and the evidence (9-boot elimination log) is
-in ADR-0011 instead of being swept under the rug.
-
-## Run it (Windows + VirtualBox, ~5 minutes)
-
-Prerequisites: mingw-w64 `gcc` with `-m32` support, Python 3,
-[VirtualBox 7.x](https://www.virtualbox.org/). No installs performed
-by the build; everything stays inside the repo.
+On the reference Windows x86-64 build host, install Python 3, Git and
+mingw-w64 GCC/binutils with `-m32` support, then run:
 
 ```sh
-python tools/nova.py env    # read-only host capability check
-python tools/nova.py build  # compile stage1 + kernel, layout-asserted
-python tools/nova.py image  # raw disk image -> VDI, attached to test VM
-python tools/nova.py test   # full suite: host checks + 2 gated VM boots
+python tools/nova.py env
+python tools/nova.py build
 ```
 
-This creates **only** an isolated `NOVA-OS-CONSTRAINED` VM
-(2 CPU / 1024 MB, no network, no disk but its own) — your existing VMs
-are never touched. Full walkthrough: [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
+The result is **`images/nova-os-live.raw`**. Building it does not require
+VirtualBox. To boot it in VirtualBox 7.x, convert it to a virtual disk:
 
-## Design principles
+```sh
+VBoxManage convertfromraw images/nova-os-live.raw images/nova-live.vdi --format VDI
+```
 
-- **Verified progress over impressive demos** — see `docs/ARCHITECTURE.md`
-- **Security by design** — `docs/THREAT-MODEL.md` is normative for reviews
-- **Performance by measurement** — `benchmarks/`, never vibes
-- **No fake progress** — `CHANGELOG.md` lists evidence per claim
+Attach that VDI as the only SATA disk in a new BIOS VM with one CPU,
+128 MiB RAM and networking disabled. [Setup and first session](docs/GETTING-STARTED.md)
+has the settings. At the `> ` prompt try:
 
-## Contribute
+```text
+about
+put /note hello
+cat /note
+run /bin/hi
+```
 
-Start with [CONTRIBUTING.md](CONTRIBUTING.md), [GOVERNANCE.md](GOVERNANCE.md),
-and the `good first issue` lanes: docs, tests, build tooling, VBox
-automation. Small, reviewed, tested changes only.
+**Live files are in RAM and disappear on reboot.** The live kernel does
+not mount data disks. The separate developer profile exercises FAT32,
+read-only EXT4, NOVA-FS and virtio networking using disposable fixtures.
 
-## License
+## What runs where
 
-Apache-2.0 — see [LICENSE](LICENSE). Ratified in
-`docs/adr/ADR-0064-license-ratified.md` (supersedes the deferred
-evaluation in ADR-0008). Contributions are inbound-under-Apache-2.0
-(§5) with no extra paperwork.
+| Guest target | Status |
+|---|---|
+| x86 BIOS, VirtualBox, single boot disk | Live keyboard shell, RAM files and native programs; exercised by T24. |
+| x86 BIOS, VirtualBox, four IDE disks + NAT virtio | Diagnostic profile: storage, network, scheduler and isolation tests, including a separate fault boot. |
+| Native x86-64 UEFI PCs | No native boot target or qualified hardware. |
+| ARM64 phones, tablets and boards; RISC-V | No kernel port, boot image or qualified device. |
+
+This is **not ready to replace a PC or phone's primary OS**. The
+[readiness matrix](docs/PRODUCTION-READINESS-MATRIX.md) lists the next
+engineering milestones and what would establish support on each target.
+
+## Development and verification
+
+```sh
+python ci/gate.py
+```
+
+Use a disposable checkout for this command: it rebuilds the diagnostic
+VM's fixture disks. The gate runs lint, the build, the host suite, both
+diagnostic boots and a live session. Exit `0` means every check ran and
+passed; `1` means failure; `2` means required coverage was skipped.
+
+See the [shell manual](docs/CLI.md), [syscall ABI](docs/ABI.md),
+[architecture decisions](docs/adr/), [contribution guide](CONTRIBUTING.md)
+and [Apache-2.0 license](LICENSE).

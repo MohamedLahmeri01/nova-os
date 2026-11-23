@@ -23,13 +23,17 @@ kernel/*.c      --(gcc CFLAGS32, -I kernel)-------> .o
 stage1.o        --(ld -T boot/stage1.ld @0x7C00)--> stage1.pe
 stage2*.o       --(ld -T boot/stage2.ld @0x10000)-> kernel.pe
 *.pe            --(objcopy -O binary)-------------> *.bin
-stage1.bin + kernel.bin --(python: NVSC patch, AA55)--> images/nova-os.raw
-raw --(VBoxManage convertfromraw)--> images/nova-os.vdi --(IDE P0D0)--> TEST_VM
+stage1.bin + kernel.bin --(NVS2: count + flags, AA55)--> images/nova-os-live.raw (build)
+same kernel + diagnostic flag --> images/nova-os.raw --> nova-os.vdi (image, IDE P0D0)
 ```
 
-Layout is asserted, not assumed: stage1 ≤ 510 B, `NVSC` patch point
-present, kernel starts with the stage2 `push` (`0x68`), marker string
-present, kernel ≤ 127 sectors. Any violation fails the build loudly.
+The BIOS stages link with PE image base zero so their low load addresses
+are representable in the PE headers. Only their flat bytes are booted.
+The driver checks stage1 ≤ 510 B, a unique `NVS2` patch point, the
+stage2 entry prologue and marker, and a maximum of 768 kernel sectors.
+Stage1 reads in chunks of at most 127 sectors. The three bytes following
+`NVS2` are the little-endian sector count and the boot flags byte
+(0 = RAM-only live, 1 = disposable-fixture diagnostics).
 
 ## Why this shape (and what changes later)
 
@@ -57,9 +61,9 @@ present, kernel ≤ 127 sectors. Any violation fails the build loudly.
 
 ```sh
 python tools/nova.py env    # read-only capability check
-python tools/nova.py build  # skeleton + freestanding + phase1 binaries
+python tools/nova.py build  # binaries + single-disk live raw image
 python tools/nova.py image  # raw + VDI + attach to NOVA-OS-CONSTRAINED
-python tools/nova.py test   # T1-T7 (T5 boot+PMM+VMM+HEAP, T6 panic, T7 heap)
+python tools/nova.py test   # host checks + two diagnostic boots + live shell session
 python tools/nova.py run-vbox    # boot once, verify markers, poweroff
 python tools/nova.py bench-pmm   # bitmap vs buddy shootout (host, Phase 2a)
 ```

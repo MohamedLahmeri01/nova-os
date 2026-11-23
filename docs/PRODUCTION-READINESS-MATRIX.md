@@ -1,4 +1,33 @@
-# NOVA OS — Production Readiness Matrix (post-v0.5 audit)
+# NOVA OS — Production Readiness Matrix
+
+## Current targets (source tree after v0.8.0)
+
+**No target is qualified for primary-OS use.** There are two VM profiles
+of the same x86-32 kernel. `build` emits a live disk that runs entirely
+from RAM after the firmware loads it; T24 checks keyboard input, file
+contents, spawning and an unchanged boot disk. `image` opts the kernel
+into the older four-disk fixture suite. Passing one profile does not
+qualify the other. A successful Windows build does not establish support
+for Windows hardware as a guest platform.
+
+| Target | Next milestone | Evidence needed before claiming it |
+|---|---|---|
+| Longer-running x86 guest | Reclaim exited processes and address spaces; contain a user-program fault. | Repeated app lifecycles return resources to baseline; other apps and the shell keep running after one fails. |
+| Native x86-64 PC | UEFI loader, long-mode kernel/user entry, platform discovery, storage and input on one named PC. | Cold boot to an interactive shell, disk read/write after reboot, and recovery on that machine. |
+| ARM64 | Bring up an emulator board first: firmware/device-tree handoff, console, interrupt controller, timer, MMU and user entry. | Boot the shared userspace workload and pass equivalent isolation and storage tests; then repeat on a named board. |
+| Phone or tablet | Port to one unlockable model: its boot chain, flash storage, display/touch, power and radios. | Install and recover on a spare device; exercise suspend/resume, battery use and the supported peripherals. |
+| Primary OS on any target | Durable storage, authenticated updates with recovery, ongoing security maintenance and usable applications. | Recover interrupted writes and updates without losing the last good system; publish reproducible release and real-device results. |
+
+The BIOS memory allocator now uses only page-aligned RAM inside the
+kernel's shared direct map (first 1 GiB); it skips ambiguous regions
+that overlap reservations. This prevents using an unaddressable region
+as low memory. It is not a 64-bit memory manager. Child programs inherit
+the parent's identity, capabilities, jail and resource ceilings; this
+does not establish full multi-user isolation. File execution checks
+mode bits, but the payload is still a flat native image, and directory
+search permissions are not fully enforced.
+
+## Historical post-v0.5 audit
 
 Scope: what v0.5 demonstrably is, against what production
 needs. Status scale: VERIFIED (reproducible evidence in

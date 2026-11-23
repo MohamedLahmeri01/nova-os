@@ -1,5 +1,9 @@
 # NOVA OS Roadmap
 
+For the current live/diagnostic targets and the path to native PC and
+mobile hardware, see the [production readiness matrix](docs/PRODUCTION-READINESS-MATRIX.md).
+The phase checklist below is the historical development record.
+
 Status convention: `done / in-progress / prototype / planned / blocked`.
 No phase is marked done without tests + evidence.
 
