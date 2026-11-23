@@ -1,14 +1,13 @@
-# tests/integration/ — intent (not yet staffed)
+# Guest integration tests
 
-This directory is reserved for integration tests that need more
-than one unit: multi-syscall guest scenarios, cross-subsystem
-flows (FS → exec → sockets), and VM-boot assertions beyond the
-gate chain.
+`tools/nova.py test` runs the diagnostic boots (T5/T6) and the live
+session (`live_boot.py`, T24). T24 creates its own temporary BIOS VM
+with one CPU, 128 MiB, no NIC and a single SATA disk. It types into the
+shell, reads back a RAM file, runs a child and compares the powered-off
+disk's contents with the input image. It then removes its VM.
 
-Today those scenarios live inside guest selftests
-(`SOCKBLK-OK`, `STARVE-OK`, …) and `tools/nova.py test`
-(T5/T6 boots). When the first true multi-unit host harness
-lands, it goes here — not scattered across `tests/unit/`.
+To run just T24 after `python tools/nova.py build`:
 
-Convention (from TESTING-STRATEGY): hermetic, deterministic,
-fail-loud with the exact `nova.py` repro command.
+```sh
+python tests/integration/live_boot.py VBoxManage images/nova-os-live.raw build
+```

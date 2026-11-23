@@ -258,7 +258,7 @@ int fs_chmod(const char *path, uint16_t mode) {
      * below fails ENOENT first, keeping grafts invisible. NOVA-FS
      * alone journals mode writes, so its paths route through
      * (owner-or-root enforced inside nova_chmod). */
-    if (fs_current_jail() == 0) {
+    if (fs_grafts_visible()) {
         if (fs_is_disk_path(path) || fs_is_ext_path(path)) {
             return -NOVA_EROFS;
         }

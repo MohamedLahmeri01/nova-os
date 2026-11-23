@@ -49,6 +49,8 @@ def tree_version():
 
 # Phase 1 boot-test contract: the guest must print this on COM1.
 MARKER = b"NOVA-OS-BOOT-MARKER"
+BOOT_PATCH = b"NVS2"  # stage1: u16 sector count, u8 profile flags
+LIVE_RAW = os.path.join(IMAGES, "nova-os-live.raw")
 IMAGE_RAW = os.path.join(IMAGES, "nova-os.raw")
 IMAGE_VDI = os.path.join(IMAGES, "nova-os.vdi")
 FAULT_RAW = os.path.join(IMAGES, "nova-os-fault.raw")
@@ -158,8 +160,8 @@ def cmd_env():
 
 
 def cmd_build():
-    """Validate skeleton + freestanding compile probe (output in build/)."""
-    print("== nova build (Phase 0 stub) ==")
+    """Build the x86 kernel and standalone BIOS live disk (no VM required)."""
+    print("== nova build (x86 BIOS) ==")
     missing = [d for d in REQUIRED_DIRS if not os.path.isdir(os.path.join(ROOT, d))]
     missing += [f for f in REQUIRED_DOCS if not os.path.isfile(os.path.join(ROOT, f))]
     if missing:
@@ -188,6 +190,11 @@ def cmd_build():
         return 1
     print(f"[ok] stage1={res['stage1_bytes']}B kernel={res['kernel_bytes']}B "
           f"sectors={res['kernel_sectors']}")
+    rc, msg = _assemble_raw("kernel.bin", LIVE_RAW, diagnostics=False)
+    if rc:
+        print(f"[fail] {msg}")
+        return rc
+    print(f"[ok] RAM-only live image: {LIVE_RAW}")
     return 0
 
 
@@ -366,8 +373,8 @@ def build_phase1(fault=False):
         s1d = f.read()
     with open(kb, "rb") as f:
         kbd = f.read()
-    if b"NVSC" not in s1d:
-        return 1, "stage1.bin missing NVSC sector-count patch point"
+    if s1d.count(BOOT_PATCH) != 1:
+        return 1, "stage1.bin missing unique image patch point"
     if MARKER not in kbd:
         return 1, f"{kb_name} missing boot marker string"
     # stage2 prologue: xorl %ebp (31 ED), pushl $0x2 (6A 02), popfl (9D),
@@ -591,18 +598,23 @@ def cmd_test():
             print("[fail] T3 kernel entry symbol/marker missing"); failed += 1
     except FileNotFoundError:
         print("[fail] T3 kernel/entry.c missing"); failed += 1
-    # T4: static image checks (SKIP when no image built yet)
-    if os.path.isfile(IMAGE_RAW):
-        with open(IMAGE_RAW, "rb") as f:
+    # T4: the live disk contains the current kernel and no diagnostic opt-in.
+    if os.path.isfile(LIVE_RAW):
+        with open(LIVE_RAW, "rb") as f:
             raw = f.read()
-        t4ok = (len(raw) % 512 == 0 and raw[510:512] == b"\x55\xAA"
-                and b"NVSC" in raw[:512])
+        with open(os.path.join(BUILD, "kernel.bin"), "rb") as f:
+            kernel = f.read()
+        idx = raw[:510].find(BOOT_PATCH)
+        t4ok = (len(raw) == 1024 * 1024 and raw[510:512] == b"\x55\xAA"
+                and idx >= 0 and raw[idx + 6] == 0 and len(kernel) > 0
+                and int.from_bytes(raw[idx + 4:idx + 6], "little") ==
+                (len(kernel) + 511) // 512 and raw[512:512 + len(kernel)] == kernel)
         if t4ok:
             print(f"[pass] T4 image {len(raw)}B, boot signature ok"); passed += 1
         else:
             print("[fail] T4 image signature/layout broken"); failed += 1
     else:
-        print("[skip] T4 no image yet (run `nova image` first)"); skipped += 1
+        print("[skip] T4 no live image yet (run `nova build` first)"); skipped += 1
     # T5: VBox-gated boot test (SKIP when no image or no VBox)
     if not os.path.exists(VBOX):
         print("[skip] T5 VirtualBox unavailable"); skipped += 1
@@ -1095,6 +1107,15 @@ def cmd_test():
             corpus_hits += 1
         else:
             print("[fail] T23 host shell test"); failed += 1
+    if not os.path.exists(VBOX) or not os.path.isfile(LIVE_RAW):
+        print("[skip] T24 needs VirtualBox and the live image"); skipped += 1
+    else:
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "tests", "integration",
+                            "live_boot.py"), VBOX, LIVE_RAW, BUILD])
+        if r.returncode == 0:
+            print("[pass] T24 single-disk offline live session"); passed += 1
+        else:
+            print("[fail] T24 live session"); failed += 1
     # Corpus summary: all seven replay phases must pass. A SKIP
     # is never a pass (missing phase fails the count openly).
     if corpus_hits == 7:
@@ -1106,19 +1127,20 @@ def cmd_test():
     return 0 if failed == 0 else 1
 
 
-def _assemble_and_attach(kernel_bin_name, raw_path, vdi_path):
-    """Assemble raw image from stage1.bin + kernel bin, VDI-convert, attach.
-
-    Returns (rc, msg). Operates on the TEST_VM only (idempotent)."""
+def _assemble_raw(kernel_bin_name, raw_path, *, diagnostics):
+    """Build a BIOS disk. Only fixture images opt into destructive diagnostics."""
     with open(os.path.join(BUILD, "stage1.bin"), "rb") as f:
         s1 = bytearray(f.read())
     with open(os.path.join(BUILD, kernel_bin_name), "rb") as f:
         kb = f.read()
     sectors = (len(kb) + 511) // 512
-    if sectors > 768:
-        return 1, f"kernel too big for stage1 load: {sectors} sectors"
-    idx = bytes(s1).find(b"NVSC")
+    if not 1 <= sectors <= 768:
+        return 1, f"invalid stage1 load: {sectors} sectors"
+    idx = s1.find(BOOT_PATCH)
+    if len(s1) > 510 or s1.count(BOOT_PATCH) != 1 or idx + 7 > len(s1):
+        return 1, "invalid stage1 image patch point"
     s1[idx + 4:idx + 6] = sectors.to_bytes(2, "little")
+    s1[idx + 6] = int(diagnostics)
     s1 += b"\x00" * (510 - len(s1)) + b"\x55\xAA"
     kpad = kb + b"\x00" * ((512 - len(kb) % 512) % 512)
     os.makedirs(IMAGES, exist_ok=True)
@@ -1128,6 +1150,14 @@ def _assemble_and_attach(kernel_bin_name, raw_path, vdi_path):
         raw += b"\x00" * (1024 * 1024 - len(raw))
     with open(raw_path, "wb") as f:
         f.write(raw)
+    return 0, raw_path
+
+
+def _assemble_and_attach(kernel_bin_name, raw_path, vdi_path):
+    """Attach a diagnostic boot image and disposable fixture disks to TEST_VM."""
+    rc, msg = _assemble_raw(kernel_bin_name, raw_path, diagnostics=True)
+    if rc:
+        return rc, msg
     vbox("storageattach", TEST_VM, "--storagectl", "IDE",
          "--port", "0", "--device", "0", "--medium", "none")
     vbox("closemedium", "disk", vdi_path, "--delete")

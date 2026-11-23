@@ -43,6 +43,24 @@ struct fs_node *fs_current_jail(void) {
     return t->proc->jail_root;
 }
 
+static int g_grafts_mounted;
+
+int fs_mount_fixture_grafts(void) {
+    const char *dirs[] = {"/disk", "/ext", "/nova"};
+    for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        int rc = fs_mkdir(dirs[i]);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    g_grafts_mounted = 1;
+    return 0;
+}
+
+int fs_grafts_visible(void) {
+    return g_grafts_mounted && fs_current_jail() == 0;
+}
+
 int fs_can(const struct fs_node *n, uint32_t uid, uint32_t gid,
            uint32_t need) {
     uint32_t bits;

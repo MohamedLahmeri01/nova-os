@@ -135,6 +135,7 @@ int main(int argc, char **argv) {
     fclose(f);
 
     check(nova_init(img_read, img_write) == 0, "init", 0, 0);
+    check(fs_init() == 0 && fs_mount_fixture_grafts() == 0, "mount fixtures", 0, 0);
 
     /* Contract with tools/mknova.py (16B + 15B). */
     check(nova_stat("/HELLO.TXT", &size, &is_dir) == 0 && size == 16u &&

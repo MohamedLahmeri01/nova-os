@@ -7,6 +7,7 @@
  */
 #include <stdint.h>
 
+#include "arch/x86/cpu.h"
 #include "serial.h"
 #include "panic.h"
 #include "mm/pmm.h"
@@ -124,6 +125,7 @@ fail:
 static void spawn_init(void) {
     uint32_t size =
         (uint32_t)(binary_init_bin_end - binary_init_bin_start);
+    uint32_t was_on = arch_irq_save();
     if (spawn_image(binary_init_bin_start, size) == 0) {
         nova_panic("init-spawn-fail");
     }
@@ -131,33 +133,24 @@ static void spawn_init(void) {
      * print its banner concurrently from here on; an unguarded
      * print splits mid-line (observed "INIT-"+banner, breaking
      * the T6 match). Same class as the GATES-OK fix. */
-    __asm__ volatile("cli" ::: "memory");
     serial_puts("INIT-OK\n");
-    __asm__ volatile("sti" ::: "memory");
+    arch_irq_restore(was_on);
 }
 
 /* Seed builtin user binaries into ramfs (Phase 7b): the hi blob
  * becomes /bin/hi (exec proof + shell `run` target), the uname
- * blob /bin/uname (Phase 11a SDK sample). /disk is a
- * placeholder dir: paths under it route to the FAT driver (7c).
- * Runs after fs_init, before fs_selftest (which asserts the seed). */
-static void seed_binaries(void) {
+ * blob /bin/uname (Phase 11a SDK sample). Both boot modes use this tree. */
+static void init_ramfs(void) {
     struct fs_node *n = 0;
     uint32_t size = (uint32_t)(binary_hi_bin_end - binary_hi_bin_start);
     uint32_t usize =
         (uint32_t)(binary_uname_bin_end - binary_uname_bin_start);
     uint32_t got = 0;
+    if (fs_init() != 0) {
+        nova_panic("fs-init-fail");
+    }
     if (fs_mkdir("/bin") != 0) {
         nova_panic("bin-mkdir-fail");
-    }
-    if (fs_mkdir("/disk") != 0) {
-        nova_panic("disk-mkdir-fail");
-    }
-    if (fs_mkdir("/ext") != 0) {
-        nova_panic("ext-mkdir-fail");
-    }
-    if (fs_mkdir("/nova") != 0) {
-        nova_panic("nova-mkdir-fail");
     }
     if (fs_create("/bin/hi", &n) != 0 || n == 0) {
         nova_panic("bin-create-fail");
@@ -226,13 +219,20 @@ int32_t spawn_file(const char *path) {
     return (int32_t)pid;
 }
 
+static __attribute__((noreturn)) void idle(void) {
+    for (;;) {
+        __asm__ volatile("sti; hlt" ::: "memory");
+    }
+}
+
 void nova_pm_main(const nova_boot_info_t *info) {
     serial_puts("NOVA-OS-BOOT-MARKER-v0\n");
 #ifdef NOVA_VERSION
     serial_puts("NOVA-OS " NOVA_VERSION "\n");
 #endif
     if (!nova_boot_info_valid(info) ||
-        (uintptr_t)info->regions != NOVA_E820_BUF) {
+        (uintptr_t)info->regions != NOVA_E820_BUF ||
+        (info->flags & ~NOVA_BOOT_DIAGNOSTICS) != 0) {
         nova_panic("bad-boot-info");
     }
     serial_puts("boot-info ok regions=");
@@ -302,6 +302,21 @@ void nova_pm_main(const nova_boot_info_t *info) {
     irq_init();
     timer_init();
     syscall_init();
+    if (!(info->flags & NOVA_BOOT_DIAGNOSTICS)) {
+        font_init();
+        fb_init();
+        init_ramfs();
+        if (net_init() != 0) {
+            nova_panic("loopback-init-fail");
+        }
+        trace_init();
+        arch_cli();
+        sched_init();
+        fbcon_init();
+        serial_puts("LIVE: RAM only; files disappear on reboot\n");
+        spawn_init();
+        idle();
+    }
     ata_init();
     if (ata_selftest() != 0) {
         nova_panic("ata-selftest-fail");
@@ -344,10 +359,7 @@ void nova_pm_main(const nova_boot_info_t *info) {
     if (virtio_net_selftest() != 0) {
         nova_panic("virtio-selftest-fail");
     }
-    if (fs_init() != 0) {
-        nova_panic("fs-init-fail");
-    }
-    seed_binaries();
+    init_ramfs();
     if (fs_selftest() != 0) {
         nova_panic("fs-selftest-fail");
     }
@@ -365,6 +377,9 @@ void nova_pm_main(const nova_boot_info_t *info) {
     }
     if (nova_init(ata_nova_read, ata_nova_write) != 0) {
         nova_panic("nova-init-fail");
+    }
+    if (fs_mount_fixture_grafts() != 0) {
+        nova_panic("fixture-mount-fail");
     }
     if (nova_selftest() != 0) {
         nova_panic("nova-selftest-fail");
@@ -541,9 +556,6 @@ void nova_pm_main(const nova_boot_info_t *info) {
      * halt-on-return path would kill preemption, so never return.
      * Strict priority (no aging yet) means the prio-16 shell starves
      * this thread while it spins: expected, see Phase 4d. */
-    __asm__ volatile("sti");
-    for (;;) {
-        __asm__ volatile("hlt");
-    }
+    idle();
 #endif
 }

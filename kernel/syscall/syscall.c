@@ -315,7 +315,7 @@ static int32_t do_open_locked(uint32_t path, uint32_t flags,
     /* /disk graft (Phase 7c/d): FAT files materialize into a detached
      * node owned by the description. Writes go through to the disk
      * (write-through via the stored path); reads use the node copy. */
-    if (p->jail_root == 0 && fs_is_disk_path(kpath)) {
+    if (fs_grafts_visible() && fs_is_disk_path(kpath)) {
         uint8_t *data;
         uint32_t size = 0;
         uint32_t got = 0;
@@ -366,7 +366,7 @@ static int32_t do_open_locked(uint32_t path, uint32_t flags,
         return open_attach(p, n, data, size, flags, kpath);
     }
     /* EXT4 graft (Phase 7e): read-only materialize, no stored path. */
-    if (p->jail_root == 0 && fs_is_ext_path(kpath)) {
+    if (fs_grafts_visible() && fs_is_ext_path(kpath)) {
         uint8_t *data;
         uint32_t size = 0;
         uint32_t got = 0;
@@ -430,7 +430,7 @@ static int32_t do_open_locked(uint32_t path, uint32_t flags,
     }
     /* NOVA-FS graft (Phase 7f-2): writable materialize with stored
      * path (write-through like FAT). CREAT makes empty files. */
-    if (p->jail_root == 0 && fs_is_nova_path(kpath)) {
+    if (fs_grafts_visible() && fs_is_nova_path(kpath)) {
         uint8_t *data;
         uint32_t size = 0;
         uint32_t got = 0;
@@ -750,7 +750,7 @@ static int32_t do_readdir_locked(uint32_t path, uint32_t index,
     /* /disk graft: FAT listing. /ext graft: EXT4 listing.
      * /nova graft: NOVA-FS listing. Jailed callers skip grafts
      * (Phase 10d): the ramfs tail below finds no graft dirs. */
-    if (p->jail_root == 0 && fs_is_disk_path(kpath)) {
+    if (fs_grafts_visible() && fs_is_disk_path(kpath)) {
         char kname[FS_MAX_NAME];
         int r = fat_list_dir(kpath, index, kname);
         if (r < 0) {
@@ -758,7 +758,7 @@ static int32_t do_readdir_locked(uint32_t path, uint32_t index,
         }
         return copy_name_out(namebuf, kname, r);
     }
-    if (p->jail_root == 0 && fs_is_ext_path(kpath)) {
+    if (fs_grafts_visible() && fs_is_ext_path(kpath)) {
         char kname[FS_MAX_NAME];
         int r = ext_list_dir(kpath, index, kname);
         if (r < 0) {
@@ -766,7 +766,7 @@ static int32_t do_readdir_locked(uint32_t path, uint32_t index,
         }
         return copy_name_out(namebuf, kname, r);
     }
-    if (p->jail_root == 0 && fs_is_nova_path(kpath)) {
+    if (fs_grafts_visible() && fs_is_nova_path(kpath)) {
         char kname[FS_MAX_NAME];
         int r = nova_list_dir(kpath, index, kname);
         if (r < 0) {
@@ -808,13 +808,13 @@ static int32_t do_mkdir_locked(uint32_t path, uint32_t b,
     if (p == 0) {
         return -NOVA_EINVAL;
     }
-    if (p->jail_root == 0 && fs_is_disk_path(kpath)) {
+    if (fs_grafts_visible() && fs_is_disk_path(kpath)) {
         return fat_mkdir(kpath);
     }
-    if (p->jail_root == 0 && fs_is_ext_path(kpath)) {
+    if (fs_grafts_visible() && fs_is_ext_path(kpath)) {
         return -NOVA_EROFS;
     }
-    if (p->jail_root == 0 && fs_is_nova_path(kpath)) {
+    if (fs_grafts_visible() && fs_is_nova_path(kpath)) {
         return nova_mkdir(kpath);
     }
     return fs_mkdir(kpath);
@@ -857,7 +857,7 @@ static int32_t do_fsck_locked(uint32_t a, uint32_t b,
     (void)c;
     /* Verify-only audit of the native FS (Phase 7f-3). No args, no
      * user pointers: returns the problem count (0 = clean). */
-    return (int32_t)nova_fsck();
+    return fs_grafts_visible() ? (int32_t)nova_fsck() : -NOVA_ENODEV;
 }
 
 static int32_t do_ping(uint32_t addr, uint32_t seq, uint32_t c) {
@@ -1039,13 +1039,13 @@ static int32_t do_unlink_locked(uint32_t path, uint32_t b,
     if (plen < 0) {
         return plen;
     }
-    if (fs_is_disk_path(kpath)) {
+    if (fs_grafts_visible() && fs_is_disk_path(kpath)) {
         return fat_delete(kpath);
     }
-    if (fs_is_ext_path(kpath)) {
+    if (fs_grafts_visible() && fs_is_ext_path(kpath)) {
         return -NOVA_EROFS;
     }
-    if (fs_is_nova_path(kpath)) {
+    if (fs_grafts_visible() && fs_is_nova_path(kpath)) {
         return nova_delete(kpath);
     }
     return fs_unlink(kpath);
@@ -1064,8 +1064,8 @@ static int32_t do_rmdir_locked(uint32_t path, uint32_t b,
     if (plen < 0) {
         return plen;
     }
-    if (fs_is_disk_path(kpath) || fs_is_ext_path(kpath) ||
-        fs_is_nova_path(kpath)) {
+    if (fs_grafts_visible() && (fs_is_disk_path(kpath) ||
+        fs_is_ext_path(kpath) || fs_is_nova_path(kpath))) {
         return -NOVA_EROFS;
     }
     return fs_rmdir(kpath);
@@ -2210,6 +2210,10 @@ int jail_selftest(void) {
     /* Confine the process (the chroot effect, arranged directly:
      * SYS_CHROOT dispatch needs a user path, unreachable here). */
     proc_set_jail(tp, jail);
+    if (fs_grafts_visible()) {
+        serial_puts("JAIL-FAIL graft visibility\n");
+        return -1;
+    }
     if (fs_lookup("/sub/f", &n) != 0) {
         serial_puts("JAIL-FAIL in-open\n");
         return -1;

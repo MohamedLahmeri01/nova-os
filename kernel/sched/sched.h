@@ -25,6 +25,7 @@ extern volatile int sched_need_resched;
 /* Completed context switches (see sched.c). */
 extern volatile uint32_t g_sched_switches;
 
+/* Start with the boot thread as idle; call with IRQs masked. */
 void sched_init(void);
 struct thread *sched_adopt_boot(void);
 void sched_add(struct thread *t);

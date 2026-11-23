@@ -73,6 +73,8 @@ const char *fs_disk_rel(const char *kpath);
 
 /* Build the tree + seed content. Nonzero on OOM (fatal: panic). */
 int fs_init(void);
+int fs_mount_fixture_grafts(void);
+int fs_grafts_visible(void);
 /* Deterministic selftest (content, nesting, errors, fd exhaustion).
  * Prints FS-OK. Nonzero on failure (fatal: panic). */
 int fs_selftest(void);

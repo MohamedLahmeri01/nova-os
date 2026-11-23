@@ -10,6 +10,7 @@
 #include "mem_layout.h"
 
 #define NOVA_BOOT_INFO_VERSION 1u
+#define NOVA_BOOT_DIAGNOSTICS 1u /* disposable VM with writable fixture disks */
 #define NOVA_BOOT_MAGIC 0x4E564F53424F4F54ull /* "NOVOSBOOT" */
 
 typedef struct {

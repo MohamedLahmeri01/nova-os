@@ -146,8 +146,9 @@ e820_done:
     stosl
     movl $1, %eax
     stosl
-    xorl %eax, %eax
+    movzbl boot_flags, %eax
     stosl
+    xorl %eax, %eax
     stosl
     movl $NOVA_E820_BUF, %eax
     stosl
@@ -216,9 +217,11 @@ dap_seg:
 dap_lba:
     .long 1, 0             /* LBA */
 nvsc_magic:
-    .long 0x4353564E       /* file bytes "NVSC"; count word follows */
+    .ascii "NVS2"          /* sector count (u16) + boot flags (u8) */
 ksec_patch:
     .word 8                /* overwritten by image builder */
+boot_flags:
+    .byte 0                /* default: RAM-only live shell */
 gdt:
     .quad 0x0000000000000000
     .quad 0x00CF9A000000FFFF

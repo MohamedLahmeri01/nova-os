@@ -131,6 +131,10 @@ void sched_init(void) {
     if (g_fallback_stack == 0) {
         nova_panic("sched-no-tss-stack");
     }
+    struct thread *boot = sched_adopt_boot();
+    sched_add(boot);
+    sched_enter(boot);
+    g_started = 1;
 }
 
 void sched_add(struct thread *t) {
@@ -514,12 +518,9 @@ static void worker_timed(void *arg) {
 }
 
 int sched_selftest(void) {
-    struct thread *boot;
+    uint32_t was_on = arch_irq_save();
     uint32_t t0;
     sched_init();
-    boot = sched_adopt_boot();
-    sched_add(boot);
-    sched_enter(boot);
     if (thread_create(g_init_process, worker_long, 0, 16u) == 0 ||
         thread_create(g_init_process, worker_timed, (void *)1, 16u) == 0 ||
         thread_create(g_init_process, worker_timed, (void *)2, 16u) == 0) {
@@ -528,7 +529,7 @@ int sched_selftest(void) {
     serial_puts("SCHED threads=");
     serial_putdec32(thread_count());
     serial_putc('\n');
-    g_started = 1;
+    arch_irq_restore(was_on);
     t0 = g_ticks;
     while (!(st_done[0] && st_done[1] && st_done[2])) {
         if (g_ticks - t0 > 8000u) {
