@@ -13,7 +13,7 @@ static uint32_t *g_bits;
 static uint32_t g_base, g_n, g_free, g_cursor;
 
 uint32_t be_meta_needed(uint32_t nframes) {
-    return (nframes + 7u) / 8u;
+    return ((nframes + 31u) / 32u) * sizeof(uint32_t);
 }
 
 void be_init(uint32_t base_addr, uint32_t nframes, void *meta) {

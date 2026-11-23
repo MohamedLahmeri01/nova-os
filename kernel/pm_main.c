@@ -231,8 +231,8 @@ void nova_pm_main(const nova_boot_info_t *info) {
 #ifdef NOVA_VERSION
     serial_puts("NOVA-OS " NOVA_VERSION "\n");
 #endif
-    if (info->magic != NOVA_BOOT_MAGIC ||
-        info->version != NOVA_BOOT_INFO_VERSION) {
+    if (!nova_boot_info_valid(info) ||
+        (uintptr_t)info->regions != NOVA_E820_BUF) {
         nova_panic("bad-boot-info");
     }
     serial_puts("boot-info ok regions=");

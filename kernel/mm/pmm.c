@@ -11,19 +11,50 @@
 #include <stddef.h>
 
 #include "pmm.h"
+#include "addrspace.h"
 
-static uint32_t g_base, g_managed;
+static uint32_t g_base, g_end, g_managed;
 static void *g_meta;
 static uint32_t g_allocs, g_frees;
 
 int pmm_init(const nova_boot_info_t *info, void *meta_buf,
              uint32_t meta_len) {
     uint64_t best_base = 0, best_len = 0;
+    const uint64_t limit = (uint64_t)KERNEL_PDS << 22;
+    const uint64_t mask = NOVA_FRAME_SIZE - 1u;
+    if (!nova_boot_info_valid(info)) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < info->region_count; i++) {
+        if (info->regions[i].length > UINT64_MAX - info->regions[i].base) {
+            return -1;
+        }
+    }
     for (uint32_t i = 0; i < info->region_count; i++) {
         const nova_mem_region_t *r = &info->regions[i];
-        if (r->type == 1 && r->base >= 0x100000ull && r->length > best_len) {
-            best_base = r->base;
-            best_len = r->length;
+        if (r->type != 1 || r->base >= limit) {
+            continue;
+        }
+        uint64_t base = r->base < NOVA_ARENA_MIN ? NOVA_ARENA_MIN : r->base;
+        uint64_t end = r->base + r->length;
+        base = (base + mask) & ~mask;
+        end = (end < limit ? end : limit) & ~mask;
+        if (end <= base || end - base <= best_len) {
+            continue;
+        }
+        /* Single-arena policy: skip ambiguous RAM rather than using any
+         * pages that firmware also describes as reserved. */
+        uint32_t j;
+        for (j = 0; j < info->region_count; j++) {
+            const nova_mem_region_t *other = &info->regions[j];
+            if (other->type != 1 && other->length && other->base < end &&
+                other->base + other->length > base) {
+                break;
+            }
+        }
+        if (j == info->region_count) {
+            best_base = base;
+            best_len = end - base;
         }
     }
     if (best_len < 0x200000ull) {
@@ -49,6 +80,7 @@ int pmm_init(const nova_boot_info_t *info, void *meta_buf,
     }
     be_init(base, managed, meta);
     g_base = base;
+    g_end = (uint32_t)(best_base + best_len);
     g_managed = managed;
     g_meta = meta;
     g_allocs = g_frees = 0;
@@ -94,6 +126,10 @@ uint32_t pmm_total_frames(void) {
 
 uint32_t pmm_arena_base(void) {
     return g_base;
+}
+
+uint32_t pmm_arena_end(void) {
+    return g_end;
 }
 
 int pmm_selftest(void) {

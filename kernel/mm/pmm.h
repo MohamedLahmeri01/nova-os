@@ -47,6 +47,7 @@ uint32_t pmm_free_count(void);
 uint32_t pmm_largest_free(void);
 uint32_t pmm_total_frames(void);
 uint32_t pmm_arena_base(void);
+uint32_t pmm_arena_end(void); /* exclusive, includes carved metadata */
 int pmm_selftest(void);
 
 #endif /* NOVA_PMM_H */

@@ -7,6 +7,7 @@
 #define NOVA_BOOT_INFO_H
 
 #include <stdint.h>
+#include "mem_layout.h"
 
 #define NOVA_BOOT_INFO_VERSION 1u
 #define NOVA_BOOT_MAGIC 0x4E564F53424F4F54ull /* "NOVOSBOOT" */
@@ -30,5 +31,11 @@ typedef struct {
     uint32_t fb_height;
     uint32_t fb_pitch;
 } nova_boot_info_t;
+
+static inline int nova_boot_info_valid(const nova_boot_info_t *info) {
+    return info != 0 && info->magic == NOVA_BOOT_MAGIC &&
+           info->version == NOVA_BOOT_INFO_VERSION && info->regions != 0 &&
+           info->region_count > 0 && info->region_count <= NOVA_E820_MAX;
+}
 
 #endif /* NOVA_BOOT_INFO_H */

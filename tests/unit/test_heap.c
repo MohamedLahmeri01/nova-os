@@ -38,8 +38,34 @@ static double now_ms(void) {
 static nova_mem_region_t g_regions[1];
 static nova_boot_info_t g_info;
 
+static void check_arena_selection(void) {
+    uint32_t meta[256];
+    nova_mem_region_t regions[] = {
+        {.base = 0x100000000ull, .length = 0x40000000, .type = 1},
+        {.base = 0x200001, .length = 0x300fff, .type = 1},
+    };
+    nova_boot_info_t info = {.magic = NOVA_BOOT_MAGIC,
+                             .version = NOVA_BOOT_INFO_VERSION,
+                             .regions = regions, .region_count = 2};
+    check(pmm_init(&info, meta, sizeof(meta)) == 0 &&
+          pmm_arena_base() == 0x201000 && pmm_total_frames() == 768,
+          "choose whole addressable pages, ignoring high RAM");
+    regions[0] = (nova_mem_region_t){.base = 0x300000, .length = 4096, .type = 2};
+    check(pmm_init(&info, meta, sizeof(meta)) != 0,
+          "do not allocate an arena containing a firmware reservation");
+    regions[0] = (nova_mem_region_t){.base = 0x3fd00000, .length = 0x900000, .type = 1};
+    info.region_count = 1;
+    check(pmm_init(&info, meta, sizeof(meta)) == 0 &&
+          pmm_total_frames() == 768 && pmm_arena_end() == 0x40000000,
+          "clip at the kernel direct-map limit");
+    info.region_count = NOVA_E820_MAX + 1;
+    check(pmm_init(&info, meta, sizeof(meta)) != 0, "reject oversized map");
+    check(be_meta_needed(33) == 2 * sizeof(uint32_t), "whole bitmap words");
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0); /* crash still leaves output */
+    check_arena_selection();
     void *backing = malloc((size_t)BACKING_FRAMES * 4096u);
     if (!backing) {
         printf("FAIL: host malloc backing\n");

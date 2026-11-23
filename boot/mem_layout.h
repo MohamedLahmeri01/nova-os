@@ -9,6 +9,7 @@
 /* Real-mode / early-pmode landmarks (all < 1MB, all identity-mapped). */
 #define NOVA_BOOT_INFO_AT 0x500
 #define NOVA_E820_BUF 0x5000
+#define NOVA_E820_MAX 32
 #define NOVA_KERNEL_LOAD 0x10000
 #define NOVA_STACK_TOP 0x90000
 #define NOVA_STACK_SIZE 0x4000

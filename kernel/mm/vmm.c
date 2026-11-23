@@ -91,8 +91,7 @@ int vmm_init(void) {
         serial_putc('?');
     }
     serial_puts(" XD-ENFORCE=none (non-PAE paging)\n");
-    uint32_t arena_end = pmm_arena_base() +
-                         pmm_total_frames() * NOVA_FRAME_SIZE;
+    uint32_t arena_end = pmm_arena_end();
     g_map_end = (arena_end + LARGE_4MB - 1u) & ~(LARGE_4MB - 1u);
     serial_puts("VMM-STEP-TABLES\n");
     g_pd = alloc_zero_table();

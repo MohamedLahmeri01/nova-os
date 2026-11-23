@@ -19,8 +19,9 @@
  *
  * Memory use: 0x500 boot_info, 0x600+ scratch, 0x5F0 E820 count temp,
  * 0x5000 regions, stack 0x7000, pm stack 0x90000, kernel 0x10000.
- * Errors print one letter via BIOS teletype, then halt. D=disk, A=A20.
+ * Errors print one letter via BIOS teletype, then halt. D=disk, A=A20, M=map.
  */
+#include "mem_layout.h"
 .code16
 .globl _start
 .text
@@ -101,60 +102,41 @@ a20_ok:
     cmpw $0x1234, %cx
     je a20_err
 
-    /* E820 map into 0x5000 with 24-byte stride, matching nova_mem_region_t
-     * directly (no conversion step). Request 24 bytes; the attrs/reserved
-     * dword is zeroed so the contract holds whether firmware writes 20
-     * or 24 bytes. Cap 32 entries (ends at 0x5300). */
+    /* Normalize 20/24-byte E820 entries. Refuse an incomplete map:
+     * a missing final reservation must never become allocatable RAM. */
     xorl %ebx, %ebx
-    movw $0x5000, %di
+    movw $NOVA_E820_BUF, %di
     movb $0, 0x5F0
 e820_loop:
     movl $0xE820, %eax
     movl $0x534D4150, %edx
     movl $24, %ecx
+    movl $1, %es:20(%di)
     int $0x15
     jc e820_done
     cmpl $0x534D4150, %eax
-    jne e820_fallback
+    jne map_err
+    cmpl $20, %ecx
+    je e820_entry
+    cmpl $24, %ecx
+    jne map_err
+    testb $1, %es:20(%di)
+    jnz e820_entry
+    /* A disabled extended entry contributes no range. */
+    movl $0, %es:8(%di)
+    movl $0, %es:12(%di)
+e820_entry:
     movl $0, %es:20(%di)
     addw $24, %di
     incb 0x5F0
     testl %ebx, %ebx
     jz e820_done
-    cmpb $32, 0x5F0
-    jae e820_done
+    cmpb $NOVA_E820_MAX, 0x5F0
+    jae map_err
     jmp e820_loop
 e820_done:
     cmpb $0, 0x5F0
-    jne e820_have
-e820_fallback:
-    /* Two plausible regions, 24-byte stride. Rarely used. */
-    movw $0x5000, %di
-    xorl %eax, %eax
-    stosl
-    stosl
-    movl $0x9FC00, %eax
-    stosl
-    xorl %eax, %eax
-    stosl
-    movl $1, %eax
-    stosl
-    xorl %eax, %eax
-    stosl
-    movl $0x100000, %eax
-    stosl
-    xorl %eax, %eax
-    stosl
-    movl $0x3FF00000, %eax
-    stosl
-    xorl %eax, %eax
-    stosl
-    movl $1, %eax
-    stosl
-    xorl %eax, %eax
-    stosl
-    movb $2, 0x5F0
-e820_have:
+    je map_err
 
     /* Fill nova_boot_info at 0x500 (12 dwords, see boot/boot_info.h). */
     movw $0x500, %di
@@ -167,7 +149,7 @@ e820_have:
     xorl %eax, %eax
     stosl
     stosl
-    movl $0x5000, %eax
+    movl $NOVA_E820_BUF, %eax
     stosl
     movb 0x5F0, %al
     movzbl %al, %eax
@@ -204,6 +186,10 @@ pm32:
     jmp *%eax
 
 /* Error paths: print letter, halt. */
+.code16
+map_err:
+    movb $77, %al          /* 'M' */
+    jmp bios_halt_putc
 disk_err:
     movb $68, %al          /* 'D' */
     jmp bios_halt_putc
