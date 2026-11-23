@@ -27,7 +27,7 @@ int ata_write_sector(uint32_t drive, uint32_t lba, const uint8_t *src);
  * Must run before the first ATA command (irq_init remaps later). */
 void ata_init(void);
 /* Deterministic selftest: LBA0 of the boot disk must carry 0x55AA
- * and our NVSC tag. Prints ATA-OK. Nonzero on failure (fatal). */
+ * and the diagnostic boot record. Prints ATA-OK. Nonzero on failure (fatal). */
 int ata_selftest(void);
 
 #endif /* NOVA_ATA_H */

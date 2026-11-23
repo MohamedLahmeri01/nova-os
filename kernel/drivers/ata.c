@@ -6,6 +6,7 @@
  * 400ns select-settle uses alt-status reads (side-effect free).
  */
 #include <stdint.h>
+#include "../../boot/boot_info.h"
 
 #include "serial.h"
 #include "panic.h"
@@ -442,11 +443,11 @@ int ata_selftest(void) {
         serial_puts("ATA-FAIL sig\n");
         return -1;
     }
-    /* Our own stage1 carries the NVSC tag (nova.py patches the sector
-     * count right after it): proves we read OUR disk, not garbage. */
-    for (i = 0; i + 4u <= 512u; i++) {
-        if (sec[i] == 'N' && sec[i + 1u] == 'V' && sec[i + 2u] == 'S' &&
-            sec[i + 3u] == 'C') {
+    /* Require the diagnostic boot record before exercising a fixture disk. */
+    const char *tag = NOVA_IMAGE_PATCH;
+    for (i = 0; i + 7u <= 510u; i++) {
+        if (sec[i] == tag[0] && sec[i + 1u] == tag[1] && sec[i + 2u] == tag[2] &&
+            sec[i + 3u] == tag[3] && sec[i + 6u] == NOVA_BOOT_DIAGNOSTICS) {
             found = 1;
             break;
         }

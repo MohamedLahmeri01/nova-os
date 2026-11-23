@@ -217,7 +217,7 @@ dap_seg:
 dap_lba:
     .long 1, 0             /* LBA */
 nvsc_magic:
-    .ascii "NVS2"          /* sector count (u16) + boot flags (u8) */
+    .ascii NOVA_IMAGE_PATCH /* sector count (u16) + boot flags (u8) */
 ksec_patch:
     .word 8                /* overwritten by image builder */
 boot_flags:
