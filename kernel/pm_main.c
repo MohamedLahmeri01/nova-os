@@ -60,67 +60,63 @@ static uint32_t spawn_image(const uint8_t *img, uint32_t size) {
     struct process *p;
     struct addrspace *as;
     uint32_t frames;
-    uint32_t code;
-    uint32_t stack;
-    struct thread *t;
-    p = process_create();
-    as = addrspace_create();
-    if (p == 0 || as == 0) {
+    uint32_t code = 0, stack = 0;
+    struct thread *cur = sched_current_thread();
+    if (cur == 0 || cur->proc == 0 || img == 0 || size == 0 ||
+        size > 64u * NOVA_FRAME_SIZE) {
         return 0;
     }
-    /* Inherit credentials from the spawner (Phase 10a): the child
-     * starts with no more rights than its parent. Kernel-context
-     * spawns (no current thread) grant root/all, matching init. */
-    {
-        struct thread *cur = sched_current_thread();
-        if (cur != 0 && cur->proc != 0) {
-            p->caps = cur->proc->caps;
-            p->uid = cur->proc->uid;
-            p->gid = cur->proc->gid;
-            p->rlimit_nofd = cur->proc->rlimit_nofd;
-            p->rlimit_fsize = cur->proc->rlimit_fsize;
-            p->rlimit_frames = cur->proc->rlimit_frames;
-            p->rlimit_ticks = cur->proc->rlimit_ticks;
-            p->jail_root = cur->proc->jail_root;
-            /* The child holds its jail root too (else a parent's
-             * chroot-away could drop the count to zero under it). */
-            fs_node_ref(p->jail_root);
-            p->caps = CAPS_ALL;
-            p->uid = UID_ROOT;
-        }
+    frames = (size + NOVA_FRAME_SIZE - 1u) / NOVA_FRAME_SIZE;
+    if (frames + 2u > cur->proc->rlimit_frames) {
+        return 0;
+    }
+    p = process_create_child(cur->proc);
+    if (p == 0) {
+        return 0;
+    }
+    as = addrspace_create();
+    if (as == 0) {
+        goto fail;
     }
     as->max_mapped = p->rlimit_frames;
     p->cr3 = as->pd;
-    frames = (size + 4095u) / 4096u;
-    if (size == 0 || frames > 64u) {
-        return 0;
-    }
     code = pmm_alloc_contig(frames);
     stack = pmm_alloc_contig(2);
     if (code == 0 || stack == 0) {
-        return 0;
+        goto fail;
     }
-    for (uint32_t i = 0; i < size; i++) {
-        ((uint8_t *)code)[i] = img[i];
+    /* PMM recycles pages: initialize every byte visible in ring 3. */
+    for (uint32_t i = 0; i < frames * NOVA_FRAME_SIZE; i++) {
+        ((uint8_t *)code)[i] = i < size ? img[i] : 0;
+    }
+    for (uint32_t i = 0; i < 2u * NOVA_FRAME_SIZE; i++) {
+        ((uint8_t *)stack)[i] = 0;
     }
     for (uint32_t f = 0; f < frames; f++) {
         if (addrspace_map(as, NOVA_USER_CODE + f * 4096u,
                           code + f * 4096u, 1) != 0) {
-            return 0; /* frame ceiling (Phase 10b): no partial child */
+            goto fail;
         }
     }
     if (addrspace_map(as, NOVA_USER_STACK_TOP - 8192u, stack, 1) !=
             0 ||
         addrspace_map(as, NOVA_USER_STACK_TOP - 4096u,
                       stack + 4096u, 1) != 0) {
-        return 0;
+        goto fail;
     }
-    t = thread_create_user(p, NOVA_USER_CODE, NOVA_USER_STACK_TOP,
-                           stack, 0, 16u);
-    if (t == 0) {
-        return 0;
+    if (thread_create_user(p, NOVA_USER_CODE, NOVA_USER_STACK_TOP,
+                           stack, 0, 16u) == 0) {
+        goto fail;
     }
     return p->pid;
+
+fail:
+    addrspace_destroy(as);
+    pmm_free_contig(stack, 2);
+    pmm_free_contig(code, frames);
+    fs_node_unref(p->jail_root);
+    kfree(p);
+    return 0;
 }
 
 /* Spawn the builtin init program (Phase 6: linked into the kernel;

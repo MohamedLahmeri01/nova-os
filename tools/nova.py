@@ -878,6 +878,7 @@ def cmd_test():
            "-I", os.path.join(ROOT, "kernel"),
            os.path.join(ROOT, "tests", "unit", "test_caps.c"),
            os.path.join(ROOT, "kernel", "process", "caps.c"),
+           os.path.join(ROOT, "kernel", "process", "process.c"),
            "-o", caps_exe]
     r = run(cmd, timeout=120)
     if r.returncode != 0:

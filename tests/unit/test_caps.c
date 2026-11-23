@@ -1,13 +1,18 @@
 /* NOVA OS capability host test (Phase 10a, T15).
- * Host-side: the REAL kernel/process/caps.c, pure logic only (no
- * scheduler/process required). Allow/drop matrix, unknown-bit
+ * Host-side: the real capability rules and child-process constructor.
+ * Allow/drop matrix, unknown-bit
  * discipline, monotonicity over all mask pairs, randomized fuzz
  * for crash-freedom. VERDICT line.
  */
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "process/caps.h"
+#include "fs/fs.h"
+
+void *kmalloc(uint32_t size) { return malloc(size); }
+void fs_node_ref(struct fs_node *node) { if (node) node->refs++; }
 
 static int g_failed;
 
@@ -28,6 +33,22 @@ static uint32_t lcg(void) {
 
 int main(void) {
     uint32_t out = 0xFFFFFFFFu;
+    struct fs_node jail = {0};
+    struct process parent = {.uid = 42, .gid = 19, .caps = CAP_SPAWN,
+                             .jail_root = &jail, .rlimit_nofd = 2,
+                             .rlimit_fsize = 128, .rlimit_frames = 8,
+                             .rlimit_ticks = 90, .ticks_used = 7};
+    struct process *child = process_create_child(&parent);
+    if (!child || child->uid != parent.uid || child->gid != parent.gid ||
+        child->caps != parent.caps || child->jail_root != &jail ||
+        jail.refs != 1 || child->rlimit_nofd != 2 ||
+        child->rlimit_fsize != 128 || child->rlimit_frames != 8 ||
+        child->rlimit_ticks != 90 || child->ticks_used != 0 ||
+        process_create_child(NULL) != NULL) {
+        puts("FAIL: child must inherit only its parent's authority");
+        return 1;
+    }
+    free(child);
 
     /* Allow matrix: held rights pass, missing rights deny,
      * unknown rights are caller bugs (EINVAL, not EPERM). */

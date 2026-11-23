@@ -61,6 +61,8 @@ struct process {
 extern struct process *g_init_process;
 
 struct process *process_create(void);
+/* Spawn requires a parent; only boot adoption grants initial privileges. */
+struct process *process_create_child(const struct process *parent);
 void process_attach(struct process *p, struct thread *t);
 /* Spawn a program image from FS bytes (Phase 7b exec, pm_main.c).
  * Returns the child pid, or negative -errno (never panics). */

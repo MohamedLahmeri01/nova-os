@@ -58,10 +58,12 @@ int user_selftest(void) {
     if (code_f == 0 || shared_f == 0 || s_base == 0) {
         nova_panic("user-no-mem");
     }
-    addrspace_map(as, USER_CODE, code_f, 1);
-    addrspace_map(as, USER_SHARED, shared_f, 1);
-    addrspace_map(as, USER_STACK_TOP - 8192u, s_base, 1);
-    addrspace_map(as, USER_STACK_TOP - 4096u, s_base + 4096u, 1);
+    if (addrspace_map(as, USER_CODE, code_f, 1) != 0 ||
+        addrspace_map(as, USER_SHARED, shared_f, 1) != 0 ||
+        addrspace_map(as, USER_STACK_TOP - 8192u, s_base, 1) != 0 ||
+        addrspace_map(as, USER_STACK_TOP - 4096u, s_base + 4096u, 1) != 0) {
+        nova_panic("user-no-mem");
+    }
     probe_len = (uint32_t)(user_probe_end - user_probe_start);
     for (uint32_t i = 0; i < probe_len; i++) {
         ((uint8_t *)code_f)[i] = user_probe_start[i];
@@ -169,13 +171,15 @@ int user_sched_test(void) {
     if (code_f == 0 || s1 == 0 || s2 == 0 || sh1 == 0 || sh2 == 0) {
         nova_panic("usched-no-mem");
     }
-    addrspace_map(as, USER_CODE, code_f, 1);
-    addrspace_map(as, USER_SHARED, sh1, 1);
-    addrspace_map(as, USER_SHARED + 4096u, sh2, 1);
-    addrspace_map(as, UTHREAD_STACK_TOP - 8192u, s1, 1);
-    addrspace_map(as, UTHREAD_STACK_TOP - 4096u, s1 + 4096u, 1);
-    addrspace_map(as, UTHREAD_STACK_TOP - 16384u, s2, 1);
-    addrspace_map(as, UTHREAD_STACK_TOP - 12288u, s2 + 4096u, 1);
+    if (addrspace_map(as, USER_CODE, code_f, 1) != 0 ||
+        addrspace_map(as, USER_SHARED, sh1, 1) != 0 ||
+        addrspace_map(as, USER_SHARED + 4096u, sh2, 1) != 0 ||
+        addrspace_map(as, UTHREAD_STACK_TOP - 8192u, s1, 1) != 0 ||
+        addrspace_map(as, UTHREAD_STACK_TOP - 4096u, s1 + 4096u, 1) != 0 ||
+        addrspace_map(as, UTHREAD_STACK_TOP - 16384u, s2, 1) != 0 ||
+        addrspace_map(as, UTHREAD_STACK_TOP - 12288u, s2 + 4096u, 1) != 0) {
+        nova_panic("usched-no-mem");
+    }
     spin_len = (uint32_t)(user_spin_end - user_spin_start);
     for (uint32_t i = 0; i < spin_len; i++) {
         ((uint8_t *)code_f)[i] = user_spin_start[i];

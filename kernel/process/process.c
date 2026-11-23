@@ -44,6 +44,25 @@ struct process *process_create(void) {
     return p;
 }
 
+struct process *process_create_child(const struct process *parent) {
+    if (parent == 0) {
+        return 0;
+    }
+    struct process *p = process_create();
+    if (p != 0) {
+        p->caps = parent->caps;
+        p->uid = parent->uid;
+        p->gid = parent->gid;
+        p->rlimit_nofd = parent->rlimit_nofd;
+        p->rlimit_fsize = parent->rlimit_fsize;
+        p->rlimit_frames = parent->rlimit_frames;
+        p->rlimit_ticks = parent->rlimit_ticks;
+        p->jail_root = parent->jail_root;
+        fs_node_ref(p->jail_root);
+    }
+    return p;
+}
+
 void process_attach(struct process *p, struct thread *t) {
     if (p == 0 || t == 0) {
         return;

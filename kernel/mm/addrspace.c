@@ -87,7 +87,7 @@ int addrspace_map(struct addrspace *as, uint32_t virt, uint32_t phys,
             uint32_t ptp = pmm_alloc_frame();
             uint32_t *npt;
             if (ptp == 0) {
-                nova_panic("addrspace-no-pt");
+                return -NOVA_ENOSPC;
             }
             npt = (uint32_t *)ptp;
             for (uint32_t i = 0; i < 1024u; i++) {

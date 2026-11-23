@@ -26,7 +26,7 @@ struct addrspace {
 
 struct addrspace *addrspace_create(void);
 void addrspace_destroy(struct addrspace *as);
-/* Map one page (user half only). 0 or -ENOSPC at the ceiling;
+/* Map one page (user half only). -ENOSPC at the ceiling or out of frames;
  * malformed arguments still panic (programmer bug, not policy). */
 int addrspace_map(struct addrspace *as, uint32_t virt, uint32_t phys,
                   int writable);
