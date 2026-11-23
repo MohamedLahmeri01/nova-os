@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
-"""nova.py - NOVA OS build/test driver (Phase 0 stub).
-
-Policy: read-only toward the host. All outputs stay inside the repo
-(build/, images/, vms/). Never installs software, never changes
-PATH/registry, never modifies existing VirtualBox VMs. Test VMs always
-use NOVA-OS-* names on isolated networking.
+"""NOVA OS build/test driver. Build emits a standalone, RAM-only BIOS disk.
+VM commands register disposable VirtualBox VMs and rebuild fixture disks.
 
 Resource budget (enforced): the test target is CONSTRAINED — 2 CPUs,
 1024 MB RAM — so scaling problems surface early, not after the OS
@@ -22,7 +18,20 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build")
 IMAGES = os.path.join(ROOT, "images")
-VBOX = r"F:\VirutalBox\VBoxManage.exe"
+
+def find_vbox():
+    on_path = shutil.which("VBoxManage")
+    if on_path or os.name != "nt":
+        return on_path
+    for folder in (os.environ.get("VBOX_MSI_INSTALL_PATH"),
+                   os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
+                                "Oracle", "VirtualBox"), r"F:\VirutalBox"):
+        if folder and os.path.isfile(os.path.join(folder, "VBoxManage.exe")):
+            return os.path.join(folder, "VBoxManage.exe")
+    return None
+
+
+VBOX = find_vbox()
 
 # Constrained test budget — the whole OS must run here (see
 # docs/RESOURCE-BUDGET.md). Raise only via ADR with measurements.
@@ -85,7 +94,7 @@ def vminfo():
     for line in (r.stdout or "").splitlines():
         if "=" in line:
             k, v = line.split("=", 1)
-            info[k.strip()] = v.strip().strip('"')
+            info[k.strip().strip('"')] = v.strip().strip('"').replace("\\\\", "\\")
     return info
 
 
@@ -96,15 +105,23 @@ def ensure_test_vm():
     run-vbox/vbox-check call re-asserts cpus/memory, so budget drift is
     impossible without editing CONSTRAINED_* above (which needs an ADR).
     """
-    if not os.path.exists(VBOX):
+    if not VBOX:
         return False, "VBoxManage not found"
     os.makedirs(VM_BASEFOLDER, exist_ok=True)
     r = vbox("list", "vms")
-    if TEST_VM not in (r.stdout or ""):
+    if r.returncode != 0:
+        return False, f"cannot list VMs: {r.stderr[:500]}"
+    if not any(line.startswith(f'"{TEST_VM}" {{') for line in r.stdout.splitlines()):
         r = vbox("createvm", "--name", TEST_VM, "--ostype", "Other_64",
                  "--register", "--basefolder", VM_BASEFOLDER)
         if r.returncode != 0:
             return False, f"createvm failed: {(r.stderr or '')[:500]}"
+    info = vminfo()
+    cfg = os.path.join(VM_BASEFOLDER, TEST_VM, TEST_VM + ".vbox")
+    if not info.get("CfgFile") or not _same_path(info["CfgFile"], cfg):
+        return False, f"refusing VM '{TEST_VM}': not owned by this checkout"
+    if info.get("VMState") != "poweroff":
+        return False, f"refusing VM '{TEST_VM}': not powered off"
     r = vbox("modifyvm", TEST_VM,
              "--cpus", str(CONSTRAINED_CPUS),
              "--memory", str(CONSTRAINED_RAM_MB),
@@ -132,30 +149,26 @@ def ensure_test_vm():
                   f"cpus={info.get('cpus')} memory={info.get('memory')}MB")
 
 
+def _same_path(a, b):
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
 def cmd_env():
-    """Read-only host capability check. Returns 0 if Phase-1-ready-ish."""
+    """The live build needs the toolchain; VirtualBox is optional."""
     print("== NOVA OS env (read-only) ==")
     ok = True
-    for tool, argv in [("git", ["git", "--version"]),
-                       ("gcc", ["gcc", "--version"]),
-                       ("python", [sys.executable, "--version"]),
-                       ("cmake", ["cmake", "--version"]),
-                       ("rustc", ["rustc", "--version"])]:
-        try:
-            r = run(argv, timeout=30)
-            print(f"[ok] {tool}: {r.stdout.strip().splitlines()[0] if r.stdout else 'present'}")
-        except Exception as e:
-            print(f"[missing] {tool}: {e}")
-            ok = False
-    if os.path.exists(VBOX):
-        r = run([VBOX, "--version"], timeout=30)
-        print(f"[ok] VirtualBox: {r.stdout.strip()}")
+    tools = ["git", "gcc", "objcopy", sys.executable]
+    if VBOX:
+        tools.append(VBOX)
     else:
-        print("[missing] VirtualBox VBoxManage not found")
-        ok = False
-    # read-only probes that write ONLY to temp-equivalent inside repo
-    print("[info] QEMU qemu-system-x86_64: not required in Phase 0/1 (VirtualBox target)")
-    print("[info] nasm/grub/xorriso: checked at Phase 1 image step, not here")
+        print("[info] VirtualBox not found: live image build and host tests available")
+    for tool in tools:
+        try:
+            r = run([tool, "--version"], timeout=30, check=True)
+            print(f"[ok] {tool}: {r.stdout.strip().splitlines()[0] if r.stdout.strip() else 'present'}")
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"[fail] {tool}: {e}")
+            ok = False
     return 0 if ok else 1
 
 
@@ -348,7 +361,7 @@ def build_phase1(fault=False):
                PMM_BACKEND_O],
              "boot/stage2.ld", pe)]:
         cmd = (["gcc"] + CFLAGS32 +
-               ["-Wl,-T," + os.path.join(ROOT, ld)] +
+                ["-Wl,--image-base,0", "-Wl,-T," + os.path.join(ROOT, ld)] +
                [os.path.join(BUILD, o) for o in objs_in] +
                ["-o", os.path.join(BUILD, pe_out)])
         r = run(cmd, timeout=60)
@@ -401,10 +414,10 @@ def render_abi():
     import re
     try:
         with open(os.path.join(ROOT, "kernel", "syscall",
-                               "syscall.h")) as f:
+                               "syscall.h"), encoding="utf-8") as f:
             hdr = f.read()
         with open(os.path.join(ROOT, "kernel", "syscall",
-                               "syscall.c")) as f:
+                               "syscall.c"), encoding="utf-8") as f:
             src = f.read()
     except FileNotFoundError as e:
         return 1, f"missing syscall source: {e}"
@@ -459,7 +472,7 @@ def cmd_abi():
     if rc != 0:
         print(f"[fail] {res}")
         return 1
-    with open(os.path.join(ROOT, "docs", "ABI.md"), "w") as f:
+    with open(os.path.join(ROOT, "docs", "ABI.md"), "w", encoding="utf-8") as f:
         f.write(res)
     print("[ok] docs/ABI.md regenerated")
     return 0
@@ -616,7 +629,7 @@ def cmd_test():
     else:
         print("[skip] T4 no live image yet (run `nova build` first)"); skipped += 1
     # T5: VBox-gated boot test (SKIP when no image or no VBox)
-    if not os.path.exists(VBOX):
+    if not VBOX:
         print("[skip] T5 VirtualBox unavailable"); skipped += 1
     elif not os.path.exists(IMAGE_VDI):
         print("[skip] T5 no VDI yet (run `nova image` first)"); skipped += 1
@@ -639,7 +652,7 @@ def cmd_test():
                 print(f"[fail] T5 guest did not boot:\n{r.stdout[-800:]}")
                 failed += 1
     # T6: VBox-gated panic test (SKIP when no VBox)
-    if not os.path.exists(VBOX):
+    if not VBOX:
         print("[skip] T6 VirtualBox unavailable"); skipped += 1
     else:
         print("[info] T6 booting fault image in constrained VM (~60s)...")
@@ -930,7 +943,7 @@ def cmd_test():
         failed += 1
     else:
         try:
-            with open(os.path.join(ROOT, "docs", "ABI.md")) as f:
+            with open(os.path.join(ROOT, "docs", "ABI.md"), encoding="utf-8") as f:
                 cur = f.read()
             if cur == res:
                 print("[pass] T17 ABI reference current")
@@ -1107,7 +1120,7 @@ def cmd_test():
             corpus_hits += 1
         else:
             print("[fail] T23 host shell test"); failed += 1
-    if not os.path.exists(VBOX) or not os.path.isfile(LIVE_RAW):
+    if not VBOX or not os.path.isfile(LIVE_RAW):
         print("[skip] T24 needs VirtualBox and the live image"); skipped += 1
     else:
         r = subprocess.run([sys.executable, os.path.join(ROOT, "tests", "integration",
@@ -1116,6 +1129,11 @@ def cmd_test():
             print("[pass] T24 single-disk offline live session"); passed += 1
         else:
             print("[fail] T24 live session"); failed += 1
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "tests", "unit", "test_vm_tools.py")])
+    if r.returncode == 0:
+        print("[pass] T25 fixture ownership"); passed += 1
+    else:
+        print("[fail] T25 fixture ownership"); failed += 1
     # Corpus summary: all seven replay phases must pass. A SKIP
     # is never a pass (missing phase fails the count openly).
     if corpus_hits == 7:
@@ -1124,7 +1142,7 @@ def cmd_test():
         print(f"[fail] CORPUS incomplete: {corpus_hits}/7 phases")
         failed += 1
     print(f"== {passed} passed, {failed} failed, {skipped} skipped ==")
-    return 0 if failed == 0 else 1
+    return 1 if failed else (2 if skipped else 0)
 
 
 def _assemble_raw(kernel_bin_name, raw_path, *, diagnostics):
@@ -1160,12 +1178,9 @@ def _assemble_and_attach(kernel_bin_name, raw_path, vdi_path):
         return rc, msg
     vbox("storageattach", TEST_VM, "--storagectl", "IDE",
          "--port", "0", "--device", "0", "--medium", "none")
-    vbox("closemedium", "disk", vdi_path, "--delete")
-    if os.path.exists(vdi_path):
-        os.remove(vdi_path)
-    r = vbox("convertfromraw", raw_path, vdi_path, "--format", "VDI")
-    if r.returncode != 0:
-        return 1, f"convertfromraw: {(r.stderr or '')[:800]}"
+    rc, msg = _convert_fixture(raw_path, vdi_path)
+    if rc:
+        return rc, msg
     vbox("storagectl", TEST_VM, "--name", "IDE", "--remove")
     r = vbox("storagectl", TEST_VM, "--name", "IDE", "--add", "ide",
              "--controller", "PIIX4")
@@ -1199,6 +1214,15 @@ def _assemble_and_attach(kernel_bin_name, raw_path, vdi_path):
     return 0, f"{raw_path} ({os.path.getsize(raw_path)}B) -> {vdi_path}"
 
 
+def _convert_fixture(raw, vdi):
+    if os.path.exists(vdi):
+        r = vbox("closemedium", "disk", vdi, "--delete")
+        if r.returncode != 0:
+            return 1, f"refusing to replace {vdi}: {r.stderr[:500]}"
+    r = vbox("convertfromraw", raw, vdi, "--format", "VDI")
+    return r.returncode, (r.stderr or "")[:800]
+
+
 def _attach_fat_disk():
     """Generate the FAT32 data image and attach it at IDE P0D1.
 
@@ -1218,12 +1242,9 @@ def _attach_fat_disk():
         f.write(raw)
     vbox("storageattach", TEST_VM, "--storagectl", "IDE",
          "--port", "0", "--device", "1", "--medium", "none")
-    vbox("closemedium", "disk", fat_vdi, "--delete")
-    if os.path.exists(fat_vdi):
-        os.remove(fat_vdi)
-    r = vbox("convertfromraw", fat_raw, fat_vdi, "--format", "VDI")
-    if r.returncode != 0:
-        return 1, f"fat convertfromraw: {(r.stderr or '')[:800]}"
+    rc, msg = _convert_fixture(fat_raw, fat_vdi)
+    if rc:
+        return rc, msg
     r = vbox("storageattach", TEST_VM, "--storagectl", "IDE",
              "--port", "0", "--device", "1", "--type", "hdd",
              "--medium", fat_vdi)
@@ -1251,12 +1272,9 @@ def _attach_ext_disk():
         f.write(raw)
     vbox("storageattach", TEST_VM, "--storagectl", "IDE",
          "--port", "1", "--device", "0", "--medium", "none")
-    vbox("closemedium", "disk", ext_vdi, "--delete")
-    if os.path.exists(ext_vdi):
-        os.remove(ext_vdi)
-    r = vbox("convertfromraw", ext_raw, ext_vdi, "--format", "VDI")
-    if r.returncode != 0:
-        return 1, f"ext convertfromraw: {(r.stderr or '')[:800]}"
+    rc, msg = _convert_fixture(ext_raw, ext_vdi)
+    if rc:
+        return rc, msg
     r = vbox("storageattach", TEST_VM, "--storagectl", "IDE",
              "--port", "1", "--device", "0", "--type", "hdd",
              "--medium", ext_vdi)
@@ -1284,12 +1302,9 @@ def _attach_nova_disk():
         f.write(raw)
     vbox("storageattach", TEST_VM, "--storagectl", "IDE",
          "--port", "1", "--device", "1", "--medium", "none")
-    vbox("closemedium", "disk", nova_vdi, "--delete")
-    if os.path.exists(nova_vdi):
-        os.remove(nova_vdi)
-    r = vbox("convertfromraw", nova_raw, nova_vdi, "--format", "VDI")
-    if r.returncode != 0:
-        return 1, f"nova convertfromraw: {(r.stderr or '')[:800]}"
+    rc, msg = _convert_fixture(nova_raw, nova_vdi)
+    if rc:
+        return rc, msg
     r = vbox("storageattach", TEST_VM, "--storagectl", "IDE",
              "--port", "1", "--device", "1", "--type", "hdd",
              "--medium", nova_vdi)
@@ -1340,9 +1355,12 @@ def cmd_run_vbox():
     if not ok:
         return 1
     info = vminfo()
-    attached = any(str(v).endswith("nova-os.vdi") for v in info.values())
-    if not os.path.exists(IMAGE_VDI) or not attached:
-        print("[blocked] No image attached. Run `python tools/nova.py image` first.")
+    expected = {"IDE-0-0": IMAGE_VDI, "IDE-0-1": os.path.join(IMAGES, "fat32.vdi"),
+                "IDE-1-0": os.path.join(IMAGES, "ext4.vdi"),
+                "IDE-1-1": os.path.join(IMAGES, "nova.vdi")}
+    if not all(info.get(slot) and _same_path(info[slot], path) and os.path.isfile(path)
+               for slot, path in expected.items()):
+        print("[blocked] Expected all four checkout-owned IDE fixture disks. Run `nova image`.")
         return 2
     ok, elapsed, tail = _boot_expect([MARKER, b"PMM-OK", b"VMM-OK",
                                        b"HEAP-OK", b"ATA-OK", b"PCI-OK",
@@ -1384,7 +1402,9 @@ def cmd_vbox_check():
     print("== nova vbox-check ==")
     ok, msg = ensure_test_vm()
     print(f"[{'pass' if ok else 'fail'}] {msg}")
-    info = vminfo() if ok else {}
+    if not ok:
+        return 1
+    info = vminfo()
     for key in ["ostype", "chipset", "firmware", "pae", "longmode",
                 "nic1", "usb", "VMState"]:
         if key in info:
