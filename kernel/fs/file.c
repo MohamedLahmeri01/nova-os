@@ -68,7 +68,10 @@ int fs_can(const struct fs_node *n, uint32_t uid, uint32_t gid,
         return -NOVA_EINVAL;
     }
     if (uid == 0) {
-        return NOVA_ESUCCESS; /* root bypasses everything */
+        if ((need & FS_MAY_EXEC) && !n->is_dir && !(n->mode & 0111)) {
+            return -NOVA_EACCES;
+        }
+        return NOVA_ESUCCESS;
     }
     if (uid == n->uid) {
         bits = ((uint32_t)n->mode >> 6) & 7u;

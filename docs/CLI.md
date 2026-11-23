@@ -115,7 +115,7 @@ back). `/` and `/test` are ramfs (volatile).
 | rm path | delete a file | `rm /work/n` |
 | rmdir dir | delete an empty dir | `rmdir /work` |
 | fsck | check the native fs | `fsck` |
-| run path | execute a program | `run /bin/hi` |
+| run path | spawn an executable RAMFS file (`E13` if its mode disallows execution) | `run /bin/hi` |
 
 Network (NAT: self 10.0.2.15, gw 10.0.2.2, dns 10.0.2.3):
 

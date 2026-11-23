@@ -48,6 +48,8 @@ def smoke(vbox, image, scratch):
                 ("cat /note", b"\nlivebytes> "),
                 ("fsck", b"\nfsck failed E19"),
                 ("run /bin/hi", b"HI-OK pid="),
+                ("chmod 644 /bin/hi", b"\n> "),
+                ("run /bin/hi", b"\nrun failed E13"),
             ]:
                 offset = log.stat().st_size
                 box("controlvm", vm, "keyboardputstring", command)

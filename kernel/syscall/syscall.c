@@ -1160,6 +1160,9 @@ static int32_t do_dns(uint32_t name, uint32_t ip_out, uint32_t c) {
     int32_t plen;
     int rc;
     (void)c;
+    if (need_cap(CAP_NET) != 0) {
+        return -NOVA_EPERM;
+    }
     /* Resolve via the NAT proxy (Phase 14b): name grammar checked
      * inside dns_resolve; ETIMEDOUT on silence. */
     plen = copy_user_path(name, kname);
@@ -1686,6 +1689,12 @@ int caps_selftest(void) {
     syscall_handler(&f);
     if ((int32_t)f.eax != -NOVA_EPERM) {
         serial_puts("CAPS-FAIL dhcp-open\n");
+        return -1;
+    }
+    f.eax = SYS_DNS;
+    syscall_handler(&f);
+    if ((int32_t)f.eax != -NOVA_EPERM) {
+        serial_puts("CAPS-FAIL dns-open\n");
         return -1;
     }
     f.eax = SYS_EXEC;

@@ -155,6 +155,7 @@ static void init_ramfs(void) {
     if (fs_create("/bin/hi", &n) != 0 || n == 0) {
         nova_panic("bin-create-fail");
     }
+    n->mode = 0755;
     if (fs_write_node(n, 0, binary_hi_bin_start, size, &got) != 0 ||
         got != size) {
         nova_panic("bin-seed-fail");
@@ -163,6 +164,7 @@ static void init_ramfs(void) {
     if (fs_create("/bin/uname", &n) != 0 || n == 0) {
         nova_panic("uname-create-fail");
     }
+    n->mode = 0755;
     if (fs_write_node(n, 0, binary_uname_bin_start, usize, &got) !=
             0 ||
         got != usize) {
@@ -211,6 +213,10 @@ int32_t spawn_file(const char *path) {
     }
     if (n->is_dir) {
         return -NOVA_EISDIR;
+    }
+    rc = fs_can(n, fs_current_uid(), fs_current_gid(), FS_MAY_EXEC);
+    if (rc != 0) {
+        return rc;
     }
     pid = spawn_image(n->data, n->size);
     if (pid == 0) {

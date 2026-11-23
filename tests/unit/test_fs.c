@@ -253,6 +253,8 @@ int main(void) {
         nd.gid = 100;
         nd.mode = 0640;
         nd.is_dir = 0;
+        check(fs_can(&nd, 0, 0, FS_MAY_EXEC) == -NOVA_EACCES,
+              "ordinary file is not executable even for root", 0, 0);
         check(fs_can(&nd, 0, 0, FS_MAY_READ) == 0, "can-root",
               0, 0);
         check(fs_can(&nd, 1000, 100, FS_MAY_READ) == 0 &&

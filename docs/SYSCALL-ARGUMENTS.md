@@ -26,7 +26,7 @@ W=single validated store, F=kernel fill (no user reread),
 13 readdir   path:I str, index:I scalar,            NUL-scan+pages          P       256+P      same as open
              namebuf:O buf                          range+pages(w)          H       16         none (kernel data)
 14 mkdir     path:I str                             NUL-scan+pages          P       256+P      same as open
-15 exec      path:I str                             NUL-scan+pages          P       256+P      same as open
+15 exec      path:I str                             CAP_SPAWN; path; X bit  P       256+P      same as open
 16 fsck     – (no args, no pointers)                –                       –       –          –
 17 ping      addr:I scalar (IP, not ptr)            subnet check            –       –          –
 18 dhcp      –                                      – (CAP_NET gate)        –       –          spins (bounded)
@@ -45,7 +45,7 @@ W=single validated store, F=kernel fill (no user reread),
 31 rmdir     path:I str                             NUL-scan+pages          P       256+P      same as open
 32 sock      op:I scalar, a:I scalar/id,            struct snapshot         S       sizeof     snapshot-then-use
              b:I struct-or-scalar                   + payload/buf           H       1536       snapshot+bounded copy
-33 dns       name:I str, ip_out:O u32               NUL-scan+grammar; u32   P;W     253+P;4    same as open; none
+33 dns       name:I str, ip_out:O u32               CAP_NET; name; u32      P;W     253+P;4    same as open; none
 34 winclick  x+y:I scalars                          – (hit compares)        –       –          –
 35 stats     out:O struct                           range+pages(w)          H       20         none (kernel data)
 36 tracefetch buf:O recs, max:I scalar             range+pages(w)+256cap  H       256×20     none (projected: fault->class;
